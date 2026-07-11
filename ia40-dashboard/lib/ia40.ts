@@ -49,6 +49,10 @@ function extractSessionCookie(resp: Response): string | undefined {
  * Paso 2: envia el POST de login reusando esa misma cookie, para que el
  * servidor marque esa sesion como autenticada (en vez de crear una sesion
  * nueva y desconectada que despues redirect-ia40 no reconoce).
+ *
+ * IMPORTANTE: cache: "no-store" en todos los fetch de este archivo, porque
+ * Next.js cachea fetch() por default y eso hacia que reusaramos siempre
+ * la misma sesion vieja en vez de pedir una nueva en cada sync.
  */
 async function login(): Promise<string> {
   const username = process.env.IA40_USERNAME;
@@ -59,6 +63,7 @@ async function login(): Promise<string> {
 
   const initialResp = await fetch("https://www.cobusgroup.com/html2/cobus1login.html", {
     redirect: "manual",
+    cache: "no-store",
   });
   const initialSessionCookie = extractSessionCookie(initialResp);
 
@@ -76,6 +81,7 @@ async function login(): Promise<string> {
     },
     body,
     redirect: "manual",
+    cache: "no-store",
   });
 
   const loginAllHeaders = dumpHeaders(resp);
@@ -106,6 +112,7 @@ async function getFreshJwt(): Promise<string> {
   const resp = await fetch("https://www.cobusgroup.com/redirect-ia40", {
     headers: { Cookie: `PHPSESSID=${sessionCookie}` },
     redirect: "manual",
+    cache: "no-store",
   });
 
   const allHeaders = dumpHeaders(resp);
@@ -153,6 +160,7 @@ export async function fetchIa40Data(params: FetchDataParams): Promise<{ rows: an
       method: "POST",
       headers: headers(token),
       body: JSON.stringify(body),
+      cache: "no-store",
     });
 
     if (resp.status === 401) {
