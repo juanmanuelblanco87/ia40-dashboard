@@ -5,7 +5,10 @@ const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+  "Accept-Language": "es-419,es;q=0.9",
+  "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="124", "Google Chrome";v="124"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
 };
 
 export interface Filter {
@@ -74,7 +77,12 @@ async function login(): Promise<LoginResult> {
   const initialResp = await fetch("https://www.cobusgroup.com/html2/cobus1login.html", {
     redirect: "manual",
     cache: "no-store",
-    headers: { ...BROWSER_HEADERS },
+    headers: {
+      ...BROWSER_HEADERS,
+      "sec-fetch-dest": "iframe",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-site": "same-origin",
+    },
   });
   let cookies = extractAllCookies(initialResp);
 
@@ -93,6 +101,9 @@ async function login(): Promise<LoginResult> {
       Cookie: cookieHeader(cookies),
       Referer: "https://www.cobusgroup.com/html2/cobus1login.html",
       Origin: "https://www.cobusgroup.com",
+      "sec-fetch-dest": "empty",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-origin",
     },
     body,
     redirect: "manual",
@@ -126,7 +137,13 @@ async function getFreshJwt(): Promise<string> {
   const { cookies, loginBody } = await login();
 
   const resp = await fetch("https://www.cobusgroup.com/redirect-ia40", {
-    headers: { ...BROWSER_HEADERS, Cookie: cookieHeader(cookies) },
+    headers: {
+      ...BROWSER_HEADERS,
+      Cookie: cookieHeader(cookies),
+      "sec-fetch-dest": "document",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-site": "same-origin",
+    },
     redirect: "manual",
     cache: "no-store",
   });
