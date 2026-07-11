@@ -26,11 +26,14 @@ function headers(token: string): Record<string, string> {
   };
 }
 
-/**
- * Login real contra www.cobusgroup.com usando usuario/contrasena.
- * Devuelve el valor de la cookie PHPSESSID que arma el servidor,
- * necesaria para el paso siguiente (redirect-ia40).
- */
+function dumpHeaders(resp: Response): Record<string, string> {
+  const all: Record<string, string> = {};
+  resp.headers.forEach((value, key) => {
+    all[key] = value;
+  });
+  return all;
+}
+
 async function login(): Promise<string> {
   const username = process.env.IA40_USERNAME;
   const password = process.env.IA40_PASSWORD;
@@ -47,6 +50,8 @@ async function login(): Promise<string> {
     redirect: "manual",
   });
 
+  const loginAllHeaders = dumpHeaders(resp);
+
   const rawCookies: string[] =
     (resp.headers as any).getSetCookie?.() ??
     (resp.headers.get("set-cookie") ? [resp.headers.get("set-cookie") as string] : []);
@@ -55,11 +60,16 @@ async function login(): Promise<string> {
     .map((c) => c.match(/PHPSESSID=([^;]+)/)?.[1])
     .find(Boolean);
 
+  const text = await resp.text();
+
   if (!sessionCookie) {
-    throw new Ia40AuthError("El login no devolvio PHPSESSID. Revisar IA40_USERNAME / IA40_PASSWORD.");
+    throw new Ia40AuthError(
+      `El login no devolvio PHPSESSID (status ${resp.status}). Headers: ${JSON.stringify(
+        loginAllHeaders
+      )}. Body: ${text.slice(0, 500)}`
+    );
   }
 
-  const text = await resp.text();
   if (text.includes("datos_incorrectos")) {
     throw new Ia40AuthError("Usuario o contrasena incorrectos (IA40_USERNAME / IA40_PASSWORD).");
   }
@@ -73,10 +83,6 @@ async function login(): Promise<string> {
   return sessionCookie;
 }
 
-/**
- * Con la cookie de sesion, pide un JWT fresco via el mismo mecanismo de
- * SSO que usa el propio sitio para pasar de www.cobusgroup.com a IA40.
- */
 async function getFreshJwt(): Promise<string> {
   const sessionCookie = await login();
 
@@ -85,11 +91,16 @@ async function getFreshJwt(): Promise<string> {
     redirect: "manual",
   });
 
+  const allHeaders = dumpHeaders(resp);
   const location = resp.headers.get("location");
+
   if (!location) {
-    const bodySnippet = (await resp.text()).slice(0, 300);
+    const bodySnippet = (await resp.text()).slice(0, 500);
     throw new Ia40AuthError(
-      `redirect-ia40 no devolvio Location (status ${resp.status}). Body: ${bodySnippet}`
+      `redirect-ia40 no devolvio Location (status ${resp.status}). Cookie usada: ${sessionCookie.slice(
+        0,
+        10
+      )}... Headers: ${JSON.stringify(allHeaders)}. Body: ${bodySnippet}`
     );
   }
 
