@@ -34,6 +34,22 @@ function dumpHeaders(resp: Response): Record<string, string> {
   return all;
 }
 
+function extractSessionCookie(resp: Response): string | undefined {
+  const rawCookies: string[] =
+    (resp.headers as any).getSetCookie?.() ??
+    (resp.headers.get("set-cookie") ? [resp.headers.get("set-cookie") as string] : []);
+  return rawCookies.map((c) => c.match(/PHPSESSID=([^;]+)/)?.[1]).find(Boolean);
+}
+
+/**
+ * Login real contra www.cobusgroup.com usando usuario/contrasena.
+ *
+ * Paso 1: visita la pagina de login para conseguir una cookie de sesion
+ * inicial (anonima), igual que un navegador real antes de loguearse.
+ * Paso 2: envia el POST de login reusando esa misma cookie, para que el
+ * servidor marque esa sesion como autenticada (en vez de crear una sesion
+ * nueva y desconectada que despues redirect-ia40 no reconoce).
+ */
 async function login(): Promise<string> {
   const username = process.env.IA40_USERNAME;
   const password = process.env.IA40_PASSWORD;
@@ -41,34 +57,30 @@ async function login(): Promise<string> {
     throw new Error("Faltan IA40_USERNAME / IA40_PASSWORD en las variables de entorno.");
   }
 
+  const initialResp = await fetch("https://www.cobusgroup.com/html2/cobus1login.html", {
+    redirect: "manual",
+  });
+  const initialSessionCookie = extractSessionCookie(initialResp);
+
+  if (!initialSessionCookie) {
+    throw new Ia40AuthError("No se pudo conseguir una cookie de sesion inicial antes del login.");
+  }
+
   const body = new URLSearchParams({ login: username, pass: password, sistema: "1" });
 
   const resp = await fetch("https://www.cobusgroup.com/program/connection.inc.php", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Cookie: `PHPSESSID=${initialSessionCookie}`,
+    },
     body,
     redirect: "manual",
   });
 
   const loginAllHeaders = dumpHeaders(resp);
-
-  const rawCookies: string[] =
-    (resp.headers as any).getSetCookie?.() ??
-    (resp.headers.get("set-cookie") ? [resp.headers.get("set-cookie") as string] : []);
-
-  const sessionCookie = rawCookies
-    .map((c) => c.match(/PHPSESSID=([^;]+)/)?.[1])
-    .find(Boolean);
-
+  const sessionCookie = extractSessionCookie(resp) ?? initialSessionCookie;
   const text = await resp.text();
-
-  if (!sessionCookie) {
-    throw new Ia40AuthError(
-      `El login no devolvio PHPSESSID (status ${resp.status}). Headers: ${JSON.stringify(
-        loginAllHeaders
-      )}. Body: ${text.slice(0, 500)}`
-    );
-  }
 
   if (text.includes("datos_incorrectos")) {
     throw new Ia40AuthError("Usuario o contrasena incorrectos (IA40_USERNAME / IA40_PASSWORD).");
@@ -78,6 +90,11 @@ async function login(): Promise<string> {
   }
   if (text.includes("deshabilitado")) {
     throw new Ia40AuthError("El usuario esta deshabilitado. Contactar a Cobus.");
+  }
+  if (!text || text.trim().length === 0) {
+    throw new Ia40AuthError(
+      `El login devolvio body vacio (status ${resp.status}). Headers: ${JSON.stringify(loginAllHeaders)}`
+    );
   }
 
   return sessionCookie;
