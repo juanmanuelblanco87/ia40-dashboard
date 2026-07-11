@@ -17,7 +17,6 @@ function mappingLookup(mappings: FieldMapping[], target: string): string | undef
   return mappings.find((m) => m.target_field === target)?.source_json_path;
 }
 
-/** Extrae un campo del objeto crudo devuelto por la API usando el nombre de columna mapeado. */
 function extract(row: Record<string, any>, path?: string): any {
   if (!path) return null;
   return row[path] ?? null;
@@ -30,12 +29,6 @@ function toMonthStart(dateStr: string | null): string | null {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-/**
- * Inserta filas crudas (idempotente via hash) para una categoria/posicion arancelaria.
- * Como todavia no confirmamos los nombres reales de marca/modelo para cada categoria,
- * esto guarda el JSON completo en `raw` y solo intenta derivar `period`/`fob_dolars`
- * si el mapeo ya esta cargado en field_mappings.
- */
 export async function upsertRawRecords(categoryId: number, ncmCode: string, rows: any[]): Promise<number> {
   if (rows.length === 0) return 0;
   const mappings = await getFieldMappings(categoryId);
@@ -61,15 +54,16 @@ export async function upsertRawRecords(categoryId: number, ncmCode: string, rows
 }
 
 /**
- * Recalcula el agregado mensual por marca/modelo/proveedor para una categoria,
- * usando el mapeo de campos configurado. Si marca/modelo no estan mapeados
- * todavia, agrega usando null (el front lo muestra como "sin marca/modelo"
- * hasta que se complete el mapeo real).
+ * Recalcula el agregado mensual por marca/modelo/proveedor para una categoria.
+ * Usa '__none__' como centinela cuando marca/modelo todavia no estan mapeados,
+ * y siempre referencia los 4 parametros en el texto de la consulta (con cast
+ * explicito ::text) para que Postgres pueda inferir el tipo de cada uno,
+ * incluso cuando la rama logica termina devolviendo null.
  */
 export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
   const mappings = await getFieldMappings(categoryId);
-  const marcaPath = mappingLookup(mappings, "marca");
-  const modeloPath = mappingLookup(mappings, "modelo");
+  const marcaPath = mappingLookup(mappings, "marca") ?? "__none__";
+  const modeloPath = mappingLookup(mappings, "modelo") ?? "__none__";
   const proveedorPath = mappingLookup(mappings, "proveedor") ?? "razon_social";
 
   await query(`delete from monthly_brand_model_agg where category_id = $1`, [categoryId]);
@@ -80,14 +74,14 @@ export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
      select
        category_id,
        period,
-       ${marcaPath ? `raw ->> $2` : `null`} as marca,
-       ${modeloPath ? `raw ->> $3` : `null`} as modelo,
-       coalesce(raw ->> $4, 'sin_dato') as proveedor,
+       case when $2::text = '__none__' then null else raw ->> $2::text end as marca,
+       case when $3::text = '__none__' then null else raw ->> $3::text end as modelo,
+       coalesce(raw ->> $4::text, 'sin_dato') as proveedor,
        sum(coalesce(fob_dolars, 0)) as total_fob_dolars,
        count(*) as record_count
      from trade_records
      where category_id = $1
      group by category_id, period, marca, modelo, proveedor`,
-    [categoryId, marcaPath ?? "__none__", modeloPath ?? "__none__", proveedorPath]
+    [categoryId, marcaPath, modeloPath, proveedorPath]
   );
 }
