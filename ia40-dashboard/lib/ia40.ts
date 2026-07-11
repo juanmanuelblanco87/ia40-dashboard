@@ -34,27 +34,30 @@ function dumpHeaders(resp: Response): Record<string, string> {
   return all;
 }
 
-function extractSessionCookie(resp: Response): string | undefined {
+function extractAllCookies(resp: Response): Record<string, string> {
   const rawCookies: string[] =
     (resp.headers as any).getSetCookie?.() ??
     (resp.headers.get("set-cookie") ? [resp.headers.get("set-cookie") as string] : []);
-  return rawCookies.map((c) => c.match(/PHPSESSID=([^;]+)/)?.[1]).find(Boolean);
+  const cookies: Record<string, string> = {};
+  for (const raw of rawCookies) {
+    const match = raw.match(/^([^=]+)=([^;]*)/);
+    if (match) cookies[match[1].trim()] = match[2];
+  }
+  return cookies;
 }
 
-/**
- * Login real contra www.cobusgroup.com usando usuario/contrasena.
- *
- * Paso 1: visita la pagina de login para conseguir una cookie de sesion
- * inicial (anonima), igual que un navegador real antes de loguearse.
- * Paso 2: envia el POST de login reusando esa misma cookie, para que el
- * servidor marque esa sesion como autenticada (en vez de crear una sesion
- * nueva y desconectada que despues redirect-ia40 no reconoce).
- *
- * IMPORTANTE: cache: "no-store" en todos los fetch de este archivo, porque
- * Next.js cachea fetch() por default y eso hacia que reusaramos siempre
- * la misma sesion vieja en vez de pedir una nueva en cada sync.
- */
-async function login(): Promise<string> {
+function cookieHeader(cookies: Record<string, string>): string {
+  return Object.entries(cookies)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
+}
+
+interface LoginResult {
+  cookies: Record<string, string>;
+  loginBody: string;
+}
+
+async function login(): Promise<LoginResult> {
   const username = process.env.IA40_USERNAME;
   const password = process.env.IA40_PASSWORD;
   if (!username || !password) {
@@ -65,9 +68,9 @@ async function login(): Promise<string> {
     redirect: "manual",
     cache: "no-store",
   });
-  const initialSessionCookie = extractSessionCookie(initialResp);
+  let cookies = extractAllCookies(initialResp);
 
-  if (!initialSessionCookie) {
+  if (!cookies.PHPSESSID) {
     throw new Ia40AuthError("No se pudo conseguir una cookie de sesion inicial antes del login.");
   }
 
@@ -77,7 +80,8 @@ async function login(): Promise<string> {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      Cookie: `PHPSESSID=${initialSessionCookie}`,
+      Cookie: cookieHeader(cookies),
+      Referer: "https://www.cobusgroup.com/html2/cobus1login.html",
     },
     body,
     redirect: "manual",
@@ -85,7 +89,8 @@ async function login(): Promise<string> {
   });
 
   const loginAllHeaders = dumpHeaders(resp);
-  const sessionCookie = extractSessionCookie(resp) ?? initialSessionCookie;
+  const newCookies = extractAllCookies(resp);
+  cookies = { ...cookies, ...newCookies };
   const text = await resp.text();
 
   if (text.includes("datos_incorrectos")) {
@@ -103,14 +108,14 @@ async function login(): Promise<string> {
     );
   }
 
-  return sessionCookie;
+  return { cookies, loginBody: text };
 }
 
 async function getFreshJwt(): Promise<string> {
-  const sessionCookie = await login();
+  const { cookies, loginBody } = await login();
 
   const resp = await fetch("https://www.cobusgroup.com/redirect-ia40", {
-    headers: { Cookie: `PHPSESSID=${sessionCookie}` },
+    headers: { Cookie: cookieHeader(cookies) },
     redirect: "manual",
     cache: "no-store",
   });
@@ -121,10 +126,12 @@ async function getFreshJwt(): Promise<string> {
   if (!location) {
     const bodySnippet = (await resp.text()).slice(0, 500);
     throw new Ia40AuthError(
-      `redirect-ia40 no devolvio Location (status ${resp.status}). Cookie usada: ${sessionCookie.slice(
+      `redirect-ia40 no devolvio Location (status ${resp.status}). Login body: ${loginBody.slice(
         0,
-        10
-      )}... Headers: ${JSON.stringify(allHeaders)}. Body: ${bodySnippet}`
+        300
+      )}. Cookies usadas: ${Object.keys(cookies).join(",")}. Headers: ${JSON.stringify(
+        allHeaders
+      )}. Body: ${bodySnippet}`
     );
   }
 
