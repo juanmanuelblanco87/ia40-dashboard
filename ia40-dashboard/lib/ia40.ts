@@ -27,17 +27,58 @@ function headers(token: string): Record<string, string> {
 }
 
 /**
- * Consigue un JWT fresco usando la cookie de sesion de www.cobusgroup.com
- * (PHPSESSID). Este endpoint es el mismo que usa el propio sitio para el
- * SSO entre el portal general y la herramienta IA40: dado que la cookie
- * todavia sea valida en el servidor, devuelve un token nuevo (dura ~15 min)
- * en el header Location de una redireccion 302.
+ * Login real contra www.cobusgroup.com usando usuario/contrasena.
+ * Devuelve el valor de la cookie PHPSESSID que arma el servidor,
+ * necesaria para el paso siguiente (redirect-ia40).
+ */
+async function login(): Promise<string> {
+  const username = process.env.IA40_USERNAME;
+  const password = process.env.IA40_PASSWORD;
+  if (!username || !password) {
+    throw new Error("Faltan IA40_USERNAME / IA40_PASSWORD en las variables de entorno.");
+  }
+
+  const body = new URLSearchParams({ login: username, pass: password, sistema: "1" });
+
+  const resp = await fetch("https://www.cobusgroup.com/program/connection.inc.php", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+    redirect: "manual",
+  });
+
+  const rawCookies: string[] =
+    (resp.headers as any).getSetCookie?.() ??
+    (resp.headers.get("set-cookie") ? [resp.headers.get("set-cookie") as string] : []);
+
+  const sessionCookie = rawCookies
+    .map((c) => c.match(/PHPSESSID=([^;]+)/)?.[1])
+    .find(Boolean);
+
+  if (!sessionCookie) {
+    throw new Ia40AuthError("El login no devolvio PHPSESSID. Revisar IA40_USERNAME / IA40_PASSWORD.");
+  }
+
+  const text = await resp.text();
+  if (text.includes("datos_incorrectos")) {
+    throw new Ia40AuthError("Usuario o contrasena incorrectos (IA40_USERNAME / IA40_PASSWORD).");
+  }
+  if (text.includes("vencido") || text.includes("finalizado")) {
+    throw new Ia40AuthError("El abono de Cobus esta vencido o finalizado.");
+  }
+  if (text.includes("deshabilitado")) {
+    throw new Ia40AuthError("El usuario esta deshabilitado. Contactar a Cobus.");
+  }
+
+  return sessionCookie;
+}
+
+/**
+ * Con la cookie de sesion, pide un JWT fresco via el mismo mecanismo de
+ * SSO que usa el propio sitio para pasar de www.cobusgroup.com a IA40.
  */
 async function getFreshJwt(): Promise<string> {
-  const sessionCookie = process.env.IA40_SESSION_COOKIE;
-  if (!sessionCookie) {
-    throw new Error("Falta IA40_SESSION_COOKIE en las variables de entorno.");
-  }
+  const sessionCookie = await login();
 
   const resp = await fetch("https://www.cobusgroup.com/redirect-ia40", {
     headers: { Cookie: `PHPSESSID=${sessionCookie}` },
@@ -46,8 +87,9 @@ async function getFreshJwt(): Promise<string> {
 
   const location = resp.headers.get("location");
   if (!location) {
+    const bodySnippet = (await resp.text()).slice(0, 300);
     throw new Ia40AuthError(
-      "No se pudo renovar el token: la cookie de sesion probablemente vencio. Hay que volver a extraerla del navegador (ver README)."
+      `redirect-ia40 no devolvio Location (status ${resp.status}). Body: ${bodySnippet}`
     );
   }
 
@@ -86,7 +128,7 @@ export async function fetchIa40Data(params: FetchDataParams): Promise<{ rows: an
     });
 
     if (resp.status === 401) {
-      throw new Ia40AuthError("El token recien obtenido fue rechazado (401). Revisar IA40_SESSION_COOKIE.");
+      throw new Ia40AuthError("El token recien obtenido fue rechazado (401).");
     }
     if (!resp.ok) {
       throw new Error(`IA40 respondio ${resp.status}: ${await resp.text()}`);
