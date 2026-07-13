@@ -26,16 +26,13 @@ function headers(token: string): Record<string, string> {
     Authorization: `Bearer ${token}`,
     "x-tool-request": "IA",
     "Content-Type": "application/json",
+    "Origin": "https://ia40.cobusgroup.com",
+    "Referer": "https://ia40.cobusgroup.com/",
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   };
 }
 
-/**
- * El JWT ya no se consigue logueandose desde Vercel (Cobus bloquea el login
- * si el pedido viene de un servidor en la nube). En cambio, un script que
- * corre en la computadora del usuario (Programador de tareas de Windows)
- * se loguea el mismo y manda el token fresco a POST /api/token, que lo
- * guarda en esta tabla. Aca simplemente lo leemos.
- */
 async function getStoredJwt(): Promise<string> {
   const rows = await query<{ value: string; updated_at: string }>(
     `select value, updated_at from app_settings where key = 'ia40_jwt'`
