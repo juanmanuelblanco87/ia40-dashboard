@@ -43,7 +43,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const monthsBack = Number(process.env.SYNC_MONTHS_BACK ?? 3);
+  // Minimo 24 meses de historial (pedido del negocio). Se puede pisar con
+  // la variable de entorno SYNC_MONTHS_BACK si hiciera falta mas o menos.
+  const monthsBack = Number(process.env.SYNC_MONTHS_BACK ?? 24);
   const { start, end } = dateRangeLastNMonths(monthsBack);
 
   const categories = await query<CategoryRow>(`select id, slug from categories`);
