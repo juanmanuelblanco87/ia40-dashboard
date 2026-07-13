@@ -267,7 +267,14 @@ export default function AdminPage() {
                     </button>
                   </td>
                   <td>
-                    <button onClick={() => setImporterFilter(p.importer_name)}>
+                    <button
+                      onClick={() => {
+                        setImporterFilter(p.importer_name);
+                        document
+                          .getElementById("detalle-lineas")
+                          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }}
+                    >
                       Ver lineas →
                     </button>
                   </td>
@@ -285,7 +292,7 @@ export default function AdminPage() {
         )}
       </div>
 
-      <div className="panel">
+      <div className="panel" id="detalle-lineas">
         <h1 style={{ fontSize: 16, marginTop: 0 }}>Lineas de detalle</h1>
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: -8 }}>
           Usa esto cuando un importador trae mas de una marca (o una marca con varios
