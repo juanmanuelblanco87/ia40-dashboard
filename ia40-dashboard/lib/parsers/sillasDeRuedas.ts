@@ -1,127 +1,269 @@
-import { NextResponse } from "next/server";
-import { query } from "@/lib/db";
-import { fetchIa40Data, Ia40AuthError } from "@/lib/ia40";
-import { fetchIa40ExportRows, Ia40AuthError as Ia40ExportAuthError } from "@/lib/ia40Export";
-import { upsertRawRecords, recomputeMonthlyAgg } from "@/lib/aggregate";
-import { categoryUsesExportFlow } from "@/lib/parsers";
+/**
+ * Parser Marca / Modelo para la categoria "Sillas de ruedas".
+ *
+ * Extrae Marca y Modelo desde el texto de aduana de la columna
+ * "SUB ITEMS - SUFIJOS" (ej: "TILITE TILITE Z SIN CODIGO (CA00)"). Si no se
+ * identifica una marca real, usa la Razon Social del importador como Marca
+ * y el codigo/numero ya presente en el texto como Modelo (o "Modelo N"
+ * correlativo si no hay ningun codigo distintivo).
+ *
+ * Cada categoria tendra su propio parser adaptado (ver lib/parsers/index.ts).
+ * Este es especifico de sillas de ruedas: diccionarios y reglas de typo
+ * fueron armados a partir de los datos reales de esa categoria.
+ */
 
-export const dynamic = "force-dynamic";
-export const maxDuration = 300; // requiere plan Pro para superar 60s
-
-interface CategoryRow {
-  id: number;
-  slug: string;
-}
-interface NcmRow {
-  ncm_code: string;
-}
-
-function isAuthorized(req: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return true; // sin secreto configurado, no bloquea (solo para dev local)
-  return req.headers.get("authorization") === `Bearer ${secret}`;
+export interface ParsedBrandModel {
+  marca: string;
+  modelo: string;
 }
 
-function dateRangeLastNMonths(n: number): { start: string; end: string } {
-  // Los datos de aduana tienen retraso de carga: el mes recien terminado
-  // todavia no esta completo hasta pasados unos ~15 dias del mes siguiente.
-  // Por eso el mes anterior NO se usa como fin del rango si todavia estamos
-  // dentro de esa ventana de gracia; en ese caso se salta un mes mas atras.
-  // Configurable por si el retraso real de Cobus resulta ser mayor o menor.
-  const graceDays = Number(process.env.SYNC_DATA_LAG_DAYS ?? 15);
+// ---- Paso 5: diccionario multi-palabra (match mas largo primero) ----
+const MULTI_WORD_DICT: [string, string][] = [
+  ["FOSHAN DONGFANG MEDICAL EQUIPMENT MANUFACTORY LTD", "Foshan Dongfang Medical Equipment Manufactory Ltd"],
+  ["INTCO MEDICAL INDUSTRIES INC", "Intco Medical Industries Inc"],
+  ["INTCO MEDICAL INDUST", "Intco Medical Industries Inc"],
+  ["CONVAID PRODUCTS LLC", "Convaid Products LLC"],
+  ["JAMES LECKEY DESIGN", "James Leckey Design"],
+  ["LIW CARE TECHNOLOGY", "LIW Care Technology"],
+  ["PDG PRODUCT DESIGN", "PDG Product Design"],
+  ["FOSHAN DONGFANG MEDI", "Foshan Dongfang Medical"],
+  ["FOSHAN DONGFANG AND", "Foshan Dongfang"],
+  ["FOSHAN RAFU MEDICAL", "Foshan Rafu Medical"],
+  ["FOSHAN ENCARRE MEDICL", "Foshan Ecarre Medica"],
+  ["FOSHAN ECARRE MEDICA", "Foshan Ecarre Medica"],
+  ["FOSHAN ECARRE MEDIC", "Foshan Ecarre Medica"],
+  ["JIANGSU INTCO MEDICA", "Jiangsu Intco Medica"],
+  ["JIANGSU RIXIN MEDICA", "Jiangsu Rixin Medica"],
+  ["GUANGDONG KAIYANG", "Guangdong Kaiyang"],
+  ["KAIYANG MEDICAL", "Kaiyang Medical"],
+  ["CIRCLE SPECIALTY", "Circle Specialty"],
+  ["SUNRISE MEDICAL", "Sunrise Medical"],
+  ["MOTION COMPOSITES", "Motion Composites"],
+  ["MDH SP Z O O", "MDH SP Z.O.O."],
+  ["SARL VIPAMAT", "Sarl Vipamat"],
+  ["FUTURE MOBILITY HEAL", "Future Mobility Healthcare"],
+  ["FUTURE MOBILITY", "Future Mobility Healthcare"],
+  ["ALU REHAB", "Alu Rehab"],
+  ["DOUBLE CARE MEDICAL", "Double Care Medical"],
+  ["DOUBLE CARE", "Double Care Medical"],
+  ["DRIVE MEDICAL", "Drive Medical"],
+  ["STEALTH PRODUCTS", "Stealth Products"],
+  ["KI MOBILITY", "KI Mobility"],
+  ["FOSHAN GEGE", "Foshan Gege"],
+  ["FOSHAN KAIYANG", "Foshan Kaiyang"],
+  ["FOSHAN FEIYANG", "Foshan Feiyang"],
+  ["FOSHAN ECARRE", "Foshan Ecarre Medica"],
+  ["AKCES MED", "Akces Med"],
+  ["TOP MEDI", "Top Medi"],
+  ["U NURSE", "U Nurse"],
+  ["CARE QUIP", "Care Quip"],
+  ["BOX WHEELCHAIRS", "Box Wheelchairs"],
+];
+// match mas largo primero
+const MULTI_WORD_SORTED = [...MULTI_WORD_DICT].sort((a, b) => b[0].length - a[0].length);
 
-  const now = new Date();
-  let refMonth = now.getMonth(); // mes actual (0-indexado)
-  const refYear = now.getFullYear();
+// ---- Paso 6: marca de una sola palabra (tabla OVERRIDE) ----
+const SINGLE_WORD_OVERRIDE: Record<string, string> = {
+  TILITE: "TiLite",
+  KI: "KI",
+  HOGGI: "Hoggi",
+  VERMEIREN: "Vermeiren",
+  INVACARE: "Invacare",
+  OTTOBOCK: "Ottobock",
+  STRYKER: "Stryker",
+  MEYRA: "Meyra",
+  ASPEN: "Aspen",
+  MAGESA: "Magesa",
+  MUGI: "Mugi",
+  INTCO: "Intco",
+  MOVICARE: "Movicare",
+  MYWAM: "MyWam",
+  JIANLIAN: "Jianlian",
+  YUWELL: "Yuwell",
+  LIFECARE: "LifeCare",
+  SUNCARE: "SunCare",
+  ANTARES: "Antares",
+  NEATECH: "NeaTech",
+  ANATOMIC: "Anatomic",
+  KARMA: "Karma",
+  EUROMIX: "EuroMix",
+  MAVERICK: "Maverick",
+  COMFORT: "Comfort",
+  LERADO: "Lerado",
+  SITMED: "SitMed",
+  POLIOR: "Polior",
+  KDB: "KDB",
+  WATER: "Water",
+  NOVA: "Nova",
+  ACHIEVE: "Achieve",
+  REBOTEC: "Rebotec",
+  ARIA: "Aria",
+  MERITS: "Merits",
+  RIFTON: "Rifton",
+  VESCO: "Vesco",
+  RGK: "RGK",
+  LIGHTNING: "Lightning",
+  PATRON: "Patron",
+  GIGANTEX: "Gigantex",
+  R82: "R82",
+  SUNRISE: "Sunrise Medical",
+  LIW: "LIW",
+  OFFCARR: "Offcarr",
+  LEGGERO: "Leggero",
+  TIMO: "Timo",
+  ORMESA: "Ormesa",
+  ORTOBRAS: "Ortobras",
+  "A&J": "A&J",
+  FOSHAN: "Foshan",
+  JIANGSU: "Jiangsu",
+  GREEN: "Green",
+  THOMASHILFEN: "Thomashilfen",
+  ONE: "One",
+  JEPOINT: "Jepoint",
+  MEDCORE: "Medcore",
+};
 
-  if (now.getDate() <= graceDays) {
-    // Todavia dentro de la ventana de gracia del mes actual -> el mes
-    // anterior tampoco esta completo, se retrocede un mes mas.
-    refMonth -= 1;
+// ---- Paso 4: typos conocidos (primera palabra) ----
+const TYPO_FIXES: Record<string, string> = {
+  OTTOBOK: "OTTOBOCK",
+  INVACORE: "INVACARE",
+  LEGEGRO: "LEGGERO",
+  SURISE: "SUNRISE",
+  GUNAGDONG: "GUANGDONG",
+  ANTOMIC: "ANATOMIC",
+  LIGTHNING: "LIGHTNING",
+  R52: "R82",
+  TLITE: "TILITE",
+};
+
+// ---- Paso 7: palabras vacias societarias ----
+const SOCIETARY_STOPWORDS = new Set([
+  "S.A.", "SRL", "S.R.L.", "SOCIEDAD", "ANONIMA", "LTDA", "SOC", "RESP",
+  "COMERCIAL", "E", "INDUSTRI", "Y", "CIA", "DE", "DEL", "LA", "EL",
+  "SUCURSAL", "ARGENTINA", "INDUSTRIAL",
+]);
+
+function titleCase(word: string): string {
+  if (word.length <= 3) return word.toUpperCase();
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+// Paso 9: contador "Modelo N" correlativo por Razon Social + Precio Unitario.
+// NOTA: este contador vive en memoria del proceso. Dentro de una misma
+// corrida de sync es correcto (se reutiliza el mismo numero para la misma
+// combinacion razonSocial+precio); entre corridas distintas (cada una un
+// proceso nuevo en Vercel) se reinicia. Segun los datos reales analizados,
+// este camino casi no se usa (casi todo trae un codigo de referencia
+// utilizable como Modelo), asi que por ahora no se persiste en la base.
+// Si en el futuro hace falta que sea 100% estable entre corridas, hay que
+// guardar el contador en una tabla nueva.
+const modeloAssigned = new Map<string, number>();
+const modeloCounterPerRazon = new Map<string, number>();
+
+function assignModeloN(razonSocial: string, precioUnitario?: number | null): string {
+  const razonUpper = razonSocial.toUpperCase();
+  const key = `${razonUpper}__${precioUnitario ?? "sin_precio"}`;
+  let assigned = modeloAssigned.get(key);
+  if (assigned === undefined) {
+    const next = (modeloCounterPerRazon.get(razonUpper) ?? 0) + 1;
+    modeloCounterPerRazon.set(razonUpper, next);
+    modeloAssigned.set(key, next);
+    assigned = next;
+  }
+  return `Modelo ${assigned}`;
+}
+
+function finalize(marca: string, modelo: string, razonSocial: string, precioUnitario?: number | null): ParsedBrandModel {
+  if (modelo) return { marca, modelo };
+  // Paso 9: modelo vacio -> "Modelo N" correlativo
+  return { marca, modelo: assignModeloN(razonSocial, precioUnitario) };
+}
+
+/**
+ * @param sufijoTextRaw  Texto crudo de "SUB ITEMS - SUFIJOS" (puede venir vacio/null).
+ * @param razonSocial    Razon social del importador (columna A), tal cual.
+ * @param precioUnitario Precio unitario FOB del sub-item (columna "SUB ITEMS - P.U. U$S"), para el paso 9.
+ */
+export function parseMarcaModeloSillasDeRuedas(
+  sufijoTextRaw: string | null | undefined,
+  razonSocial: string,
+  precioUnitario?: number | null
+): ParsedBrandModel {
+  let text = (sufijoTextRaw ?? "").trim();
+
+  // Paso 1: quitar sufijo de aduana "SIN CODIGO (CODIGO)" al final.
+  text = text.replace(/\s*SIN\s+CODIGO(\s*\([^)]*\))?\s*$/i, "").trim();
+
+  // Paso 2: comillas, comas y puntos sueltos -> espacio; colapsar espacios.
+  text = text
+    .replace(/["'.,]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  if (!text) {
+    return finalize(razonSocial, "", razonSocial, precioUnitario);
   }
 
-  const end = new Date(refYear, refMonth, 0); // dia 0 = ultimo dia del mes anterior a refMonth
-  const start = new Date(end.getFullYear(), end.getMonth() - (n - 1), 1);
-
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return { start: fmt(start), end: fmt(end) };
-}
-
-export async function GET(req: Request) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Paso 3: "sin marca" explicito -> Marca = Razon Social completa.
+  const sinMarcaMatch = /^(SIN\s+MARCA|S\/MARCA|S\/M)\b\s*(.*)$/i.exec(text);
+  if (sinMarcaMatch) {
+    const modelo = sinMarcaMatch[2].trim();
+    return finalize(razonSocial, modelo, razonSocial, precioUnitario);
   }
 
-  // Minimo 24 meses de historial (pedido del negocio). Se puede pisar con
-  // la variable de entorno SYNC_MONTHS_BACK si hiciera falta mas o menos.
-  const monthsBack = Number(process.env.SYNC_MONTHS_BACK ?? 24);
-  const { start, end } = dateRangeLastNMonths(monthsBack);
-
-  const categories = await query<CategoryRow>(`select id, slug from categories`);
-  const results: any[] = [];
-
-  for (const cat of categories) {
-    const ncmCodes = await query<NcmRow>(
-      `select ncm_code from category_ncm_codes where category_id = $1`,
-      [cat.id]
-    );
-
-    if (ncmCodes.length === 0) {
-      results.push({ category: cat.slug, status: "sin_ncm_configurado" });
-      continue;
+  // Paso 4: corregir typo conocido en la primera palabra.
+  let words = text.split(" ").filter(Boolean);
+  if (words.length > 0) {
+    const firstUpper = words[0].toUpperCase();
+    if (TYPO_FIXES[firstUpper]) {
+      words[0] = TYPO_FIXES[firstUpper];
+      text = words.join(" ");
     }
+  }
+  const textUpper = text.toUpperCase();
 
-    const useExportFlow = categoryUsesExportFlow(cat.slug);
-
-    for (const { ncm_code } of ncmCodes) {
-      try {
-        // Las categorias con parser registrado (ver lib/parsers) necesitan
-        // el flujo de EXPORTACION de IA40, que es el unico que trae la
-        // columna "SUB ITEMS - SUFIJOS" (marca/modelo). Las demas siguen
-        // usando /data como hasta ahora.
-        const rows = useExportFlow
-          ? await fetchIa40ExportRows({
-              countryCodi: "ARG",
-              informationTypeCodi: "ARGACT",
-              operationTypeCodi: "ARGACTIMP",
-              dateStart: start,
-              dateEnd: end,
-              ncmCode: ncm_code,
-            })
-          : (
-              await fetchIa40Data({
-                countryCodi: "ARG",
-                informationTypeCodi: "ARGACT",
-                operationTypeCodi: "ARGACTIMP",
-                dateStart: start,
-                dateEnd: end,
-                filters: [{ field: "posicion_arancelaria", values: [ncm_code] }],
-              })
-            ).rows;
-
-        const inserted = await upsertRawRecords(cat.id, cat.slug, ncm_code, rows);
-
-        await query(
-          `insert into sync_runs (category_id, ncm_code, period_start, period_end, rows_ingested, status)
-           values ($1, $2, $3, $4, $5, 'ok')`,
-          [cat.id, ncm_code, start, end, inserted]
-        );
-
-        results.push({ category: cat.slug, ncm_code, fetched: rows.length, inserted });
-      } catch (err: any) {
-        const status =
-          err instanceof Ia40AuthError || err instanceof Ia40ExportAuthError ? "auth_error" : "error";
-        await query(
-          `insert into sync_runs (category_id, ncm_code, period_start, period_end, rows_ingested, status, error_message)
-           values ($1, $2, $3, $4, 0, $5, $6)`,
-          [cat.id, ncm_code, start, end, status, String(err?.message ?? err)]
-        );
-        results.push({ category: cat.slug, ncm_code, error: String(err?.message ?? err) });
-      }
+  // Paso 5: diccionario multi-palabra (match mas largo primero).
+  for (const [key, canonical] of MULTI_WORD_SORTED) {
+    if (textUpper === key || textUpper.startsWith(key + " ")) {
+      const modelo = text.slice(key.length).trim();
+      return finalize(canonical, modelo, razonSocial, precioUnitario);
     }
-
-    await recomputeMonthlyAgg(cat.id);
   }
 
-  return NextResponse.json({ ranAt: new Date().toISOString(), results });
+  // Paso 6: marca de una sola palabra ya conocida (tabla OVERRIDE).
+  // Se evalua ANTES del fallback por razon social (ver nota de Stryker).
+  words = text.split(" ").filter(Boolean);
+  if (words.length > 0) {
+    const firstUpper = words[0].toUpperCase();
+    if (SINGLE_WORD_OVERRIDE[firstUpper]) {
+      const marca = SINGLE_WORD_OVERRIDE[firstUpper];
+      const modelo = words.slice(1).join(" ").trim();
+      return finalize(marca, modelo, razonSocial, precioUnitario);
+    }
+  }
+
+  // Paso 7: fallback por Razon Social (probar prefijo de 3, 2 o 1 palabras
+  // de la razon social sin las palabras vacias societarias).
+  const razonWords = razonSocial
+    .toUpperCase()
+    .split(/\s+/)
+    .filter((w) => w && !SOCIETARY_STOPWORDS.has(w));
+
+  for (let take = Math.min(3, razonWords.length); take >= 1; take--) {
+    const prefix = razonWords.slice(0, take).join(" ");
+    if (prefix.length < 4) continue;
+    if (textUpper === prefix || textUpper.startsWith(prefix + " ")) {
+      const modelo = text.slice(prefix.length).trim();
+      return finalize(razonSocial, modelo, razonSocial, precioUnitario);
+    }
+  }
+
+  // Paso 8: fallback generico -> primera palabra como marca (Title Case,
+  // o mayusculas si es sigla de <=3 letras), resto como modelo.
+  if (words.length === 0) {
+    return finalize(razonSocial, "", razonSocial, precioUnitario);
+  }
+  const marca = titleCase(words[0]);
+  const modelo = words.slice(1).join(" ").trim();
+  return finalize(marca, modelo, razonSocial, precioUnitario);
 }
