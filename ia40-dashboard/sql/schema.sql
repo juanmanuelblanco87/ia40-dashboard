@@ -65,6 +65,19 @@ create table if not exists monthly_brand_model_agg (
 
 create index if not exists idx_monthly_agg_lookup on monthly_brand_model_agg (category_id, period);
 
+-- IA40 no siempre trae marca/modelo directo en el JSON. Cuando no viene, se
+-- identifica manualmente por empresa importadora (campo "nombre") y se carga
+-- aca via la pantalla /admin. Se va completando de a poco.
+create table if not exists provider_brand_map (
+  id serial primary key,
+  category_id int not null references categories(id) on delete cascade,
+  importer_name text not null,
+  marca text not null,
+  modelo text,
+  updated_at timestamptz not null default now(),
+  unique (category_id, importer_name)
+);
+
 -- Historial de corridas de sync, para debug y para saber desde que fecha
 -- retomar la proxima vez (sync incremental).
 create table if not exists sync_runs (
