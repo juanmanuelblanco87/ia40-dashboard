@@ -119,7 +119,11 @@ export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
        on pbm.category_id = tr.category_id
       and pbm.importer_name = tr.raw ->> $4::text
      where tr.category_id = $1
-     group by tr.category_id, tr.period, marca, modelo, proveedor`,
+     -- Se agrupa por posicion (1..5) y no por nombre de columna: "marca" y
+     -- "modelo" son tambien nombres de columnas reales en provider_brand_map,
+     -- y Postgres prioriza esa columna sobre el alias del SELECT, lo que
+     -- rompia el group by con "column tr.raw must appear in..."
+     group by 1, 2, 3, 4, 5`,
     [categoryId, marcaPath, modeloPath, proveedorPath]
   );
 }
