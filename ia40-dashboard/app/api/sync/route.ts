@@ -21,18 +21,14 @@ function isAuthorized(req: Request): boolean {
 }
 
 function dateRangeLastNMonths(n: number): { start: string; end: string } {
-  // Los datos de aduana tienen un retraso de procesamiento: no existen
-  // registros hasta el día de "hoy". Restamos un colchón de días al
-  // extremo final para no pedir un rango que la API considere
-  // "fuera de rango" (INVALID_DATE). Configurable por si hace falta
-  // ajustarlo (ej: si el retraso real es mayor o menor).
-  const lagDays = Number(process.env.SYNC_END_LAG_DAYS ?? 45);
-
-  const end = new Date();
-  end.setDate(end.getDate() - lagDays);
-
-  const start = new Date(end);
-  start.setMonth(start.getMonth() - n);
+  // Los datos de aduana tienen un retraso de procesamiento: el mes en curso
+  // todavia no esta completo. En vez de adivinar un colchon de dias, pedimos
+  // siempre hasta el ULTIMO DIA DEL MES ANTERIOR (nunca el mes actual), y el
+  // inicio es el primer dia del mes n-1 meses antes de ese fin -> asi el
+  // rango cubre exactamente n meses calendario completos.
+  const now = new Date();
+  const end = new Date(now.getFullYear(), now.getMonth(), 0); // dia 0 = ultimo dia del mes anterior
+  const start = new Date(end.getFullYear(), end.getMonth() - (n - 1), 1);
 
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
   return { start: fmt(start), end: fmt(end) };
