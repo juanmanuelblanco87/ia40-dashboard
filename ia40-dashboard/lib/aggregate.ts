@@ -69,26 +69,31 @@ export async function upsertRawRecords(categoryId: number, ncmCode: string, rows
  */
 export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
   const mappings = await getFieldMappings(categoryId);
-  const marcaPath = mappingLookup(mappings, "marca");
-  const modeloPath = mappingLookup(mappings, "modelo");
+  const marcaPath = mappingLookup(mappings, "marca") ?? "__none__";
+  const modeloPath = mappingLookup(mappings, "modelo") ?? "__none__";
   const proveedorPath = mappingLookup(mappings, "proveedor") ?? "razon_social";
 
   await query(`delete from monthly_brand_model_agg where category_id = $1`, [categoryId]);
 
+  // Importante: $2 y $3 se referencian SIEMPRE en el texto del SQL (via el
+  // CASE WHEN), aunque el mapeo todavia no exista. Si en cambio se omiten
+  // condicionalmente del texto (como antes) pero se siguen pasando como
+  // parametros, Postgres no puede inferir su tipo y falla con
+  // "could not determine data type of parameter".
   await query(
     `insert into monthly_brand_model_agg
        (category_id, period, marca, modelo, proveedor, total_fob_dolars, record_count)
      select
        category_id,
        period,
-       ${marcaPath ? `raw ->> $2` : `null`} as marca,
-       ${modeloPath ? `raw ->> $3` : `null`} as modelo,
-       coalesce(raw ->> $4, 'sin_dato') as proveedor,
+       case when $2::text = '__none__' then null else raw ->> $2::text end as marca,
+       case when $3::text = '__none__' then null else raw ->> $3::text end as modelo,
+       coalesce(raw ->> $4::text, 'sin_dato') as proveedor,
        sum(coalesce(fob_dolars, 0)) as total_fob_dolars,
        count(*) as record_count
      from trade_records
      where category_id = $1
      group by category_id, period, marca, modelo, proveedor`,
-    [categoryId, marcaPath ?? "__none__", modeloPath ?? "__none__", proveedorPath]
+    [categoryId, marcaPath, modeloPath, proveedorPath]
   );
 }
