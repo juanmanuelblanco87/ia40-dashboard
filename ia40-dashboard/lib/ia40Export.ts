@@ -86,9 +86,11 @@ async function triggerExport(token: string, p: TriggerExportParams): Promise<Tri
       ranking: "",
       fieldsConfig: { type: "all", fields: [] },
       format: "csv",
-      separator: ";",
-      textQualifier: '"',
-      decimalSeparator: ",",
+      formatConfig: {
+        separator: ";",
+        textQualifier: '"',
+        decimalSeparator: ",",
+      },
     },
   };
 
