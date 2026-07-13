@@ -16,6 +16,7 @@ export default function Home() {
   const [marca, setMarca] = useState<string>("");
   const [modelo, setModelo] = useState<string>("");
   const [groupBy, setGroupBy] = useState<"marca" | "modelo" | "proveedor">("marca");
+  const [metric, setMetric] = useState<"total_fob_dolars" | "total_unidades">("total_fob_dolars");
   const [series, setSeries] = useState<SeriesPoint[]>([]);
   const [options, setOptions] = useState<{ marca: string; modelo: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -86,11 +87,18 @@ export default function Home() {
             <option value="proveedor">Proveedor</option>
           </select>
         </div>
+        <div>
+          <label>Metrica</label>
+          <select value={metric} onChange={(e) => setMetric(e.target.value as any)}>
+            <option value="total_fob_dolars">FOB USD</option>
+            <option value="total_unidades">Unidades</option>
+          </select>
+        </div>
       </div>
 
       <div className="panel">
         {loading ? <p style={{ color: "var(--muted)" }}>Cargando...</p> : (
-          <EvolutionChart data={series} groupBy={groupBy} />
+          <EvolutionChart data={series} groupBy={groupBy} metric={metric} />
         )}
       </div>
 
