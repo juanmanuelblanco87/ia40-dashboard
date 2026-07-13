@@ -59,6 +59,7 @@ create table if not exists monthly_brand_model_agg (
   modelo text,
   proveedor text,
   total_fob_dolars numeric not null default 0,
+  total_unidades numeric not null default 0,
   record_count int not null default 0,
   unique (category_id, period, marca, modelo, proveedor)
 );
@@ -76,6 +77,19 @@ create table if not exists provider_brand_map (
   modelo text,
   updated_at timestamptz not null default now(),
   unique (category_id, importer_name)
+);
+
+-- Un importador puede traer varias marcas, y una marca varios modelos.
+-- Cuando la clasificacion por importador entero (provider_brand_map) no
+-- alcanza, se puede clasificar cada linea de detalle (cada registro de
+-- trade_records) por separado aca. Tiene prioridad sobre provider_brand_map.
+create table if not exists record_brand_map (
+  id serial primary key,
+  trade_record_id bigint not null references trade_records(id) on delete cascade,
+  marca text not null,
+  modelo text,
+  updated_at timestamptz not null default now(),
+  unique (trade_record_id)
 );
 
 -- Historial de corridas de sync, para debug y para saber desde que fecha
