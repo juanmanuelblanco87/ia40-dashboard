@@ -21,13 +21,24 @@ function isAuthorized(req: Request): boolean {
 }
 
 function dateRangeLastNMonths(n: number): { start: string; end: string } {
-  // Los datos de aduana tienen un retraso de procesamiento: el mes en curso
-  // todavia no esta completo. En vez de adivinar un colchon de dias, pedimos
-  // siempre hasta el ULTIMO DIA DEL MES ANTERIOR (nunca el mes actual), y el
-  // inicio es el primer dia del mes n-1 meses antes de ese fin -> asi el
-  // rango cubre exactamente n meses calendario completos.
+  // Los datos de aduana tienen retraso de carga: el mes recien terminado
+  // todavia no esta completo hasta pasados unos ~15 dias del mes siguiente.
+  // Por eso el mes anterior NO se usa como fin del rango si todavia estamos
+  // dentro de esa ventana de gracia; en ese caso se salta un mes mas atras.
+  // Configurable por si el retraso real de Cobus resulta ser mayor o menor.
+  const graceDays = Number(process.env.SYNC_DATA_LAG_DAYS ?? 15);
+
   const now = new Date();
-  const end = new Date(now.getFullYear(), now.getMonth(), 0); // dia 0 = ultimo dia del mes anterior
+  let refMonth = now.getMonth(); // mes actual (0-indexado)
+  const refYear = now.getFullYear();
+
+  if (now.getDate() <= graceDays) {
+    // Todavia dentro de la ventana de gracia del mes actual -> el mes
+    // anterior tampoco esta completo, se retrocede un mes mas.
+    refMonth -= 1;
+  }
+
+  const end = new Date(refYear, refMonth, 0); // dia 0 = ultimo dia del mes anterior a refMonth
   const start = new Date(end.getFullYear(), end.getMonth() - (n - 1), 1);
 
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
