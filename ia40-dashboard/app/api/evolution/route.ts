@@ -32,7 +32,7 @@ export async function GET(req: Request) {
   }
 
   const rows = await query(
-    `select period, marca, modelo, proveedor, total_fob_dolars, record_count
+    `select period, marca, modelo, proveedor, total_fob_dolars, total_unidades, record_count
      from monthly_brand_model_agg
      where ${conditions.join(" and ")}
      order by period asc`,
