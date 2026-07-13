@@ -41,6 +41,8 @@ create table if not exists trade_records (
   cuit text,
   raw jsonb not null,                 -- fila completa devuelta por la API
   fob_dolars numeric,
+  marca text,                         -- calculado por el parser de la categoria (lib/parsers), si tiene uno
+  modelo text,                        -- idem
   ingested_at timestamptz not null default now(),
   source_hash text unique             -- hash del registro para evitar duplicados en re-sync
 );
