@@ -80,50 +80,63 @@ export async function upsertRawRecords(categoryId: number, ncmCode: string, rows
  * Recalcula el agregado mensual por marca/modelo/proveedor para una categoria.
  *
  * "proveedor" = la empresa importadora (campo "nombre" en el JSON crudo de IA40).
- * "marca" no viene directo en los datos para esta categoria -> se identifica
- * manualmente por importador, cargando el mapeo en `provider_brand_map` (ver
- * /api/providers y la pantalla /admin). Mientras un importador no fue
- * clasificado todavia, aparece como "sin_identificar".
+ * "marca"/"modelo" no vienen directo en los datos para esta categoria -> se
+ * identifican manualmente, con dos niveles de precision:
+ *
+ *   1. `record_brand_map`: clasificacion por LINEA de detalle individual
+ *      (un importador puede tener varias marcas, y una marca varios
+ *      modelos - se ve en la pantalla /admin, seccion "Lineas de detalle").
+ *      Tiene prioridad si existe.
+ *   2. `provider_brand_map`: clasificacion rapida por importador completo
+ *      (todas las lineas de ese importador comparten una marca/modelo).
+ *      Se usa como resultado si la linea no tiene clasificacion propia.
+ *
+ * Si ninguna de las dos existe, aparece como "sin_identificar".
  *
  * Si en el futuro alguna categoria SI trae marca/modelo directo en el JSON
  * (field_mappings con target_field 'marca'/'modelo'), esa fuente tiene
- * prioridad sobre el mapeo manual por importador.
+ * prioridad sobre los dos mapeos manuales.
  */
 export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
   const mappings = await getFieldMappings(categoryId);
   const marcaPath = mappingLookup(mappings, "marca") ?? "__none__";
   const modeloPath = mappingLookup(mappings, "modelo") ?? "__none__";
   const proveedorPath = mappingLookup(mappings, "proveedor") ?? "nombre";
+  const unidadesPath = mappingLookup(mappings, "unidades") ?? "cant_decla_item";
 
   await query(`delete from monthly_brand_model_agg where category_id = $1`, [categoryId]);
 
   await query(
     `insert into monthly_brand_model_agg
-       (category_id, period, marca, modelo, proveedor, total_fob_dolars, record_count)
+       (category_id, period, marca, modelo, proveedor, total_fob_dolars, total_unidades, record_count)
      select
        tr.category_id,
        tr.period,
        case
-         when $2::text = '__none__' then coalesce(pbm.marca, 'sin_identificar')
+         when $2::text = '__none__' then coalesce(rbm.marca, pbm.marca, 'sin_identificar')
          else tr.raw ->> $2::text
        end as marca,
        case
-         when $3::text = '__none__' then pbm.modelo
+         when $3::text = '__none__' then coalesce(rbm.modelo, pbm.modelo)
          else tr.raw ->> $3::text
        end as modelo,
        coalesce(tr.raw ->> $4::text, 'sin_dato') as proveedor,
        sum(coalesce(tr.fob_dolars, 0)) as total_fob_dolars,
+       sum(coalesce(nullif(tr.raw ->> $5::text, '')::numeric, 0)) as total_unidades,
        count(*) as record_count
      from trade_records tr
      left join provider_brand_map pbm
        on pbm.category_id = tr.category_id
       and pbm.importer_name = tr.raw ->> $4::text
+     left join record_brand_map rbm
+       on rbm.trade_record_id = tr.id
      where tr.category_id = $1
-     -- Se agrupa por posicion (1..5) y no por nombre de columna: "marca" y
-     -- "modelo" son tambien nombres de columnas reales en provider_brand_map,
-     -- y Postgres prioriza esa columna sobre el alias del SELECT, lo que
-     -- rompia el group by con "column tr.raw must appear in..."
+     -- Se agrupa por posicion (1..5, las columnas no-agregadas) y no por
+     -- nombre: "marca" y "modelo" son tambien nombres de columnas reales en
+     -- provider_brand_map/record_brand_map, y Postgres prioriza esa columna
+     -- sobre el alias del SELECT, lo que rompia el group by con
+     -- "column tr.raw must appear in..."
      group by 1, 2, 3, 4, 5`,
-    [categoryId, marcaPath, modeloPath, proveedorPath]
+    [categoryId, marcaPath, modeloPath, proveedorPath, unidadesPath]
   );
 }
