@@ -1,98 +1,94 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { fetchIa40Data, Ia40AuthError } from "@/lib/ia40";
-import { upsertRawRecords, recomputeMonthlyAgg } from "@/lib/aggregate";
+import { getFieldMappings, mappingLookup, recomputeMonthlyAgg } from "@/lib/aggregate";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // requiere plan Pro para superar 60s
 
 interface CategoryRow {
   id: number;
-  slug: string;
-}
-interface NcmRow {
-  ncm_code: string;
 }
 
-function isAuthorized(req: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return true; // sin secreto configurado, no bloquea (solo para dev local)
-  return req.headers.get("authorization") === `Bearer ${secret}`;
+async function getCategoryId(slug: string): Promise<number | null> {
+  const rows = await query<CategoryRow>(`select id from categories where slug = $1`, [slug]);
+  return rows[0]?.id ?? null;
 }
 
-function dateRangeLastNMonths(n: number): { start: string; end: string } {
-  // Los datos de aduana tienen un retraso de procesamiento: no existen
-  // registros hasta el día de "hoy". Restamos un colchón de días al
-  // extremo final para no pedir un rango que la API considere
-  // "fuera de rango" (INVALID_DATE). Configurable por si hace falta
-  // ajustarlo (ej: si el retraso real es mayor o menor).
-  const lagDays = Number(process.env.SYNC_END_LAG_DAYS ?? 45);
-
-  const end = new Date();
-  end.setDate(end.getDate() - lagDays);
-
-  const start = new Date(end);
-  start.setMonth(start.getMonth() - n);
-
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return { start: fmt(start), end: fmt(end) };
-}
-
+/**
+ * GET /api/providers?category=sillas_de_ruedas
+ * Lista las empresas importadoras detectadas en trade_records para la
+ * categoria, con el FOB total acumulado y la marca/modelo ya asignados
+ * (si los hay), para que la pantalla /admin permita ir completando el mapeo.
+ */
 export async function GET(req: Request) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { searchParams } = new URL(req.url);
+  const slug = searchParams.get("category");
+  if (!slug) {
+    return NextResponse.json({ error: "Falta ?category=" }, { status: 400 });
   }
 
-  const monthsBack = Number(process.env.SYNC_MONTHS_BACK ?? 3);
-  const { start, end } = dateRangeLastNMonths(monthsBack);
+  const categoryId = await getCategoryId(slug);
+  if (!categoryId) {
+    return NextResponse.json({ error: "Categoria no encontrada" }, { status: 404 });
+  }
 
-  const categories = await query<CategoryRow>(`select id, slug from categories`);
-  const results: any[] = [];
+  const mappings = await getFieldMappings(categoryId);
+  const proveedorPath = mappingLookup(mappings, "proveedor") ?? "nombre";
 
-  for (const cat of categories) {
-    const ncmCodes = await query<NcmRow>(
-      `select ncm_code from category_ncm_codes where category_id = $1`,
-      [cat.id]
+  const providers = await query(
+    `select
+       tr.raw ->> $2::text as importer_name,
+       sum(coalesce(tr.fob_dolars, 0)) as total_fob_dolars,
+       count(*) as record_count,
+       pbm.marca,
+       pbm.modelo
+     from trade_records tr
+     left join provider_brand_map pbm
+       on pbm.category_id = tr.category_id
+      and pbm.importer_name = tr.raw ->> $2::text
+     where tr.category_id = $1
+     group by importer_name, pbm.marca, pbm.modelo
+     order by total_fob_dolars desc`,
+    [categoryId, proveedorPath]
+  );
+
+  return NextResponse.json({ providers });
+}
+
+/**
+ * POST /api/providers
+ * Body: { category: string, importer_name: string, marca: string, modelo?: string }
+ * Guarda (o actualiza) el mapeo importador -> marca/modelo y recalcula el
+ * agregado mensual al instante, para que el dashboard refleje el cambio
+ * sin esperar al proximo /api/sync.
+ */
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => null);
+  const category = body?.category;
+  const importerName = body?.importer_name;
+  const marca = body?.marca;
+  const modelo = body?.modelo ?? null;
+
+  if (!category || !importerName || !marca) {
+    return NextResponse.json(
+      { error: "Faltan campos obligatorios: category, importer_name, marca" },
+      { status: 400 }
     );
-
-    if (ncmCodes.length === 0) {
-      results.push({ category: cat.slug, status: "sin_ncm_configurado" });
-      continue;
-    }
-
-    for (const { ncm_code } of ncmCodes) {
-      try {
-        const { rows } = await fetchIa40Data({
-          countryCodi: "ARG",
-          informationTypeCodi: "ARGACT",
-          operationTypeCodi: "ARGACTIMP",
-          dateStart: start,
-          dateEnd: end,
-          filters: [{ field: "posicion_arancelaria", values: [ncm_code] }],
-        });
-
-        const inserted = await upsertRawRecords(cat.id, ncm_code, rows);
-
-        await query(
-          `insert into sync_runs (category_id, ncm_code, period_start, period_end, rows_ingested, status)
-           values ($1, $2, $3, $4, $5, 'ok')`,
-          [cat.id, ncm_code, start, end, inserted]
-        );
-
-        results.push({ category: cat.slug, ncm_code, fetched: rows.length, inserted });
-      } catch (err: any) {
-        const status = err instanceof Ia40AuthError ? "auth_error" : "error";
-        await query(
-          `insert into sync_runs (category_id, ncm_code, period_start, period_end, rows_ingested, status, error_message)
-           values ($1, $2, $3, $4, 0, $5, $6)`,
-          [cat.id, ncm_code, start, end, status, String(err?.message ?? err)]
-        );
-        results.push({ category: cat.slug, ncm_code, error: String(err?.message ?? err) });
-      }
-    }
-
-    await recomputeMonthlyAgg(cat.id);
   }
 
-  return NextResponse.json({ ranAt: new Date().toISOString(), results });
+  const categoryId = await getCategoryId(category);
+  if (!categoryId) {
+    return NextResponse.json({ error: "Categoria no encontrada" }, { status: 404 });
+  }
+
+  await query(
+    `insert into provider_brand_map (category_id, importer_name, marca, modelo)
+     values ($1, $2, $3, $4)
+     on conflict (category_id, importer_name)
+     do update set marca = excluded.marca, modelo = excluded.modelo, updated_at = now()`,
+    [categoryId, importerName, marca, modelo]
+  );
+
+  await recomputeMonthlyAgg(categoryId);
+
+  return NextResponse.json({ ok: true });
 }
