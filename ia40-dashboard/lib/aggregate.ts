@@ -1,264 +1,159 @@
-/**
- * Cliente para el flujo de EXPORTACION de IA40 (Cobus Group), que es la
- * unica forma de obtener la columna "SUB ITEMS - SUFIJOS" (necesaria para
- * detectar marca/modelo automaticamente) y "SUB ITEMS - P.U. U$S". El
- * endpoint /data normal no trae esas columnas.
- *
- * Flujo real (capturado con DevTools mientras se exportaba a mano):
- *   1. POST /export/data  -> dispara la generacion del archivo. Responde
- *      enseguida con { link, processId, notificationId }. El archivo
- *      todavia puede no estar listo en ese momento.
- *   2. GET /notification/{notificationId} -> hay que consultarlo (con
- *      espera entre intentos) hasta que devuelva state:"FINISH". El campo
- *      "value" de esa respuesta es el link final de descarga (S3).
- *   3. Descargar ese link (CSV plano, sin auth adicional).
- */
-
+import crypto from "node:crypto";
 import { query } from "./db";
+import { CATEGORY_PARSERS } from "./parsers";
 
-const BASE_URL = "https://api.cobusgroup.com/api/v1/f";
-const MAX_TOKEN_AGE_MIN = 20;
+export interface FieldMapping {
+  target_field: "marca" | "modelo" | "proveedor" | "fecha" | "fob_dolars" | "unidades";
+  source_json_path: string;
+}
 
-export class Ia40AuthError extends Error {}
-
-async function getStoredJwt(): Promise<string> {
-  const rows = await query<{ value: string; updated_at: string }>(
-    `select value, updated_at from app_settings where key = 'ia40_jwt'`
+export async function getFieldMappings(categoryId: number): Promise<FieldMapping[]> {
+  return query<FieldMapping>(
+    `select target_field, source_json_path from field_mappings where category_id = $1`,
+    [categoryId]
   );
-  if (rows.length === 0) {
-    throw new Ia40AuthError("No hay token guardado todavia (corre refresh_token.py al menos una vez).");
-  }
-  const ageMin = (Date.now() - new Date(rows[0].updated_at).getTime()) / 60000;
-  if (ageMin > MAX_TOKEN_AGE_MIN) {
-    throw new Ia40AuthError(`El token guardado tiene ${ageMin.toFixed(1)} min, parece vencido.`);
-  }
-  return rows[0].value;
 }
 
-function headers(token: string): Record<string, string> {
-  return {
-    Authorization: `Bearer ${token}`,
-    "x-tool-request": "IA",
-    "Content-Type": "application/json",
-    Origin: "https://ia40.cobusgroup.com",
-    Referer: "https://ia40.cobusgroup.com/",
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  };
+export function mappingLookup(mappings: FieldMapping[], target: string): string | undefined {
+  return mappings.find((m) => m.target_field === target)?.source_json_path;
 }
 
-export interface Filter {
-  field: string;
-  values: string[];
-}
-
-interface TriggerExportParams {
-  countryCodi: string;
-  informationTypeCodi: string;
-  operationTypeCodi: string;
-  dateStart: string;
-  dateEnd: string;
-  filters: Filter[];
-  exportName: string;
-}
-
-interface TriggerExportResult {
-  link: string;
-  processId: number;
-  notificationId: number;
-}
-
-async function triggerExport(token: string, p: TriggerExportParams): Promise<TriggerExportResult> {
-  const body = {
-    countryCodi: p.countryCodi,
-    informationTypeCodi: p.informationTypeCodi,
-    operationTypeCodi: p.operationTypeCodi,
-    dateRange: { start: p.dateStart, end: p.dateEnd },
-    filters: p.filters,
-    filtersOverwrites: { operator: {} },
-    order: "fecha",
-    orderType: "desc",
-    pager: { start: 0, limit: 20 },
-    ranking: "",
-    stats: [],
-    export: {
-      name: p.exportName,
-      ranking: "",
-      fieldsConfig: { type: "all" },
-      format: "csv",
-      separator: ";",
-      textQualifier: '"',
-      decimalSeparator: ",",
-    },
-  };
-
-  const resp = await fetch(`${BASE_URL}/export/data`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify(body),
-    cache: "no-store",
-  });
-
-  if (resp.status === 401) {
-    throw new Ia40AuthError("JWT invalido/expirado al pedir la exportacion.");
-  }
-  if (!resp.ok) {
-    throw new Error(`export/data respondio ${resp.status}: ${await resp.text()}`);
-  }
-  return resp.json();
-}
-
-async function checkNotification(
-  token: string,
-  notificationId: number
-): Promise<{ state: string; value: string | null }> {
-  const resp = await fetch(`${BASE_URL}/notification/${notificationId}`, {
-    headers: headers(token),
-    cache: "no-store",
-  });
-  if (resp.status === 401) {
-    throw new Ia40AuthError("JWT invalido/expirado al consultar la notificacion.");
-  }
-  if (!resp.ok) {
-    throw new Error(`notification respondio ${resp.status}: ${await resp.text()}`);
-  }
-  return resp.json();
-}
-
-async function waitForExportFile(
-  token: string,
-  notificationId: number,
-  opts: { timeoutMs?: number; intervalMs?: number } = {}
-): Promise<string> {
-  const timeoutMs = opts.timeoutMs ?? 120_000;
-  const intervalMs = opts.intervalMs ?? 4_000;
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const status = await checkNotification(token, notificationId);
-    if (status.state === "FINISH" && status.value) {
-      return status.value;
-    }
-    if (status.state === "ERROR" || status.state === "FAILED") {
-      throw new Error(`La exportacion en IA40 termino con estado ${status.state}`);
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  throw new Error("Timeout esperando que la exportacion de IA40 termine.");
-}
-
-async function downloadExportFile(url: string): Promise<string> {
-  const resp = await fetch(url, { cache: "no-store" });
-  if (!resp.ok) {
-    throw new Error(`No se pudo descargar el archivo de exportacion (${resp.status})`);
-  }
-  return resp.text();
+/** Extrae un campo del objeto crudo devuelto por la API usando el nombre de columna mapeado. */
+function extract(row: Record<string, any>, path?: string): any {
+  if (!path) return null;
+  return row[path] ?? null;
 }
 
 /**
- * Parser de CSV simple para el separador ";" con calificador de texto '"'
- * (la config que usa IA40). No es un parser CSV general de proposito
- * completo, pero cubre bien el caso real de estos exports.
+ * Convierte una fecha a "primer dia del mes" (YYYY-MM-01) para agrupar por periodo.
+ * La API de IA40 devuelve la fecha en formato argentino DD/MM/YYYY, que NO se puede
+ * pasar directo a `new Date(...)` (JS lo interpreta como MM/DD/YYYY y da resultados
+ * incorrectos, ej. "07/04/2026" -> 4 de julio en vez de 7 de abril). Por eso se
+ * parsea a mano antes de intentar cualquier fallback generico.
  */
-function parseExportCsv(csvText: string): Record<string, string>[] {
-  const lines = csvText.split(/\r\n|\n/).filter((l) => l.length > 0);
-  if (lines.length === 0) return [];
+function toMonthStart(dateStr: string | null): string | null {
+  if (!dateStr) return null;
 
-  function splitLine(line: string): string[] {
-    const fields: string[] = [];
-    let cur = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (inQuotes) {
-        if (c === '"') {
-          if (line[i + 1] === '"') {
-            cur += '"';
-            i++;
-          } else {
-            inQuotes = false;
-          }
-        } else {
-          cur += c;
-        }
-      } else if (c === '"') {
-        inQuotes = true;
-      } else if (c === ";") {
-        fields.push(cur);
-        cur = "";
-      } else {
-        cur += c;
+  const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(dateStr);
+  if (dmy) {
+    const [, , mm, yyyy] = dmy;
+    return `${yyyy}-${mm}-01`;
+  }
+
+  // Fallback por si algun dia llega en otro formato (ISO, etc.)
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/**
+ * Inserta filas crudas (idempotente via hash) para una categoria/posicion arancelaria.
+ * Guarda el JSON completo en `raw` y deriva `period`/`fob_dolars` usando el mapeo de
+ * campos de la categoria (o los nombres reales observados en IA40 como fallback:
+ * "fecha" y "fob_dolars_item").
+ *
+ * Si la categoria tiene un parser registrado (ver lib/parsers/index.ts), se
+ * calcula marca/modelo automaticamente en cada fila y se guarda directo en
+ * las columnas `marca`/`modelo` de trade_records (ver recomputeMonthlyAgg).
+ *
+ * En conflicto de hash (fila ya existente) se actualiza marca/modelo -> asi,
+ * si se agrega o mejora un parser mas adelante, con solo re-correr el sync
+ * se reclasifican las filas ya guardadas sin duplicarlas.
+ */
+export async function upsertRawRecords(categoryId: number, categorySlug: string, ncmCode: string, rows: any[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const mappings = await getFieldMappings(categoryId);
+  const fechaPath = mappingLookup(mappings, "fecha") ?? "fecha";
+  const fobPath = mappingLookup(mappings, "fob_dolars") ?? "fob_dolars_item";
+  const parser = CATEGORY_PARSERS[categorySlug];
+
+  let inserted = 0;
+  for (const row of rows) {
+    const hash = crypto.createHash("sha256").update(JSON.stringify(row)).digest("hex");
+    const period = toMonthStart(extract(row, fechaPath)) ?? new Date().toISOString().slice(0, 7) + "-01";
+    const fob = Number(extract(row, fobPath)) || null;
+    const cuit = row.cuit ?? null;
+
+    let marca: string | null = null;
+    let modelo: string | null = null;
+    if (parser) {
+      const parsed = parser(row);
+      if (parsed) {
+        marca = parsed.marca;
+        modelo = parsed.modelo;
       }
     }
-    fields.push(cur);
-    return fields;
-  }
 
-  const headerCols = splitLine(lines[0]).map((h) => h.trim());
-  const rows: Record<string, string>[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const values = splitLine(lines[i]);
-    const row: Record<string, string> = {};
-    headerCols.forEach((h, idx) => {
-      row[h] = (values[idx] ?? "").trim();
-    });
-    rows.push(row);
+    const result = await query(
+      `insert into trade_records (category_id, ncm_code, period, cuit, raw, fob_dolars, marca, modelo, source_hash)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       on conflict (source_hash) do update set marca = excluded.marca, modelo = excluded.modelo
+       returning id`,
+      [categoryId, ncmCode, period, cuit, JSON.stringify(row), fob, marca, modelo, hash]
+    );
+    inserted += result.length ? 1 : 0;
   }
-  return rows;
-}
-
-/** "12.480,50" o "32,00" (formato arg, coma decimal) -> 12480.5 / 32 */
-function parseArgNumber(v: string | undefined): number | null {
-  if (!v) return null;
-  const cleaned = v.replace(/\./g, "").replace(",", ".");
-  const n = Number(cleaned);
-  return isNaN(n) ? null : n;
+  return inserted;
 }
 
 /**
- * Pide la exportacion completa (con Sufijos) para un rango de fechas +
- * filtro de posicion arancelaria, espera a que termine, la descarga, y
- * devuelve filas normalizadas con las MISMAS claves que ya usa el resto
- * del pipeline (nombre, fecha, fob_dolars_item, cant_decla_item, etc.),
- * mas dos claves nuevas: "sufijos" y "precio_unitario", para el parser de
- * marca/modelo.
+ * Recalcula el agregado mensual por marca/modelo/proveedor para una categoria.
+ *
+ * "proveedor" = la empresa importadora (campo "nombre" en el JSON crudo de IA40).
+ * "marca"/"modelo" se resuelven en este orden de prioridad:
+ *
+ *   1. `record_brand_map`: correccion manual por LINEA de detalle individual
+ *      (un importador puede tener varias marcas, y una marca varios
+ *      modelos - se ve en la pantalla /admin, seccion "Lineas de detalle").
+ *   2. `provider_brand_map`: correccion manual rapida por importador completo.
+ *   3. `trade_records.marca`/`modelo`: lo que calculo automaticamente el
+ *      parser de la categoria (ver lib/parsers) a partir del texto de
+ *      aduana, si la categoria tiene uno registrado.
+ *   4. "sin_identificar" si nada de lo anterior aplico.
+ *
+ * Si el JSON trae marca/modelo directo (field_mappings con target_field
+ * 'marca'/'modelo'), esa fuente tiene prioridad sobre todo lo demas.
  */
-export async function fetchIa40ExportRows(params: {
-  countryCodi: string;
-  informationTypeCodi: string;
-  operationTypeCodi: string;
-  dateStart: string;
-  dateEnd: string;
-  ncmCode: string;
-}): Promise<any[]> {
-  const token = await getStoredJwt();
+export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
+  const mappings = await getFieldMappings(categoryId);
+  const marcaPath = mappingLookup(mappings, "marca") ?? "__none__";
+  const modeloPath = mappingLookup(mappings, "modelo") ?? "__none__";
+  const proveedorPath = mappingLookup(mappings, "proveedor") ?? "nombre";
+  const unidadesPath = mappingLookup(mappings, "unidades") ?? "cant_decla_item";
 
-  const { notificationId } = await triggerExport(token, {
-    countryCodi: params.countryCodi,
-    informationTypeCodi: params.informationTypeCodi,
-    operationTypeCodi: params.operationTypeCodi,
-    dateStart: params.dateStart,
-    dateEnd: params.dateEnd,
-    filters: [{ field: "posicion_arancelaria", values: [params.ncmCode] }],
-    exportName: `SYNC_${params.ncmCode}_${Date.now()}`,
-  });
+  await query(`delete from monthly_brand_model_agg where category_id = $1`, [categoryId]);
 
-  const downloadUrl = await waitForExportFile(token, notificationId);
-  const csvText = await downloadExportFile(downloadUrl);
-  const csvRows = parseExportCsv(csvText);
-
-  return csvRows.map((row) => ({
-    nombre: row["RAZÓN SOCIAL"] ?? "",
-    cuit: row["CUIT"] ?? null,
-    fecha: row["FECHA"] ?? null,
-    despacho: row["DESPACHO"] ?? null,
-    item: row["ITEM"] ?? null,
-    aduana_desc: row["ADUANA"] ?? null,
-    posicion_arancelaria: row["POSICIÓN ARANCELARIA"] ?? null,
-    posicion_descripcion: row["DESCRIPCIÓN DE LA POSICIÓN"] ?? null,
-    fob_dolars_item: parseArgNumber(row["SUB ITEMS - FOB U$S"]),
-    cant_decla_item: parseArgNumber(row["SUB ITEMS - CANTIDAD"]),
-    precio_unitario: parseArgNumber(row["SUB ITEMS - P.U. U$S"]),
-    sufijos: row["SUB ITEMS - SUFIJOS"] ?? "",
-  }));
+  await query(
+    `insert into monthly_brand_model_agg
+       (category_id, period, marca, modelo, proveedor, total_fob_dolars, total_unidades, record_count)
+     select
+       tr.category_id,
+       tr.period,
+       case
+         when $2::text = '__none__' then coalesce(rbm.marca, pbm.marca, tr.marca, 'sin_identificar')
+         else tr.raw ->> $2::text
+       end as marca,
+       case
+         when $3::text = '__none__' then coalesce(rbm.modelo, pbm.modelo, tr.modelo)
+         else tr.raw ->> $3::text
+       end as modelo,
+       coalesce(tr.raw ->> $4::text, 'sin_dato') as proveedor,
+       sum(coalesce(tr.fob_dolars, 0)) as total_fob_dolars,
+       sum(coalesce(nullif(tr.raw ->> $5::text, '')::numeric, 0)) as total_unidades,
+       count(*) as record_count
+     from trade_records tr
+     left join provider_brand_map pbm
+       on pbm.category_id = tr.category_id
+      and pbm.importer_name = tr.raw ->> $4::text
+     left join record_brand_map rbm
+       on rbm.trade_record_id = tr.id
+     where tr.category_id = $1
+     -- Se agrupa por posicion (1..5, las columnas no-agregadas) y no por
+     -- nombre: "marca" y "modelo" son tambien nombres de columnas reales en
+     -- provider_brand_map/record_brand_map/trade_records, y Postgres
+     -- prioriza esa columna sobre el alias del SELECT, lo que rompia el
+     -- group by con "column tr.raw must appear in..."
+     group by 1, 2, 3, 4, 5`,
+    [categoryId, marcaPath, modeloPath, proveedorPath, unidadesPath]
+  );
 }
