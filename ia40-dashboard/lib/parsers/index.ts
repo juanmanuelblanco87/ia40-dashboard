@@ -18,6 +18,7 @@
 export interface ParsedBrandModel {
   marca: string;
   modelo: string;
+  color?: string;
 }
 
 export type CategoryParser = (raw: Record<string, any>) => ParsedBrandModel | null;
@@ -194,7 +195,7 @@ function sillasFinalize(
  * @param razonSocial    Razon social del importador (columna A), tal cual.
  * @param precioUnitario Precio unitario FOB del sub-item, para el paso 9.
  */
-function parseMarcaModeloSillasDeRuedas(
+function parseMarcaModeloSillasDeRuedasCore(
   sufijoTextRaw: string | null | undefined,
   razonSocial: string,
   precioUnitario?: number | null
@@ -275,6 +276,118 @@ function parseMarcaModeloSillasDeRuedas(
   const marca = sillasTitleCase(words[0]);
   const modelo = words.slice(1).join(" ").trim();
   return sillasFinalize(marca, modelo, razonSocial, precioUnitario);
+}
+
+// ---- Paso 10.1: diccionario de colores (frases de 2 palabras antes que 1) ----
+// No se usan palabras en frances (rouge, bleu, etc.) para no confundir con
+// modelos reales como "ROGUE"/"ROUGE" de KI Mobility.
+const SILLAS_COLOR_DICT: [string, string][] = [
+  ["CHARCOAL GREY", "Gris Carbón"],
+  ["CHARCOAL GRAY", "Gris Carbón"],
+  ["LIGHT GRAY", "Gris Claro"],
+  ["LIGHT GREY", "Gris Claro"],
+  ["LIGHT GREEN", "Verde Claro"],
+  ["LIGHT BLUE", "Celeste"],
+  ["DARK BLUE", "Azul Oscuro"],
+  ["DARK GREEN", "Verde Oscuro"],
+  ["NAVY BLUE", "Azul Marino"],
+  ["MATTE BLACK", "Negro"],
+  ["MATTE BL", "Negro"],
+  ["BLACK", "Negro"],
+  ["WHITE", "Blanco"],
+  ["BLUE", "Azul"],
+  ["RED", "Rojo"],
+  ["GREEN", "Verde"],
+  ["GREY", "Gris"],
+  ["GRAY", "Gris"],
+  ["SILVER", "Plata"],
+  ["YELLOW", "Amarillo"],
+  ["ORANGE", "Naranja"],
+  ["PURPLE", "Morado"],
+  ["PINK", "Rosa"],
+  ["BROWN", "Marrón"],
+  ["BEIGE", "Beige"],
+  ["GOLD", "Dorado"],
+  ["TITANIUM", "Titanio"],
+  ["CAMO", "Camuflado"],
+  ["NAVY", "Azul Marino"],
+  ["NEGRO", "Negro"],
+  ["BLANCO", "Blanco"],
+  ["AZUL", "Azul"],
+  ["ROJO", "Rojo"],
+  ["VERDE", "Verde"],
+  ["GRIS", "Gris"],
+  ["PLATA", "Plata"],
+  ["AMARILLO", "Amarillo"],
+];
+// Match mas largo primero (las frases de 2 palabras antes que las de 1).
+const SILLAS_COLOR_SORTED = [...SILLAS_COLOR_DICT].sort((a, b) => b[0].length - a[0].length);
+
+// ---- Paso 10.2: codigos de color "YC" (marca Magesa, series YK90xx) ----
+// Tabla aprendida del dataset de referencia (no dinamica): estos codigos
+// aparecieron junto a una palabra de color conocida en al menos una fila,
+// asi que se puede inferir el color cuando el codigo aparece solo. Un
+// codigo YC que no este en esta tabla se deja sin tocar (Color = "Negro"
+// por defecto, Modelo no se modifica) porque no se conoce el color real.
+const SILLAS_YC_CODE_MAP: Record<string, string> = {
+  YCB007: "Azul",
+  YC104: "Gris Carbón",
+  YCR003: "Rojo",
+  YC90969: "Plata",
+};
+
+const SILLAS_DEFAULT_COLOR = "Negro";
+
+/**
+ * Paso 10: separa el color del texto de Modelo (ya limpio, pasos 1-9), para
+ * que variantes de color del mismo modelo (ej. "MEWA BLACK" / "MEWA LIGHT
+ * GRAY") no queden como modelos distintos. Devuelve el modelo sin el color
+ * (si se detecto) y el color canonico (o "Negro" por defecto si no hay
+ * informacion de color en el texto).
+ */
+function sillasExtractColor(modelo: string): { modelo: string; color: string } {
+  if (!modelo) return { modelo, color: SILLAS_DEFAULT_COLOR };
+
+  // Paso 10.1: palabra de color conocida al final, con sufijo " YC<codigo>" opcional
+  // (algunos registros traen un espacio entre "YC" y el codigo, ej. "YC B007").
+  for (const [word, canonical] of SILLAS_COLOR_SORTED) {
+    const re = new RegExp(`^(.*?)\\s+${word}(?:\\s+YC\\s*[\\w]+)?$`, "i");
+    const m = re.exec(modelo);
+    if (m && m[1].trim().length >= 2) {
+      return { modelo: m[1].trim(), color: canonical };
+    }
+  }
+
+  // Paso 10.2: sin palabra de color, pero con codigo "YC<codigo>" al final
+  // (tambien tolera espacio entre "YC" y el codigo).
+  const ycMatch = /^(.*?)\s+YC\s*([\w]+)$/i.exec(modelo);
+  if (ycMatch && ycMatch[1].trim().length >= 2) {
+    const code = `YC${ycMatch[2]}`.toUpperCase();
+    const known = SILLAS_YC_CODE_MAP[code];
+    if (known) {
+      return { modelo: ycMatch[1].trim(), color: known };
+    }
+    // Codigo no aprendido: no se toca el modelo, color por defecto.
+    return { modelo, color: SILLAS_DEFAULT_COLOR };
+  }
+
+  // Paso 10.3: sin color detectado.
+  return { modelo, color: SILLAS_DEFAULT_COLOR };
+}
+
+/**
+ * @param sufijoTextRaw  Texto crudo de "SUB ITEMS - SUFIJOS" (puede venir vacio/null).
+ * @param razonSocial    Razon social del importador (columna A), tal cual.
+ * @param precioUnitario Precio unitario FOB del sub-item, para el paso 9.
+ */
+function parseMarcaModeloSillasDeRuedas(
+  sufijoTextRaw: string | null | undefined,
+  razonSocial: string,
+  precioUnitario?: number | null
+): ParsedBrandModel {
+  const core = parseMarcaModeloSillasDeRuedasCore(sufijoTextRaw, razonSocial, precioUnitario);
+  const { modelo, color } = sillasExtractColor(core.modelo);
+  return { marca: core.marca, modelo, color };
 }
 
 // ============================================================
