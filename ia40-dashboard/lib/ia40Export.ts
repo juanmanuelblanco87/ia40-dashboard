@@ -84,7 +84,7 @@ async function triggerExport(token: string, p: TriggerExportParams): Promise<Tri
     export: {
       name: p.exportName,
       ranking: "",
-      fieldsConfig: { type: "all", fields: [] },
+      fieldsConfig: { type: "all", fields: ["all"] },
       format: "csv",
       formatConfig: {
         separator: ";",
