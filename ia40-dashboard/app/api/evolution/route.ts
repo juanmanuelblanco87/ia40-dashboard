@@ -3,13 +3,14 @@ import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/evolution?category=sillas_de_ruedas&marca=X&marca=Y&modelo=Z
-// "marca" se puede repetir para filtrar por varias marcas a la vez.
+// GET /api/evolution?category=sillas_de_ruedas&marca=X&marca=Y&modelo=Z&importador=W
+// "marca" e "importador" se pueden repetir para filtrar por varios valores a la vez.
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const slug = searchParams.get("category");
   const marcas = searchParams.getAll("marca").filter(Boolean);
   const modelo = searchParams.get("modelo");
+  const importadores = searchParams.getAll("importador").filter(Boolean);
 
   if (!slug) {
     return NextResponse.json({ error: "Falta ?category=" }, { status: 400 });
@@ -31,6 +32,10 @@ export async function GET(req: Request) {
     params.push(modelo);
     conditions.push(`modelo = $${params.length}`);
   }
+  if (importadores.length > 0) {
+    params.push(importadores);
+    conditions.push(`proveedor = ANY($${params.length}::text[])`);
+  }
 
   const rows = await query(
     `select period, marca, modelo, proveedor, total_fob_dolars, total_unidades, record_count
@@ -40,11 +45,15 @@ export async function GET(req: Request) {
     params
   );
 
-  // Tambien devolvemos las marcas/modelos disponibles para poblar los selectores del front.
+  // Tambien devolvemos las marcas/modelos/importadores disponibles para poblar los selectores del front.
   const options = await query(
     `select distinct marca, modelo from monthly_brand_model_agg where category_id = $1 order by 1, 2`,
     [categoryId]
   );
+  const importerOptions = await query<{ proveedor: string }>(
+    `select distinct proveedor from monthly_brand_model_agg where category_id = $1 order by 1`,
+    [categoryId]
+  );
 
-  return NextResponse.json({ series: rows, options });
+  return NextResponse.json({ series: rows, options, importerOptions: importerOptions.map((r) => r.proveedor) });
 }
