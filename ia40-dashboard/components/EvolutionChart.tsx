@@ -132,11 +132,14 @@ function pivot(
   return { rows, keys, periods };
 }
 
+// Paleta oscurecida a proposito respecto de la version original (pensada
+// para fondo oscuro): sobre el fondo blanco del nuevo diseño (marca Icom
+// Salud) los tonos pastel originales tenian bajo contraste.
 const COLORS = [
-  "#4f8cff", "#ff8a4f", "#4fffa0", "#ff4f8c", "#c04fff", "#ffd24f",
-  "#4fd7ff", "#ff4f4f", "#8cff4f",
+  "#2f6fe0", "#e8722f", "#1f9e63", "#e0397a", "#9b30d9", "#c99400",
+  "#1aa8c9", "#d93a3a", "#5aa62f",
 ];
-const OTROS_COLOR = "#6b7280";
+const OTROS_COLOR = "#8a95a0";
 
 export default function EvolutionChart({ data, groupBy, metric, topN = 9, pinnedKeys = [], onPivotChange }: Props) {
   const result = pivot(data, groupBy, metric, topN, pinnedKeys);
@@ -155,11 +158,11 @@ export default function EvolutionChart({ data, groupBy, metric, topN = 9, pinned
   return (
     <ResponsiveContainer width="100%" height={380}>
       <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#2a2e37" />
-        <XAxis dataKey="period" stroke="#9aa1ad" tickFormatter={formatPeriod} tick={{ fontSize: 10 }} />
-        <YAxis stroke="#9aa1ad" tickFormatter={(v) => fmtCompact(Number(v))} tick={{ fontSize: 11 }} width={44} />
+        <CartesianGrid strokeDasharray="3 3" stroke="#e1e8e5" />
+        <XAxis dataKey="period" stroke="#6d7e79" tickFormatter={formatPeriod} tick={{ fontSize: 10 }} />
+        <YAxis stroke="#6d7e79" tickFormatter={(v) => fmtCompact(Number(v))} tick={{ fontSize: 11 }} width={44} />
         <Tooltip
-          contentStyle={{ background: "#171a21", border: "1px solid #2a2e37" }}
+          contentStyle={{ background: "#ffffff", border: "1px solid #e1e8e5", borderRadius: 8 }}
           labelFormatter={(label) => formatPeriod(String(label))}
           formatter={(value: any) => fmtNumber(Number(value))}
         />
