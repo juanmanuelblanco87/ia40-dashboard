@@ -2,12 +2,75 @@
 
 import { useEffect, useMemo, useState } from "react";
 import EvolutionChart, { SeriesPoint, PivotResult, formatPeriod, fmtNumber } from "@/components/EvolutionChart";
+import MultiSelectDropdown from "@/components/MultiSelectDropdown";
 
 interface Category {
   id: number;
   slug: string;
   name: string;
   ncm_codes: string[];
+}
+
+interface TopEntry {
+  key: string;
+  value: number;
+  other: number;
+}
+
+function computeTop(
+  series: SeriesPoint[],
+  periodSet: Set<string> | null,
+  dimension: "proveedor" | "marca" | "modelo"
+): { topFob: TopEntry | null; topUnidades: TopEntry | null } {
+  const totals = new Map<string, { fob: number; uni: number }>();
+  for (const s of series) {
+    if (periodSet && !periodSet.has(s.period)) continue;
+    const key = ((s as any)[dimension] ?? "sin_dato") as string;
+    const cur = totals.get(key) ?? { fob: 0, uni: 0 };
+    cur.fob += Number(s.total_fob_dolars) || 0;
+    cur.uni += Number(s.total_unidades) || 0;
+    totals.set(key, cur);
+  }
+  let topFob: TopEntry | null = null;
+  let topUnidades: TopEntry | null = null;
+  for (const [key, v] of totals) {
+    if (!topFob || v.fob > topFob.value) topFob = { key, value: v.fob, other: v.uni };
+    if (!topUnidades || v.uni > topUnidades.value) topUnidades = { key, value: v.uni, other: v.fob };
+  }
+  return { topFob, topUnidades };
+}
+
+function TopCard({ title, lastMonth, last12, last12Label }: {
+  title: string;
+  lastMonth: { topFob: TopEntry | null; topUnidades: TopEntry | null };
+  last12: { topFob: TopEntry | null; topUnidades: TopEntry | null };
+  last12Label: string;
+}) {
+  return (
+    <div className="panel" style={{ flex: 1, minWidth: 240 }}>
+      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 10 }}>{title}</h1>
+
+      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 2 }}>Ultimo mes</div>
+      <div style={{ fontSize: 14, marginBottom: 2 }}>
+        Por FOB: <strong>{lastMonth.topFob?.key ?? "-"}</strong>
+        {lastMonth.topFob && <span style={{ color: "var(--muted)" }}> ({fmtNumber(lastMonth.topFob.value)} USD, {fmtNumber(lastMonth.topFob.other)} un.)</span>}
+      </div>
+      <div style={{ fontSize: 14, marginBottom: 10 }}>
+        Por Unidades: <strong>{lastMonth.topUnidades?.key ?? "-"}</strong>
+        {lastMonth.topUnidades && <span style={{ color: "var(--muted)" }}> ({fmtNumber(lastMonth.topUnidades.value)} un., {fmtNumber(lastMonth.topUnidades.other)} USD)</span>}
+      </div>
+
+      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 2 }}>{last12Label}</div>
+      <div style={{ fontSize: 14, marginBottom: 2 }}>
+        Por FOB: <strong>{last12.topFob?.key ?? "-"}</strong>
+        {last12.topFob && <span style={{ color: "var(--muted)" }}> ({fmtNumber(last12.topFob.value)} USD, {fmtNumber(last12.topFob.other)} un.)</span>}
+      </div>
+      <div style={{ fontSize: 14 }}>
+        Por Unidades: <strong>{last12.topUnidades?.key ?? "-"}</strong>
+        {last12.topUnidades && <span style={{ color: "var(--muted)" }}> ({fmtNumber(last12.topUnidades.value)} un., {fmtNumber(last12.topUnidades.other)} USD)</span>}
+      </div>
+    </div>
+  );
 }
 
 export default function Home() {
@@ -62,36 +125,60 @@ export default function Home() {
     [series, meses]
   );
 
+  const periodInfo = useMemo(() => {
+    const distinctPeriods = Array.from(new Set(series.map((s) => s.period))).sort();
+    if (distinctPeriods.length === 0) return { lastPeriod: null as string | null, lastSet: null, last12Set: null, last12Count: 0 };
+    const lastPeriod = distinctPeriods[distinctPeriods.length - 1];
+    const last12 = distinctPeriods.slice(-12);
+    return {
+      lastPeriod,
+      lastSet: new Set([lastPeriod]),
+      last12Set: new Set(last12),
+      last12Count: last12.length,
+    };
+  }, [series]);
+
   // ---- Totales de encabezado: ultimo mes y ultimos 12 meses moviles (ambas metricas siempre) ----
   const totals = useMemo(() => {
-    const distinctPeriods = Array.from(new Set(series.map((s) => s.period))).sort();
-    if (distinctPeriods.length === 0) {
-      return {
-        lastPeriod: null as string | null,
-        lastMonth: { fob: 0, unidades: 0 },
-        last12: { fob: 0, unidades: 0 },
-        last12Count: 0,
-      };
-    }
-    const lastPeriod = distinctPeriods[distinctPeriods.length - 1];
-    const last12Periods = new Set(distinctPeriods.slice(-12));
-
     const lastMonth = { fob: 0, unidades: 0 };
     const last12 = { fob: 0, unidades: 0 };
     for (const s of series) {
       const fob = Number(s.total_fob_dolars) || 0;
       const uni = Number(s.total_unidades) || 0;
-      if (s.period === lastPeriod) {
+      if (periodInfo.lastSet?.has(s.period)) {
         lastMonth.fob += fob;
         lastMonth.unidades += uni;
       }
-      if (last12Periods.has(s.period)) {
+      if (periodInfo.last12Set?.has(s.period)) {
         last12.fob += fob;
         last12.unidades += uni;
       }
     }
-    return { lastPeriod, lastMonth, last12, last12Count: last12Periods.size };
-  }, [series]);
+    return { lastPeriod: periodInfo.lastPeriod, lastMonth, last12, last12Count: periodInfo.last12Count };
+  }, [series, periodInfo]);
+
+  // ---- Top importador / marca / modelo (ultimo mes y ultimos 12 meses) ----
+  const topImporter = useMemo(
+    () => ({
+      lastMonth: computeTop(series, periodInfo.lastSet, "proveedor"),
+      last12: computeTop(series, periodInfo.last12Set, "proveedor"),
+    }),
+    [series, periodInfo]
+  );
+  const topBrand = useMemo(
+    () => ({
+      lastMonth: computeTop(series, periodInfo.lastSet, "marca"),
+      last12: computeTop(series, periodInfo.last12Set, "marca"),
+    }),
+    [series, periodInfo]
+  );
+  const topModel = useMemo(
+    () => ({
+      lastMonth: computeTop(series, periodInfo.lastSet, "modelo"),
+      last12: computeTop(series, periodInfo.last12Set, "modelo"),
+    }),
+    [series, periodInfo]
+  );
 
   // ---- Descarga CSV de la tabla mes a mes (mismo orden que se ve en pantalla) ----
   const downloadCsv = () => {
@@ -116,14 +203,6 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
-  const toggleMultiSelect = (
-    e: React.ChangeEvent<HTMLSelectElement>,
-    setter: (v: string[]) => void
-  ) => {
-    const values = Array.from(e.target.selectedOptions).map((o) => o.value);
-    setter(values);
-  };
-
   return (
     <div className="container">
       <h1>IA40 — Evolucion mensual por categoria</h1>
@@ -132,7 +211,7 @@ export default function Home() {
         <a href="/admin" style={{ color: "var(--accent)" }}>Cargar/editar marcas por importador →</a>
       </p>
 
-      <div className="panel row">
+      <div className="panel row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
         <div>
           <label>Categoria</label>
           <select value={slug} onChange={(e) => { setSlug(e.target.value); setMarcas([]); setModelo(""); setMeses([]); }}>
@@ -141,12 +220,15 @@ export default function Home() {
             ))}
           </select>
         </div>
-        <div>
-          <label>Marca (Ctrl+click para varias)</label>
-          <select multiple value={marcas} onChange={(e) => toggleMultiSelect(e, setMarcas)} style={{ minHeight: 70 }}>
-            {marcaOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-        </div>
+
+        <MultiSelectDropdown
+          label="Marca"
+          options={marcaOptions.map((m) => ({ value: m, label: m }))}
+          selected={marcas}
+          onChange={setMarcas}
+          placeholder="Todas"
+        />
+
         <div>
           <label>Modelo</label>
           <select value={modelo} onChange={(e) => setModelo(e.target.value)}>
@@ -154,12 +236,16 @@ export default function Home() {
             {modelos.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
         </div>
-        <div>
-          <label>Meses (Ctrl+click para varios)</label>
-          <select multiple value={meses} onChange={(e) => toggleMultiSelect(e, setMeses)} style={{ minHeight: 70 }}>
-            {mesOptions.map((p) => <option key={p} value={p}>{formatPeriod(p)}</option>)}
-          </select>
-        </div>
+
+        <MultiSelectDropdown
+          label="Meses"
+          options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
+          selected={meses}
+          onChange={setMeses}
+          placeholder="Todos"
+          searchable={false}
+        />
+
         <div>
           <label>Agrupar por</label>
           <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
@@ -200,6 +286,12 @@ export default function Home() {
             {fmtNumber(totals.last12.unidades)} <span style={{ fontSize: 13, color: "var(--muted)" }}>Unidades</span>
           </div>
         </div>
+      </div>
+
+      <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+        <TopCard title="Top Importador" lastMonth={topImporter.lastMonth} last12={topImporter.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
+        <TopCard title="Top Marca" lastMonth={topBrand.lastMonth} last12={topBrand.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
+        <TopCard title="Top Modelo" lastMonth={topModel.lastMonth} last12={topModel.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
       </div>
 
       <div className="panel">
