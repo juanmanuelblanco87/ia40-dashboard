@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import {
   LineChart,
   Line,
@@ -23,10 +24,21 @@ export interface SeriesPoint {
 
 export type Metric = "total_fob_dolars" | "total_unidades";
 
+export interface PivotResult {
+  rows: Record<string, any>[];
+  keys: string[];
+  periods: string[];
+}
+
 interface Props {
   data: SeriesPoint[];
   groupBy: "marca" | "modelo" | "proveedor";
   metric: Metric;
+  /** Cuantas series individuales mostrar antes de agrupar el resto en "Otros". */
+  topN?: number;
+  /** Se llama cada vez que se recalcula el pivot, para que el padre pueda
+   * mostrar la misma data en una tabla debajo del grafico. */
+  onPivotChange?: (pivot: PivotResult) => void;
 }
 
 const MESES = [
@@ -35,61 +47,40 @@ const MESES = [
 ];
 
 /** "2026-04-01" -> "Abril 2026" */
-function formatPeriod(period: string): string {
+export function formatPeriod(period: string): string {
   const [y, m] = period.split("-");
   const mes = MESES[Number(m) - 1] ?? m;
   return `${mes} ${y}`;
 }
 
-/** Pivotea la serie plana (una fila por mes+dimension) a un formato apto para recharts. */
-function pivot(data: SeriesPoint[], groupBy: Props["groupBy"], metric: Metric) {
+/** Sin decimales, con "." como separador de miles (formato AR). */
+export function fmtNumber(n: number): string {
+  return Math.round(n).toLocaleString("es-AR", { maximumFractionDigits: 0 });
+}
+
+const OTROS_KEY = "Otros";
+
+/**
+ * Pivotea la serie plana (una fila por mes+dimension) a un formato apto para
+ * recharts, mostrando solo las `topN` series con mayor total acumulado (por
+ * la metrica elegida) y agrupando el resto en una serie "Otros". Las series
+ * quedan ordenadas de mayor a menor total, con "Otros" siempre al final.
+ */
+function pivot(data: SeriesPoint[], groupBy: Props["groupBy"], metric: Metric, topN: number): PivotResult {
   const periods = Array.from(new Set(data.map((d) => d.period))).sort();
-  const keys = Array.from(new Set(data.map((d) => d[groupBy] ?? "sin_dato")));
+
+  // Total acumulado por key (para ordenar y elegir el top N).
+  const totals = new Map<string, number>();
+  for (const d of data) {
+    const key = (d[groupBy] ?? "sin_dato") as string;
+    totals.set(key, (totals.get(key) ?? 0) + Number(d[metric]));
+  }
+
+  const sortedKeys = Array.from(totals.keys()).sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0));
+  const topKeys = sortedKeys.slice(0, topN);
+  const restKeys = new Set(sortedKeys.slice(topN));
+  const keys = restKeys.size > 0 ? [...topKeys, OTROS_KEY] : topKeys;
 
   const rows = periods.map((period) => {
     const row: Record<string, any> = { period };
-    for (const key of keys) row[key] = 0;
-    for (const d of data.filter((x) => x.period === period)) {
-      const key = (d[groupBy] ?? "sin_dato") as string;
-      row[key] = (row[key] ?? 0) + Number(d[metric]);
-    }
-    return row;
-  });
-
-  return { rows, keys };
-}
-
-const COLORS = ["#4f8cff", "#ff8a4f", "#4fffa0", "#ff4f8c", "#c04fff", "#ffd24f"];
-
-export default function EvolutionChart({ data, groupBy, metric }: Props) {
-  if (data.length === 0) {
-    return <p style={{ color: "var(--muted)" }}>Todavia no hay datos sincronizados para esta seleccion.</p>;
-  }
-
-  const { rows, keys } = pivot(data, groupBy, metric);
-
-  return (
-    <ResponsiveContainer width="100%" height={380}>
-      <LineChart data={rows}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#2a2e37" />
-        <XAxis dataKey="period" stroke="#9aa1ad" tickFormatter={formatPeriod} />
-        <YAxis stroke="#9aa1ad" />
-        <Tooltip
-          contentStyle={{ background: "#171a21", border: "1px solid #2a2e37" }}
-          labelFormatter={(label) => formatPeriod(String(label))}
-        />
-        <Legend />
-        {keys.map((key, i) => (
-          <Line
-            key={key}
-            type="monotone"
-            dataKey={key}
-            stroke={COLORS[i % COLORS.length]}
-            strokeWidth={2}
-            dot={false}
-          />
-        ))}
-      </LineChart>
-    </ResponsiveContainer>
-  );
-}
+    for (const key of keys) row[key] 
