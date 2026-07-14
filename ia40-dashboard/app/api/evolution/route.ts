@@ -3,14 +3,17 @@ import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/evolution?category=sillas_de_ruedas&marca=X&marca=Y&modelo=Z&importador=W
-// "marca" e "importador" se pueden repetir para filtrar por varios valores a la vez.
+// GET /api/evolution?category=sillas_de_ruedas&marca=X&marca=Y&modelo=Z&importador=W&color=C&segmento=S
+// "marca", "modelo", "importador", "color" y "segmento" se pueden repetir
+// para filtrar por varios valores a la vez.
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const slug = searchParams.get("category");
   const marcas = searchParams.getAll("marca").filter(Boolean);
-  const modelo = searchParams.get("modelo");
+  const modelos = searchParams.getAll("modelo").filter(Boolean);
   const importadores = searchParams.getAll("importador").filter(Boolean);
+  const colores = searchParams.getAll("color").filter(Boolean);
+  const segmentos = searchParams.getAll("segmento").filter(Boolean);
 
   if (!slug) {
     return NextResponse.json({ error: "Falta ?category=" }, { status: 400 });
@@ -28,24 +31,34 @@ export async function GET(req: Request) {
     params.push(marcas);
     conditions.push(`marca = ANY($${params.length}::text[])`);
   }
-  if (modelo) {
-    params.push(modelo);
-    conditions.push(`modelo = $${params.length}`);
+  if (modelos.length > 0) {
+    params.push(modelos);
+    conditions.push(`modelo = ANY($${params.length}::text[])`);
   }
   if (importadores.length > 0) {
     params.push(importadores);
     conditions.push(`proveedor = ANY($${params.length}::text[])`);
   }
+  if (colores.length > 0) {
+    params.push(colores);
+    conditions.push(`color = ANY($${params.length}::text[])`);
+  }
+  if (segmentos.length > 0) {
+    params.push(segmentos);
+    conditions.push(`segmento = ANY($${params.length}::text[])`);
+  }
 
   const rows = await query(
-    `select period, marca, modelo, proveedor, total_fob_dolars, total_unidades, record_count
+    `select period, marca, modelo, proveedor, color, segmento, total_fob_dolars, total_unidades, record_count
      from monthly_brand_model_agg
      where ${conditions.join(" and ")}
      order by period asc`,
     params
   );
 
-  // Tambien devolvemos las marcas/modelos/importadores disponibles para poblar los selectores del front.
+  // Tambien devolvemos los valores disponibles de cada dimension para poblar
+  // los selectores del front (sin aplicar los filtros actuales, para que el
+  // usuario pueda ampliar la seleccion sin perder opciones).
   const options = await query(
     `select distinct marca, modelo from monthly_brand_model_agg where category_id = $1 order by 1, 2`,
     [categoryId]
@@ -54,6 +67,20 @@ export async function GET(req: Request) {
     `select distinct proveedor from monthly_brand_model_agg where category_id = $1 order by 1`,
     [categoryId]
   );
+  const colorOptions = await query<{ color: string }>(
+    `select distinct color from monthly_brand_model_agg where category_id = $1 order by 1`,
+    [categoryId]
+  );
+  const segmentoOptions = await query<{ segmento: string }>(
+    `select distinct segmento from monthly_brand_model_agg where category_id = $1 order by 1`,
+    [categoryId]
+  );
 
-  return NextResponse.json({ series: rows, options, importerOptions: importerOptions.map((r) => r.proveedor) });
+  return NextResponse.json({
+    series: rows,
+    options,
+    importerOptions: importerOptions.map((r) => r.proveedor),
+    colorOptions: colorOptions.map((r) => r.color),
+    segmentoOptions: segmentoOptions.map((r) => r.segmento),
+  });
 }
