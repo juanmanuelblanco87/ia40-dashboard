@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import EvolutionChart, { SeriesPoint } from "@/components/EvolutionChart";
+import { useEffect, useMemo, useState } from "react";
+import EvolutionChart, { SeriesPoint, PivotResult, formatPeriod, fmtNumber } from "@/components/EvolutionChart";
 
 interface Category {
   id: number;
@@ -20,6 +20,7 @@ export default function Home() {
   const [series, setSeries] = useState<SeriesPoint[]>([]);
   const [options, setOptions] = useState<{ marca: string; modelo: string }[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pivot, setPivot] = useState<PivotResult | null>(null);
 
   useEffect(() => {
     fetch("/api/categories")
@@ -47,6 +48,45 @@ export default function Home() {
 
   const marcas = Array.from(new Set(options.map((o) => o.marca).filter(Boolean))) as string[];
   const modelos = Array.from(new Set(options.map((o) => o.modelo).filter(Boolean))) as string[];
+
+  // ---- Totales de encabezado: ultimo mes y ultimos 12 meses moviles ----
+  const totals = useMemo(() => {
+    const distinctPeriods = Array.from(new Set(series.map((s) => s.period))).sort();
+    if (distinctPeriods.length === 0) {
+      return { lastPeriod: null as string | null, lastMonthTotal: 0, last12Total: 0, last12Count: 0 };
+    }
+    const lastPeriod = distinctPeriods[distinctPeriods.length - 1];
+    const last12Periods = new Set(distinctPeriods.slice(-12));
+
+    let lastMonthTotal = 0;
+    let last12Total = 0;
+    for (const s of series) {
+      const v = Number(s[metric]) || 0;
+      if (s.period === lastPeriod) lastMonthTotal += v;
+      if (last12Periods.has(s.period)) last12Total += v;
+    }
+    return { lastPeriod, lastMonthTotal, last12Total, last12Count: last12Periods.size };
+  }, [series, metric]);
+
+  const metricLabel = metric === "total_fob_dolars" ? "FOB USD" : "Unidades";
+
+  // ---- Descarga CSV de la tabla mes a mes ----
+  const downloadCsv = () => {
+    if (!pivot) return;
+    const header = ["Periodo", ...pivot.keys].join(";");
+    const lines = pivot.rows.map((row) => {
+      const cells = [formatPeriod(row.period), ...pivot.keys.map((k) => Math.round(Number(row[k] ?? 0)))];
+      return cells.join(";");
+    });
+    const csv = [header, ...lines].join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${slug}_${groupBy}_${metric}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="container">
@@ -96,11 +136,57 @@ export default function Home() {
         </div>
       </div>
 
+      <div className="panel row" style={{ gap: 24 }}>
+        <div>
+          <div style={{ color: "var(--muted)", fontSize: 13 }}>
+            Ultimo mes{totals.lastPeriod ? ` (${formatPeriod(totals.lastPeriod)})` : ""}
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>
+            {fmtNumber(totals.lastMonthTotal)} <span style={{ fontSize: 14, color: "var(--muted)" }}>{metricLabel}</span>
+          </div>
+        </div>
+        <div>
+          <div style={{ color: "var(--muted)", fontSize: 13 }}>
+            Ultimos {totals.last12Count || 12} meses
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>
+            {fmtNumber(totals.last12Total)} <span style={{ fontSize: 14, color: "var(--muted)" }}>{metricLabel}</span>
+          </div>
+        </div>
+      </div>
+
       <div className="panel">
         {loading ? <p style={{ color: "var(--muted)" }}>Cargando...</p> : (
-          <EvolutionChart data={series} groupBy={groupBy} metric={metric} />
+          <EvolutionChart data={series} groupBy={groupBy} metric={metric} topN={9} onPivotChange={setPivot} />
         )}
       </div>
+
+      {pivot && pivot.rows.length > 0 && (
+        <div className="panel">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <h1 style={{ fontSize: 16, margin: 0 }}>Detalle mes a mes</h1>
+            <button onClick={downloadCsv}>Descargar CSV</button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Periodo</th>
+                  {pivot.keys.map((k) => <th key={k}>{k}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {pivot.rows.map((row) => (
+                  <tr key={row.period}>
+                    <td>{formatPeriod(row.period)}</td>
+                    {pivot.keys.map((k) => <td key={k}>{fmtNumber(Number(row[k] ?? 0))}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <p style={{ color: "var(--muted)", fontSize: 13 }}>
         Los datos se actualizan una vez por dia via /api/sync (Vercel Cron).
