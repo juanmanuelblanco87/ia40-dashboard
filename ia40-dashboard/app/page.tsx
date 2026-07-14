@@ -219,7 +219,7 @@ function ModelShareTable({
   rows: ModelShareRow[];
   last12Label: string;
   imageStatus: (marca: string, modelo: string) => string;
-  onViewImage: (marca: string, modelo: string) => void;
+  onViewImage: (marca: string, modelo: string, segmento: string) => void;
 }) {
   const cellStyle: React.CSSProperties = { padding: "5px 6px", fontSize: 12.5 };
   const cellRight: React.CSSProperties = { ...cellStyle, textAlign: "right" };
@@ -257,7 +257,7 @@ function ModelShareTable({
                   <td style={cellRight}>{r.unidadesPct.toFixed(1)}%</td>
                   <td style={cellStyle}>
                     <button
-                      onClick={() => onViewImage(r.marca, r.modelo)}
+                      onClick={() => onViewImage(r.marca, r.modelo, r.segmento)}
                       style={{ fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap" }}
                     >
                       {IMAGE_BUTTON_LABEL[status] ?? "Pendiente"}
@@ -278,23 +278,40 @@ function ModelShareTable({
   );
 }
 
+const SEGMENTO_CHOICES = [
+  "Silla Estándar",
+  "Silla Ultra Livianas",
+  "Sillas Infantiles",
+  "Silla Postural",
+  "Silla Activa y Deportivas",
+  "Silla de Traslado",
+];
+
 function ModelImageModal({
   marca,
   modelo,
   categorySlug,
+  segmentoActual,
   entry,
   onClose,
   onResolved,
+  onOverrideSaved,
 }: {
   marca: string;
   modelo: string;
   categorySlug: string;
+  segmentoActual: string;
   entry: ModelImageEntry | undefined;
   onClose: () => void;
   onResolved: (entry: ModelImageEntry) => void;
+  onOverrideSaved: () => void;
 }) {
   const [local, setLocal] = useState<ModelImageEntry | undefined>(entry);
   const [searching, setSearching] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [imageUrlInput, setImageUrlInput] = useState("");
+  const [segmentoInput, setSegmentoInput] = useState(segmentoActual);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setLocal(entry);
@@ -332,6 +349,48 @@ function ModelImageModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marca, modelo, categorySlug]);
 
+  const startEditing = () => {
+    setImageUrlInput(local?.image_url ?? "");
+    setSegmentoInput(segmentoActual);
+    setEditing(true);
+  };
+
+  const saveOverride = async () => {
+    setSaving(true);
+    try {
+      const body: Record<string, string> = { category: categorySlug, marca, modelo };
+      const trimmedUrl = imageUrlInput.trim();
+      if (trimmedUrl) body.image_url = trimmedUrl;
+      if (segmentoInput) body.segmento = segmentoInput;
+
+      const res = await fetch("/api/model-overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("save_failed");
+
+      if (trimmedUrl) {
+        const updated: ModelImageEntry = {
+          marca,
+          modelo,
+          image_url: trimmedUrl,
+          thumbnail_url: trimmedUrl,
+          source_url: local?.source_url ?? null,
+          status: "found",
+        };
+        setLocal(updated);
+        onResolved(updated);
+      }
+      setEditing(false);
+      onOverrideSaved();
+    } catch {
+      alert("No se pudo guardar la correccion. Proba de nuevo.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const status = searching ? "searching" : local?.status ?? "pending";
   return (
     <div
@@ -359,10 +418,53 @@ function ModelImageModal({
           textAlign: "center",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <strong style={{ fontSize: 15 }}>{marca} — {modelo}</strong>
-          <button onClick={onClose} style={{ padding: "4px 10px", fontSize: 13 }}>Cerrar</button>
+          <div style={{ display: "flex", gap: 6 }}>
+            {!editing && (
+              <button onClick={startEditing} title="Corregir imagen o segmento" style={{ padding: "4px 10px", fontSize: 13 }}>
+                ✎ Corregir
+              </button>
+            )}
+            <button onClick={onClose} style={{ padding: "4px 10px", fontSize: 13 }}>Cerrar</button>
+          </div>
         </div>
+        <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 14 }}>Segmento: {segmentoActual}</div>
+
+        {editing && (
+          <div style={{ textAlign: "left", background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+            <label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
+              URL de imagen (dejar vacio para no cambiarla)
+            </label>
+            <input
+              type="text"
+              value={imageUrlInput}
+              onChange={(e) => setImageUrlInput(e.target.value)}
+              placeholder="https://..."
+              style={{ width: "100%", boxSizing: "border-box", padding: "6px 8px", fontSize: 13, marginBottom: 12 }}
+            />
+            <label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
+              Segmento
+            </label>
+            <select
+              value={segmentoInput}
+              onChange={(e) => setSegmentoInput(e.target.value)}
+              style={{ width: "100%", padding: "6px 8px", fontSize: 13, marginBottom: 14 }}
+            >
+              {SEGMENTO_CHOICES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setEditing(false)} disabled={saving} style={{ padding: "4px 10px", fontSize: 13 }}>
+                Cancelar
+              </button>
+              <button onClick={saveOverride} disabled={saving} style={{ padding: "4px 10px", fontSize: 13 }}>
+                {saving ? "Guardando..." : "Guardar"}
+              </button>
+            </div>
+          </div>
+        )}
 
         {status === "searching" && (
           <p style={{ color: "var(--muted)" }}>Buscando imagen...</p>
@@ -457,7 +559,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [pivot, setPivot] = useState<PivotResult | null>(null);
   const [modelImages, setModelImages] = useState<Map<string, ModelImageEntry>>(new Map());
-  const [viewingModel, setViewingModel] = useState<{ marca: string; modelo: string } | null>(null);
+  const [viewingModel, setViewingModel] = useState<{ marca: string; modelo: string; segmento: string } | null>(null);
 
   useEffect(() => {
     fetch("/api/categories")
@@ -468,7 +570,10 @@ export default function Home() {
       });
   }, []);
 
-  useEffect(() => {
+  // Extraida como funcion reusable para poder recargar la serie sin cambiar
+  // filtros (ej. despues de guardar una correccion manual de segmento desde
+  // el modal de imagen, sin esperar al proximo /api/sync).
+  const reloadSeries = () => {
     if (!slug) return;
     setLoading(true);
     const params = new URLSearchParams({ category: slug });
@@ -487,7 +592,9 @@ export default function Home() {
         setSegmentoOptions(d.segmentoOptions ?? []);
       })
       .finally(() => setLoading(false));
-  }, [slug, marcas, modelosSel, importadores, colores, segmentos]);
+  };
+
+  useEffect(reloadSeries, [slug, marcas, modelosSel, importadores, colores, segmentos]);
 
   useEffect(() => {
     if (!slug) return;
@@ -784,14 +891,16 @@ export default function Home() {
         rows={shareByModel}
         last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
         imageStatus={imageStatusFor}
-        onViewImage={(marca, modelo) => setViewingModel({ marca, modelo })}
+        onViewImage={(marca, modelo, segmento) => setViewingModel({ marca, modelo, segmento })}
       />
 
       {viewingModel && (
         <ModelImageModal
+          key={modelImageKey(viewingModel.marca, viewingModel.modelo)}
           marca={viewingModel.marca}
           modelo={viewingModel.modelo}
           categorySlug={slug}
+          segmentoActual={viewingModel.segmento}
           entry={modelImages.get(modelImageKey(viewingModel.marca, viewingModel.modelo))}
           onClose={() => setViewingModel(null)}
           onResolved={(img) =>
@@ -801,6 +910,7 @@ export default function Home() {
               return next;
             })
           }
+          onOverrideSaved={reloadSeries}
         />
       )}
 
