@@ -47,27 +47,35 @@ function TopCard({ title, lastMonth, last12, last12Label }: {
   last12Label: string;
 }) {
   return (
-    <div className="panel" style={{ flex: 1, minWidth: 240 }}>
-      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 10 }}>{title}</h1>
+    <div className="panel" style={{ flex: 1, minWidth: 260 }}>
+      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 14 }}>{title}</h1>
 
-      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 2 }}>Ultimo mes</div>
-      <div style={{ fontSize: 14, marginBottom: 2 }}>
-        Por FOB: <strong>{lastMonth.topFob?.key ?? "-"}</strong>
-        {lastMonth.topFob && <span style={{ color: "var(--muted)" }}> ({fmtNumber(lastMonth.topFob.value)} USD, {fmtNumber(lastMonth.topFob.other)} un.)</span>}
-      </div>
-      <div style={{ fontSize: 14, marginBottom: 10 }}>
-        Por Unidades: <strong>{lastMonth.topUnidades?.key ?? "-"}</strong>
-        {lastMonth.topUnidades && <span style={{ color: "var(--muted)" }}> ({fmtNumber(lastMonth.topUnidades.value)} un., {fmtNumber(lastMonth.topUnidades.other)} USD)</span>}
+      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, marginBottom: 10 }}>
+        <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>FOB USD</div>
+        <div style={{ fontSize: 14, marginBottom: 4 }}>
+          <span style={{ color: "var(--muted)" }}>Ultimo mes: </span>
+          <strong>{lastMonth.topFob?.key ?? "-"}</strong>
+          {lastMonth.topFob && <span style={{ color: "var(--muted)" }}> — {fmtNumber(lastMonth.topFob.value)} USD</span>}
+        </div>
+        <div style={{ fontSize: 14 }}>
+          <span style={{ color: "var(--muted)" }}>{last12Label}: </span>
+          <strong>{last12.topFob?.key ?? "-"}</strong>
+          {last12.topFob && <span style={{ color: "var(--muted)" }}> — {fmtNumber(last12.topFob.value)} USD</span>}
+        </div>
       </div>
 
-      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 2 }}>{last12Label}</div>
-      <div style={{ fontSize: 14, marginBottom: 2 }}>
-        Por FOB: <strong>{last12.topFob?.key ?? "-"}</strong>
-        {last12.topFob && <span style={{ color: "var(--muted)" }}> ({fmtNumber(last12.topFob.value)} USD, {fmtNumber(last12.topFob.other)} un.)</span>}
-      </div>
-      <div style={{ fontSize: 14 }}>
-        Por Unidades: <strong>{last12.topUnidades?.key ?? "-"}</strong>
-        {last12.topUnidades && <span style={{ color: "var(--muted)" }}> ({fmtNumber(last12.topUnidades.value)} un., {fmtNumber(last12.topUnidades.other)} USD)</span>}
+      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12 }}>
+        <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>Unidades</div>
+        <div style={{ fontSize: 14, marginBottom: 4 }}>
+          <span style={{ color: "var(--muted)" }}>Ultimo mes: </span>
+          <strong>{lastMonth.topUnidades?.key ?? "-"}</strong>
+          {lastMonth.topUnidades && <span style={{ color: "var(--muted)" }}> — {fmtNumber(lastMonth.topUnidades.value)} un.</span>}
+        </div>
+        <div style={{ fontSize: 14 }}>
+          <span style={{ color: "var(--muted)" }}>{last12Label}: </span>
+          <strong>{last12.topUnidades?.key ?? "-"}</strong>
+          {last12.topUnidades && <span style={{ color: "var(--muted)" }}> — {fmtNumber(last12.topUnidades.value)} un.</span>}
+        </div>
       </div>
     </div>
   );
@@ -78,11 +86,13 @@ export default function Home() {
   const [slug, setSlug] = useState<string>("");
   const [marcas, setMarcas] = useState<string[]>([]);
   const [modelo, setModelo] = useState<string>("");
+  const [importadores, setImportadores] = useState<string[]>([]);
   const [meses, setMeses] = useState<string[]>([]);
   const [groupBy, setGroupBy] = useState<"marca" | "modelo" | "proveedor">("marca");
   const [metric, setMetric] = useState<"total_fob_dolars" | "total_unidades">("total_fob_dolars");
   const [series, setSeries] = useState<SeriesPoint[]>([]);
   const [options, setOptions] = useState<{ marca: string; modelo: string }[]>([]);
+  const [importerOptions, setImporterOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [pivot, setPivot] = useState<PivotResult | null>(null);
 
@@ -100,15 +110,17 @@ export default function Home() {
     setLoading(true);
     const params = new URLSearchParams({ category: slug });
     for (const m of marcas) params.append("marca", m);
+    for (const i of importadores) params.append("importador", i);
     if (modelo) params.set("modelo", modelo);
     fetch(`/api/evolution?${params}`)
       .then((r) => r.json())
       .then((d) => {
         setSeries(d.series ?? []);
         setOptions(d.options ?? []);
+        setImporterOptions(d.importerOptions ?? []);
       })
       .finally(() => setLoading(false));
-  }, [slug, marcas, modelo]);
+  }, [slug, marcas, modelo, importadores]);
 
   const marcaOptions = Array.from(new Set(options.map((o) => o.marca).filter(Boolean))) as string[];
   const modelos = Array.from(new Set(options.map((o) => o.modelo).filter(Boolean))) as string[];
@@ -203,6 +215,8 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
+  const filterFieldStyle: React.CSSProperties = { minWidth: 170, width: 170 };
+
   return (
     <div className="container">
       <h1>IA40 — Evolucion mensual por categoria</h1>
@@ -212,78 +226,96 @@ export default function Home() {
       </p>
 
       <div className="panel row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
-        <div>
+        <div style={filterFieldStyle}>
           <label>Categoria</label>
-          <select value={slug} onChange={(e) => { setSlug(e.target.value); setMarcas([]); setModelo(""); setMeses([]); }}>
+          <select
+            style={{ width: "100%" }}
+            value={slug}
+            onChange={(e) => { setSlug(e.target.value); setMarcas([]); setModelo(""); setMeses([]); setImportadores([]); }}
+          >
             {categories.map((c) => (
               <option key={c.slug} value={c.slug}>{c.name}</option>
             ))}
           </select>
         </div>
 
-        <MultiSelectDropdown
-          label="Marca"
-          options={marcaOptions.map((m) => ({ value: m, label: m }))}
-          selected={marcas}
-          onChange={setMarcas}
-          placeholder="Todas"
-        />
+        <div style={filterFieldStyle}>
+          <MultiSelectDropdown
+            label="Marca"
+            options={marcaOptions.map((m) => ({ value: m, label: m }))}
+            selected={marcas}
+            onChange={setMarcas}
+            placeholder="Todas"
+          />
+        </div>
 
-        <div>
+        <div style={filterFieldStyle}>
+          <MultiSelectDropdown
+            label="Importador"
+            options={importerOptions.map((p) => ({ value: p, label: p }))}
+            selected={importadores}
+            onChange={setImportadores}
+            placeholder="Todos"
+          />
+        </div>
+
+        <div style={filterFieldStyle}>
           <label>Modelo</label>
-          <select value={modelo} onChange={(e) => setModelo(e.target.value)}>
+          <select style={{ width: "100%" }} value={modelo} onChange={(e) => setModelo(e.target.value)}>
             <option value="">Todos</option>
             {modelos.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
         </div>
 
-        <MultiSelectDropdown
-          label="Meses"
-          options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
-          selected={meses}
-          onChange={setMeses}
-          placeholder="Todos"
-          searchable={false}
-        />
+        <div style={filterFieldStyle}>
+          <MultiSelectDropdown
+            label="Meses"
+            options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
+            selected={meses}
+            onChange={setMeses}
+            placeholder="Todos"
+            searchable={false}
+          />
+        </div>
 
-        <div>
+        <div style={filterFieldStyle}>
           <label>Agrupar por</label>
-          <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
+          <select style={{ width: "100%" }} value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
             <option value="marca">Marca</option>
             <option value="modelo">Modelo</option>
             <option value="proveedor">Proveedor</option>
           </select>
         </div>
-        <div>
+        <div style={filterFieldStyle}>
           <label>Metrica (grafico y tabla)</label>
-          <select value={metric} onChange={(e) => setMetric(e.target.value as any)}>
+          <select style={{ width: "100%" }} value={metric} onChange={(e) => setMetric(e.target.value as any)}>
             <option value="total_fob_dolars">FOB USD</option>
             <option value="total_unidades">Unidades</option>
           </select>
         </div>
       </div>
 
-      <div className="panel row" style={{ gap: 32 }}>
-        <div>
-          <div style={{ color: "var(--muted)", fontSize: 13 }}>
+      <div className="row" style={{ gap: 16 }}>
+        <div className="panel" style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ color: "var(--muted)", fontSize: 14, marginBottom: 8 }}>
             Ultimo mes{totals.lastPeriod ? ` (${formatPeriod(totals.lastPeriod)})` : ""}
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>
-            {fmtNumber(totals.lastMonth.fob)} <span style={{ fontSize: 13, color: "var(--muted)" }}>USD FOB</span>
+          <div style={{ fontSize: 34, fontWeight: 700 }}>
+            {fmtNumber(totals.lastMonth.fob)} <span style={{ fontSize: 16, color: "var(--muted)", fontWeight: 400 }}>USD FOB</span>
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>
-            {fmtNumber(totals.lastMonth.unidades)} <span style={{ fontSize: 13, color: "var(--muted)" }}>Unidades</span>
+          <div style={{ fontSize: 34, fontWeight: 700, marginTop: 6 }}>
+            {fmtNumber(totals.lastMonth.unidades)} <span style={{ fontSize: 16, color: "var(--muted)", fontWeight: 400 }}>Unidades</span>
           </div>
         </div>
-        <div>
-          <div style={{ color: "var(--muted)", fontSize: 13 }}>
+        <div className="panel" style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ color: "var(--muted)", fontSize: 14, marginBottom: 8 }}>
             Ultimos {totals.last12Count || 12} meses
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>
-            {fmtNumber(totals.last12.fob)} <span style={{ fontSize: 13, color: "var(--muted)" }}>USD FOB</span>
+          <div style={{ fontSize: 34, fontWeight: 700 }}>
+            {fmtNumber(totals.last12.fob)} <span style={{ fontSize: 16, color: "var(--muted)", fontWeight: 400 }}>USD FOB</span>
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>
-            {fmtNumber(totals.last12.unidades)} <span style={{ fontSize: 13, color: "var(--muted)" }}>Unidades</span>
+          <div style={{ fontSize: 34, fontWeight: 700, marginTop: 6 }}>
+            {fmtNumber(totals.last12.unidades)} <span style={{ fontSize: 16, color: "var(--muted)", fontWeight: 400 }}>Unidades</span>
           </div>
         </div>
       </div>
