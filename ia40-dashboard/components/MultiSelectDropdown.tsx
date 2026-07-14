@@ -19,6 +19,13 @@ interface Props {
 /**
  * Dropdown desplegable con checkboxes (y buscador opcional) para elegir
  * varios valores a la vez. Se cierra solo al hacer click afuera.
+ *
+ * Nota: los estilos globales de la app (globals.css) definen reglas para
+ * `label`, `input` y `button` pensadas para formularios simples (label en
+ * bloque, input al 100% de ancho, etc.). Ese estilo se filtra a los
+ * checkboxes/labels de este dropdown si no se lo pisa explicitamente, asi
+ * que todos los elementos de abajo llevan estilos inline (tienen prioridad
+ * sobre el CSS externo) para no heredar ese comportamiento.
  */
 export default function MultiSelectDropdown({
   label,
@@ -62,7 +69,7 @@ export default function MultiSelectDropdown({
       : `${selected.length} seleccionadas`;
 
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <div ref={ref} style={{ position: "relative", minWidth: 180 }}>
       <label>{label}</label>
       <button
         type="button"
@@ -72,12 +79,12 @@ export default function MultiSelectDropdown({
           alignItems: "center",
           justifyContent: "space-between",
           gap: 8,
-          minWidth: 180,
+          width: "100%",
           textAlign: "left",
         }}
       >
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</span>
-        <span style={{ opacity: 0.6 }}>▾</span>
+        <span style={{ opacity: 0.6, flexShrink: 0 }}>▾</span>
       </button>
 
       {open && (
@@ -86,16 +93,16 @@ export default function MultiSelectDropdown({
             position: "absolute",
             top: "100%",
             left: 0,
-            zIndex: 20,
+            zIndex: 30,
             marginTop: 4,
             width: 260,
             maxHeight: 320,
             overflowY: "auto",
-            background: "#171a21",
-            border: "1px solid #2a2e37",
+            background: "var(--panel, #171a21)",
+            border: "1px solid var(--border, #2a2e37)",
             borderRadius: 8,
             padding: 8,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
           }}
         >
           {searchable && (
@@ -104,14 +111,19 @@ export default function MultiSelectDropdown({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar..."
-              style={{ width: "100%", marginBottom: 8, boxSizing: "border-box" }}
+              style={{
+                width: "100%",
+                marginBottom: 8,
+                boxSizing: "border-box",
+                display: "block",
+              }}
             />
           )}
           {selected.length > 0 && (
             <button
               type="button"
               onClick={() => onChange([])}
-              style={{ width: "100%", marginBottom: 8, fontSize: 12 }}
+              style={{ width: "100%", marginBottom: 8, fontSize: 12, display: "block" }}
             >
               Limpiar seleccion
             </button>
@@ -120,20 +132,38 @@ export default function MultiSelectDropdown({
             <div style={{ color: "var(--muted)", fontSize: 13, padding: 4 }}>Sin resultados</div>
           )}
           {filtered.map((o) => (
-            <label
+            <div
               key={o.value}
+              onClick={() => toggle(o.value)}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
-                padding: "4px 2px",
+                padding: "6px 4px",
                 cursor: "pointer",
                 fontSize: 14,
+                color: "var(--text, #e7e9ee)",
+                lineHeight: 1.3,
+                borderRadius: 4,
               }}
             >
-              <input type="checkbox" checked={selected.includes(o.value)} onChange={() => toggle(o.value)} />
-              {o.label}
-            </label>
+              <input
+                type="checkbox"
+                checked={selected.includes(o.value)}
+                onChange={() => toggle(o.value)}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: 16,
+                  height: 16,
+                  minWidth: 16,
+                  padding: 0,
+                  margin: 0,
+                  flexShrink: 0,
+                  accentColor: "var(--accent, #4f8cff)",
+                }}
+              />
+              <span style={{ flex: 1 }}>{o.label}</span>
+            </div>
           ))}
         </div>
       )}
