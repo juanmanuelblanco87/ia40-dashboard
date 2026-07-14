@@ -40,6 +40,83 @@ function computeTop(
   return { topFob, topUnidades };
 }
 
+interface ShareRow {
+  key: string;
+  fob: number;
+  fobPct: number;
+  unidades: number;
+  unidadesPct: number;
+}
+
+function computeShareTable(
+  series: SeriesPoint[],
+  periodSet: Set<string> | null,
+  dimension: "proveedor" | "marca"
+): ShareRow[] {
+  const totals = new Map<string, { fob: number; uni: number }>();
+  let totalFob = 0;
+  let totalUni = 0;
+  for (const s of series) {
+    if (periodSet && !periodSet.has(s.period)) continue;
+    const key = ((s as any)[dimension] ?? "sin_dato") as string;
+    const fob = Number(s.total_fob_dolars) || 0;
+    const uni = Number(s.total_unidades) || 0;
+    const cur = totals.get(key) ?? { fob: 0, uni: 0 };
+    cur.fob += fob;
+    cur.uni += uni;
+    totals.set(key, cur);
+    totalFob += fob;
+    totalUni += uni;
+  }
+  const rows: ShareRow[] = Array.from(totals.entries()).map(([key, v]) => ({
+    key,
+    fob: v.fob,
+    fobPct: totalFob > 0 ? (v.fob / totalFob) * 100 : 0,
+    unidades: v.uni,
+    unidadesPct: totalUni > 0 ? (v.uni / totalUni) * 100 : 0,
+  }));
+  rows.sort((a, b) => b.fob - a.fob);
+  return rows;
+}
+
+function ShareTable({ title, rows, last12Label }: { title: string; rows: ShareRow[]; last12Label: string }) {
+  return (
+    <div className="panel" style={{ flex: 1, minWidth: 320 }}>
+      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>{title}</h1>
+      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>{last12Label}</div>
+      <div style={{ overflowX: "auto", maxHeight: 360, overflowY: "auto" }}>
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th style={{ textAlign: "right" }}>FOB USD</th>
+              <th style={{ textAlign: "right" }}>FOB %</th>
+              <th style={{ textAlign: "right" }}>Unidades</th>
+              <th style={{ textAlign: "right" }}>Unidades %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key}>
+                <td>{r.key}</td>
+                <td style={{ textAlign: "right" }}>{fmtNumber(r.fob)}</td>
+                <td style={{ textAlign: "right" }}>{r.fobPct.toFixed(1)}%</td>
+                <td style={{ textAlign: "right" }}>{fmtNumber(r.unidades)}</td>
+                <td style={{ textAlign: "right" }}>{r.unidadesPct.toFixed(1)}%</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} style={{ color: "var(--muted)" }}>Sin datos</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function TopCard({ title, lastMonth, last12, last12Label }: {
   title: string;
   lastMonth: { topFob: TopEntry | null; topUnidades: TopEntry | null };
@@ -192,6 +269,16 @@ export default function Home() {
     [series, periodInfo]
   );
 
+  // ---- Share por Importador y por Marca, ultimos 12 meses moviles ----
+  const shareByImporter = useMemo(
+    () => computeShareTable(series, periodInfo.last12Set, "proveedor"),
+    [series, periodInfo]
+  );
+  const shareByBrand = useMemo(
+    () => computeShareTable(series, periodInfo.last12Set, "marca"),
+    [series, periodInfo]
+  );
+
   // ---- Descarga CSV de la tabla mes a mes (mismo orden que se ve en pantalla) ----
   const downloadCsv = () => {
     if (!pivot) return;
@@ -330,6 +417,19 @@ export default function Home() {
         {loading ? <p style={{ color: "var(--muted)" }}>Cargando...</p> : (
           <EvolutionChart data={filteredSeries} groupBy={groupBy} metric={metric} topN={9} onPivotChange={setPivot} />
         )}
+      </div>
+
+      <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+        <ShareTable
+          title="Share por Importador"
+          rows={shareByImporter}
+          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        />
+        <ShareTable
+          title="Share por Marca"
+          rows={shareByBrand}
+          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        />
       </div>
 
       {pivot && pivot.rows.length > 0 && (
