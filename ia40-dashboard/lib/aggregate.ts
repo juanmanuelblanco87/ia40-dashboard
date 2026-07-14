@@ -77,21 +77,23 @@ export async function upsertRawRecords(categoryId: number, categorySlug: string,
     let marca: string | null = null;
     let modelo: string | null = null;
     let color: string | null = null;
+    let segmento: string | null = null;
     if (parser) {
       const parsed = parser(row);
       if (parsed) {
         marca = parsed.marca;
         modelo = parsed.modelo;
         color = parsed.color ?? null;
+        segmento = parsed.segmento ?? null;
       }
     }
 
     const result = await query(
-      `insert into trade_records (category_id, ncm_code, period, cuit, raw, fob_dolars, marca, modelo, color, source_hash)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       on conflict (source_hash) do update set marca = excluded.marca, modelo = excluded.modelo, color = excluded.color
+      `insert into trade_records (category_id, ncm_code, period, cuit, raw, fob_dolars, marca, modelo, color, segmento, source_hash)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       on conflict (source_hash) do update set marca = excluded.marca, modelo = excluded.modelo, color = excluded.color, segmento = excluded.segmento
        returning id`,
-      [categoryId, ncmCode, period, cuit, JSON.stringify(row), fob, marca, modelo, color, hash]
+      [categoryId, ncmCode, period, cuit, JSON.stringify(row), fob, marca, modelo, color, segmento, hash]
     );
     inserted += result.length ? 1 : 0;
   }
@@ -127,7 +129,7 @@ export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
 
   await query(
     `insert into monthly_brand_model_agg
-       (category_id, period, marca, modelo, proveedor, total_fob_dolars, total_unidades, record_count)
+       (category_id, period, marca, modelo, proveedor, color, segmento, total_fob_dolars, total_unidades, record_count)
      select
        tr.category_id,
        tr.period,
@@ -140,6 +142,8 @@ export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
          else tr.raw ->> $3::text
        end as modelo,
        coalesce(tr.raw ->> $4::text, 'sin_dato') as proveedor,
+       coalesce(tr.color, 'sin_dato') as color,
+       coalesce(tr.segmento, 'sin_dato') as segmento,
        sum(coalesce(tr.fob_dolars, 0)) as total_fob_dolars,
        sum(coalesce(nullif(tr.raw ->> $5::text, '')::numeric, 0)) as total_unidades,
        count(*) as record_count
@@ -150,12 +154,12 @@ export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
      left join record_brand_map rbm
        on rbm.trade_record_id = tr.id
      where tr.category_id = $1
-     -- Se agrupa por posicion (1..5, las columnas no-agregadas) y no por
+     -- Se agrupa por posicion (1..7, las columnas no-agregadas) y no por
      -- nombre: "marca" y "modelo" son tambien nombres de columnas reales en
      -- provider_brand_map/record_brand_map/trade_records, y Postgres
      -- prioriza esa columna sobre el alias del SELECT, lo que rompia el
      -- group by con "column tr.raw must appear in..."
-     group by 1, 2, 3, 4, 5`,
+     group by 1, 2, 3, 4, 5, 6, 7`,
     [categoryId, marcaPath, modeloPath, proveedorPath, unidadesPath]
   );
 }
