@@ -504,7 +504,7 @@ function AppHeader() {
     <header className="app-header">
       <div className="app-header-inner">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo-icomsalud-teal.png" alt="Icom Salud" style={{ height: 44, width: "auto", flexShrink: 0 }} />
+        <img src="/logo-icomsalud-teal.png" alt="Icom Salud" style={{ height: 66, width: "auto", flexShrink: 0 }} />
         <div style={{ width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.25)" }} />
         <div className="app-header-title">Módulo de Importaciones</div>
       </div>
@@ -840,7 +840,7 @@ export default function Home() {
           </select>
         </div>
         <div style={filterFieldStyle}>
-          <label>📊 Metrica (grafico y tabla)</label>
+          <label>📊 Metrica</label>
           <select style={{ width: "100%" }} value={metric} onChange={(e) => setMetric(e.target.value as any)}>
             <option value="total_fob_dolars">FOB USD</option>
             <option value="total_unidades">Unidades</option>
@@ -850,7 +850,7 @@ export default function Home() {
 
       <div className="row" style={{ gap: 16 }}>
         <div className="panel" style={{ flex: 1, display: "flex", alignItems: "center", gap: 16 }}>
-          <div className="kpi-icon">$</div>
+          <div className="kpi-icon">📅</div>
           <div>
             <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
               Ultimo mes{totals.lastPeriod ? ` (${formatPeriod(totals.lastPeriod)})` : ""}
@@ -864,7 +864,7 @@ export default function Home() {
           </div>
         </div>
         <div className="panel" style={{ flex: 1, display: "flex", alignItems: "center", gap: 16 }}>
-          <div className="kpi-icon">📈</div>
+          <div className="kpi-icon">🗓️</div>
           <div>
             <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
               Ultimos {totals.last12Count || 12} meses
