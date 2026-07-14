@@ -255,7 +255,7 @@ export async function fetchIa40ExportRows(params: {
   // de fallar en silencio con fetched:0 sin explicacion).
   if (csvRows.length === 0) {
     throw new Error(
-      `Export devolvio 0 filas parseadas. downloadUrl=${downloadUrl} | largo del texto descargado=${csvText.length} | primeros 500 caracteres: ${csvText.slice(0, 500)}`
+      `Export devolvio 0 filas parseadas. downloadUrl=${downloadUrl} | largo del texto descargado=${csvText.length} | contenido completo (o primeros 6000 caracteres): ${csvText.slice(0, 6000)}`
     );
   }
 
