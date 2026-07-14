@@ -17,6 +17,8 @@ export interface SeriesPoint {
   marca: string | null;
   modelo: string | null;
   proveedor: string;
+  color: string | null;
+  segmento: string | null;
   total_fob_dolars: string | number;
   total_unidades: string | number;
   record_count: number;
