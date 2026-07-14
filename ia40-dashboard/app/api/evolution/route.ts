@@ -6,6 +6,12 @@ export const dynamic = "force-dynamic";
 // GET /api/evolution?category=sillas_de_ruedas&marca=X&marca=Y&modelo=Z&importador=W&color=C&segmento=S
 // "marca", "modelo", "importador", "color" y "segmento" se pueden repetir
 // para filtrar por varios valores a la vez.
+//
+// El segmento final de cada fila sale de model_segmento_override si existe
+// una correccion manual para esa combinacion marca+modelo (ver
+// /api/model-overrides), y si no, del valor calculado por el parser en
+// monthly_brand_model_agg. Asi, corregir un segmento a mano se ve reflejado
+// de inmediato aca, sin esperar al proximo /api/sync.
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const slug = searchParams.get("category");
@@ -48,9 +54,23 @@ export async function GET(req: Request) {
     conditions.push(`segmento = ANY($${params.length}::text[])`);
   }
 
+  // CTE "resolved" aplica el override de segmento antes de filtrar/devolver,
+  // para que el filtro de segmento tambien tenga en cuenta las correcciones
+  // manuales (no solo el valor calculado por el parser).
   const rows = await query(
-    `select period, marca, modelo, proveedor, color, segmento, total_fob_dolars, total_unidades, record_count
-     from monthly_brand_model_agg
+    `with resolved as (
+       select
+         agg.category_id, agg.period, agg.marca, agg.modelo, agg.proveedor, agg.color,
+         coalesce(mso.segmento, agg.segmento) as segmento,
+         agg.total_fob_dolars, agg.total_unidades, agg.record_count
+       from monthly_brand_model_agg agg
+       left join model_segmento_override mso
+         on mso.category_id = agg.category_id
+        and mso.marca = agg.marca
+        and mso.modelo = agg.modelo
+     )
+     select period, marca, modelo, proveedor, color, segmento, total_fob_dolars, total_unidades, record_count
+     from resolved
      where ${conditions.join(" and ")}
      order by period asc`,
     params
@@ -72,7 +92,14 @@ export async function GET(req: Request) {
     [categoryId]
   );
   const segmentoOptions = await query<{ segmento: string }>(
-    `select distinct segmento from monthly_brand_model_agg where category_id = $1 order by 1`,
+    `select distinct coalesce(mso.segmento, agg.segmento) as segmento
+     from monthly_brand_model_agg agg
+     left join model_segmento_override mso
+       on mso.category_id = agg.category_id
+      and mso.marca = agg.marca
+      and mso.modelo = agg.modelo
+     where agg.category_id = $1
+     order by 1`,
     [categoryId]
   );
 
