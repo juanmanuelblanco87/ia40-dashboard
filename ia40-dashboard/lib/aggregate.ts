@@ -76,20 +76,22 @@ export async function upsertRawRecords(categoryId: number, categorySlug: string,
 
     let marca: string | null = null;
     let modelo: string | null = null;
+    let color: string | null = null;
     if (parser) {
       const parsed = parser(row);
       if (parsed) {
         marca = parsed.marca;
         modelo = parsed.modelo;
+        color = parsed.color ?? null;
       }
     }
 
     const result = await query(
-      `insert into trade_records (category_id, ncm_code, period, cuit, raw, fob_dolars, marca, modelo, source_hash)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       on conflict (source_hash) do update set marca = excluded.marca, modelo = excluded.modelo
+      `insert into trade_records (category_id, ncm_code, period, cuit, raw, fob_dolars, marca, modelo, color, source_hash)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       on conflict (source_hash) do update set marca = excluded.marca, modelo = excluded.modelo, color = excluded.color
        returning id`,
-      [categoryId, ncmCode, period, cuit, JSON.stringify(row), fob, marca, modelo, hash]
+      [categoryId, ncmCode, period, cuit, JSON.stringify(row), fob, marca, modelo, color, hash]
     );
     inserted += result.length ? 1 : 0;
   }
