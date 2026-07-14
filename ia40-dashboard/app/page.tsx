@@ -127,7 +127,7 @@ function TopCard({ title, lastMonth, last12, last12Label }: {
     <div className="panel" style={{ flex: 1, minWidth: 260 }}>
       <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 14 }}>{title}</h1>
 
-      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, marginBottom: 10 }}>
+      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, marginBottom: 10, minHeight: 132, boxSizing: "border-box" }}>
         <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>FOB USD</div>
         <div style={{ fontSize: 14, marginBottom: 4 }}>
           <span style={{ color: "var(--muted)" }}>Ultimo mes: </span>
@@ -141,7 +141,7 @@ function TopCard({ title, lastMonth, last12, last12Label }: {
         </div>
       </div>
 
-      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12 }}>
+      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, minHeight: 132, boxSizing: "border-box" }}>
         <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>Unidades</div>
         <div style={{ fontSize: 14, marginBottom: 4 }}>
           <span style={{ color: "var(--muted)" }}>Ultimo mes: </span>
@@ -415,7 +415,14 @@ export default function Home() {
 
       <div className="panel">
         {loading ? <p style={{ color: "var(--muted)" }}>Cargando...</p> : (
-          <EvolutionChart data={filteredSeries} groupBy={groupBy} metric={metric} topN={9} onPivotChange={setPivot} />
+          <EvolutionChart
+            data={filteredSeries}
+            groupBy={groupBy}
+            metric={metric}
+            topN={9}
+            pinnedKeys={groupBy === "marca" ? ["Mugi", "Magesa"] : []}
+            onPivotChange={setPivot}
+          />
         )}
       </div>
 
