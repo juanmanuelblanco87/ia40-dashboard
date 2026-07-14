@@ -327,8 +327,9 @@ const SILLAS_COLOR_SORTED = [...SILLAS_COLOR_DICT].sort((a, b) => b[0].length - 
 // Tabla aprendida del dataset de referencia (no dinamica): estos codigos
 // aparecieron junto a una palabra de color conocida en al menos una fila,
 // asi que se puede inferir el color cuando el codigo aparece solo. Un
-// codigo YC que no este en esta tabla se deja sin tocar (Color = "Negro"
-// por defecto, Modelo no se modifica) porque no se conoce el color real.
+// codigo YC que no este en esta tabla igual se separa del Modelo (para que
+// distintas variantes de color del mismo modelo se unifiquen), solo que el
+// Color queda en "Negro" por defecto porque no se conoce el color real.
 const SILLAS_YC_CODE_MAP: Record<string, string> = {
   YCB007: "Azul",
   YC104: "Gris Carbón",
@@ -367,8 +368,9 @@ function sillasExtractColor(modelo: string): { modelo: string; color: string } {
     if (known) {
       return { modelo: ycMatch[1].trim(), color: known };
     }
-    // Codigo no aprendido: no se toca el modelo, color por defecto.
-    return { modelo, color: SILLAS_DEFAULT_COLOR };
+    // Codigo no aprendido: igual se quita del modelo (para unificar), pero
+    // el color queda por defecto porque no sabemos cual es realmente.
+    return { modelo: ycMatch[1].trim(), color: SILLAS_DEFAULT_COLOR };
   }
 
   // Paso 10.3: sin color detectado.
