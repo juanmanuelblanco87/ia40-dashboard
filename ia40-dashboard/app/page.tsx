@@ -499,6 +499,19 @@ function ModelImageModal({
   );
 }
 
+function AppHeader() {
+  return (
+    <header className="app-header">
+      <div className="app-header-inner">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo-icomsalud-teal.png" alt="Icom Salud" style={{ height: 44, width: "auto", flexShrink: 0 }} />
+        <div style={{ width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.25)" }} />
+        <div className="app-header-title">Módulo de Importaciones</div>
+      </div>
+    </header>
+  );
+}
+
 function TopCard({ title, lastMonth, last12, last12Label }: {
   title: string;
   lastMonth: { topFob: TopEntry | null; topUnidades: TopEntry | null };
@@ -723,16 +736,21 @@ export default function Home() {
   const filterFieldStyle: React.CSSProperties = { minWidth: 170, width: 170 };
 
   return (
-    <div className="container">
-      <h1>IA40 — Evolucion mensual por categoria</h1>
-      <h2>Datos sincronizados desde Cobus Group, agregados por marca / modelo / proveedor.</h2>
-      <p style={{ marginTop: -8, marginBottom: 20 }}>
-        <a href="/admin" style={{ color: "var(--accent)" }}>Cargar/editar marcas por importador →</a>
-      </p>
+    <>
+      <AppHeader />
+      <div className="container">
+      <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 14, paddingBottom: 14 }}>
+        <div style={{ fontSize: 13, color: "var(--muted)" }}>
+          🔄 Datos sincronizados desde Cobus Group, agregados por marca / modelo / proveedor.
+        </div>
+        <div style={{ fontSize: 13 }}>
+          <a href="/admin" style={{ color: "var(--accent)", fontWeight: 600 }}>☁️ Cargar/editar marcas por importador →</a>
+        </div>
+      </div>
 
       <div className="panel row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
         <div style={filterFieldStyle}>
-          <label>Categoria</label>
+          <label>🦽 Categoria</label>
           <select
             style={{ width: "100%" }}
             value={slug}
@@ -754,7 +772,7 @@ export default function Home() {
 
         <div style={filterFieldStyle}>
           <MultiSelectDropdown
-            label="Marca"
+            label="🏷️ Marca"
             options={marcaOptions.map((m) => ({ value: m, label: m }))}
             selected={marcas}
             onChange={setMarcas}
@@ -764,7 +782,7 @@ export default function Home() {
 
         <div style={filterFieldStyle}>
           <MultiSelectDropdown
-            label="Importador"
+            label="🚚 Importador"
             options={importerOptions.map((p) => ({ value: p, label: p }))}
             selected={importadores}
             onChange={setImportadores}
@@ -774,7 +792,7 @@ export default function Home() {
 
         <div style={filterFieldStyle}>
           <MultiSelectDropdown
-            label="Modelo"
+            label="📦 Modelo"
             options={modelos.map((m) => ({ value: m, label: m }))}
             selected={modelosSel}
             onChange={setModelosSel}
@@ -784,7 +802,7 @@ export default function Home() {
 
         <div style={filterFieldStyle}>
           <MultiSelectDropdown
-            label="Color"
+            label="🎨 Color"
             options={colorOptions.map((c) => ({ value: c, label: c }))}
             selected={colores}
             onChange={setColores}
@@ -794,7 +812,7 @@ export default function Home() {
 
         <div style={filterFieldStyle}>
           <MultiSelectDropdown
-            label="Segmento"
+            label="🗂️ Segmento"
             options={segmentoOptions.map((s) => ({ value: s, label: s }))}
             selected={segmentos}
             onChange={setSegmentos}
@@ -804,7 +822,7 @@ export default function Home() {
 
         <div style={filterFieldStyle}>
           <MultiSelectDropdown
-            label="Meses"
+            label="🗓️ Meses"
             options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
             selected={meses}
             onChange={setMeses}
@@ -814,7 +832,7 @@ export default function Home() {
         </div>
 
         <div style={filterFieldStyle}>
-          <label>Agrupar por</label>
+          <label>🔀 Agrupar por</label>
           <select style={{ width: "100%" }} value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
             <option value="marca">Marca</option>
             <option value="modelo">Modelo</option>
@@ -822,7 +840,7 @@ export default function Home() {
           </select>
         </div>
         <div style={filterFieldStyle}>
-          <label>Metrica (grafico y tabla)</label>
+          <label>📊 Metrica (grafico y tabla)</label>
           <select style={{ width: "100%" }} value={metric} onChange={(e) => setMetric(e.target.value as any)}>
             <option value="total_fob_dolars">FOB USD</option>
             <option value="total_unidades">Unidades</option>
@@ -831,26 +849,32 @@ export default function Home() {
       </div>
 
       <div className="row" style={{ gap: 16 }}>
-        <div className="panel" style={{ flex: 1, textAlign: "center" }}>
-          <div style={{ color: "var(--muted)", fontSize: 14, marginBottom: 8 }}>
-            Ultimo mes{totals.lastPeriod ? ` (${formatPeriod(totals.lastPeriod)})` : ""}
-          </div>
-          <div style={{ fontSize: 34, fontWeight: 700 }}>
-            {fmtNumber(totals.lastMonth.fob)} <span style={{ fontSize: 16, color: "var(--muted)", fontWeight: 400 }}>USD FOB</span>
-          </div>
-          <div style={{ fontSize: 34, fontWeight: 700, marginTop: 6 }}>
-            {fmtNumber(totals.lastMonth.unidades)} <span style={{ fontSize: 16, color: "var(--muted)", fontWeight: 400 }}>Unidades</span>
+        <div className="panel" style={{ flex: 1, display: "flex", alignItems: "center", gap: 16 }}>
+          <div className="kpi-icon">$</div>
+          <div>
+            <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
+              Ultimo mes{totals.lastPeriod ? ` (${formatPeriod(totals.lastPeriod)})` : ""}
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "var(--accent)" }}>
+              {fmtNumber(totals.lastMonth.fob)} <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 400 }}>USD FOB</span>
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>
+              {fmtNumber(totals.lastMonth.unidades)} <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400 }}>Unidades</span>
+            </div>
           </div>
         </div>
-        <div className="panel" style={{ flex: 1, textAlign: "center" }}>
-          <div style={{ color: "var(--muted)", fontSize: 14, marginBottom: 8 }}>
-            Ultimos {totals.last12Count || 12} meses
-          </div>
-          <div style={{ fontSize: 34, fontWeight: 700 }}>
-            {fmtNumber(totals.last12.fob)} <span style={{ fontSize: 16, color: "var(--muted)", fontWeight: 400 }}>USD FOB</span>
-          </div>
-          <div style={{ fontSize: 34, fontWeight: 700, marginTop: 6 }}>
-            {fmtNumber(totals.last12.unidades)} <span style={{ fontSize: 16, color: "var(--muted)", fontWeight: 400 }}>Unidades</span>
+        <div className="panel" style={{ flex: 1, display: "flex", alignItems: "center", gap: 16 }}>
+          <div className="kpi-icon">📈</div>
+          <div>
+            <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
+              Ultimos {totals.last12Count || 12} meses
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "var(--accent)" }}>
+              {fmtNumber(totals.last12.fob)} <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 400 }}>USD FOB</span>
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>
+              {fmtNumber(totals.last12.unidades)} <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400 }}>Unidades</span>
+            </div>
           </div>
         </div>
       </div>
@@ -956,6 +980,7 @@ export default function Home() {
         Si una categoria no tiene marca/modelo mapeados todavia, esas columnas
         aparecen como "sin_dato" hasta cargar el mapeo en field_mappings.
       </p>
-    </div>
+      </div>
+    </>
   );
 }
