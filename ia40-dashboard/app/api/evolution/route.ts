@@ -3,11 +3,12 @@ import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/evolution?category=sillas_de_ruedas&marca=X&modelo=Y
+// GET /api/evolution?category=sillas_de_ruedas&marca=X&marca=Y&modelo=Z
+// "marca" se puede repetir para filtrar por varias marcas a la vez.
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const slug = searchParams.get("category");
-  const marca = searchParams.get("marca");
+  const marcas = searchParams.getAll("marca").filter(Boolean);
   const modelo = searchParams.get("modelo");
 
   if (!slug) {
@@ -22,9 +23,9 @@ export async function GET(req: Request) {
 
   const conditions = ["category_id = $1"];
   const params: any[] = [categoryId];
-  if (marca) {
-    params.push(marca);
-    conditions.push(`marca = $${params.length}`);
+  if (marcas.length > 0) {
+    params.push(marcas);
+    conditions.push(`marca = ANY($${params.length}::text[])`);
   }
   if (modelo) {
     params.push(modelo);
