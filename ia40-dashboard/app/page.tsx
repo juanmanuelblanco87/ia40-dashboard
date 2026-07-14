@@ -120,6 +120,7 @@ function ShareTable({ title, rows, last12Label }: { title: string; rows: ShareRo
 interface ModelShareRow {
   marca: string;
   modelo: string;
+  segmento: string;
   importador: string;
   fob: number;
   fobPct: number;
@@ -150,6 +151,7 @@ function computeShareByModel(series: SeriesPoint[], periodSet: Set<string> | nul
   interface Acc {
     marca: string;
     modelo: string;
+    segmento: string;
     fob: number;
     uni: number;
     byImporter: Map<string, number>;
@@ -161,10 +163,11 @@ function computeShareByModel(series: SeriesPoint[], periodSet: Set<string> | nul
     if (periodSet && !periodSet.has(s.period)) continue;
     const marca = s.marca ?? "sin_dato";
     const modelo = s.modelo ?? "sin_dato";
+    const segmento = s.segmento ?? "sin_dato";
     const key = modelImageKey(marca, modelo);
     const fob = Number(s.total_fob_dolars) || 0;
     const uni = Number(s.total_unidades) || 0;
-    const cur = totals.get(key) ?? { marca, modelo, fob: 0, uni: 0, byImporter: new Map<string, number>() };
+    const cur = totals.get(key) ?? { marca, modelo, segmento, fob: 0, uni: 0, byImporter: new Map<string, number>() };
     cur.fob += fob;
     cur.uni += uni;
     const prov = s.proveedor ?? "sin_dato";
@@ -186,6 +189,7 @@ function computeShareByModel(series: SeriesPoint[], periodSet: Set<string> | nul
     return {
       marca: v.marca,
       modelo: v.modelo,
+      segmento: v.segmento,
       importador,
       fob: v.fob,
       fobPct: totalFob > 0 ? (v.fob / totalFob) * 100 : 0,
@@ -217,22 +221,25 @@ function ModelShareTable({
   imageStatus: (marca: string, modelo: string) => string;
   onViewImage: (marca: string, modelo: string) => void;
 }) {
+  const cellStyle: React.CSSProperties = { padding: "5px 6px", fontSize: 12.5 };
+  const cellRight: React.CSSProperties = { ...cellStyle, textAlign: "right" };
   return (
     <div className="panel">
       <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>Share por Modelo</h1>
       <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>{last12Label}</div>
       <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
-        <table className="admin-table">
+        <table className="admin-table" style={{ fontSize: 12.5 }}>
           <thead>
             <tr>
-              <th>Modelo</th>
-              <th>Marca</th>
-              <th>Importador</th>
-              <th style={{ textAlign: "right" }}>FOB USD</th>
-              <th style={{ textAlign: "right" }}>FOB %</th>
-              <th style={{ textAlign: "right" }}>Unidades</th>
-              <th style={{ textAlign: "right" }}>Unidades %</th>
-              <th></th>
+              <th style={cellStyle}>Modelo</th>
+              <th style={cellStyle}>Marca</th>
+              <th style={cellStyle}>Segmento</th>
+              <th style={cellStyle}>Importador</th>
+              <th style={cellRight}>FOB USD</th>
+              <th style={cellRight}>FOB %</th>
+              <th style={cellRight}>Unidades</th>
+              <th style={cellRight}>Uds %</th>
+              <th style={cellStyle}></th>
             </tr>
           </thead>
           <tbody>
@@ -240,17 +247,18 @@ function ModelShareTable({
               const status = imageStatus(r.marca, r.modelo);
               return (
                 <tr key={modelImageKey(r.marca, r.modelo)}>
-                  <td>{r.modelo}</td>
-                  <td>{r.marca}</td>
-                  <td>{r.importador}</td>
-                  <td style={{ textAlign: "right" }}>{fmtNumber(r.fob)}</td>
-                  <td style={{ textAlign: "right" }}>{r.fobPct.toFixed(1)}%</td>
-                  <td style={{ textAlign: "right" }}>{fmtNumber(r.unidades)}</td>
-                  <td style={{ textAlign: "right" }}>{r.unidadesPct.toFixed(1)}%</td>
-                  <td>
+                  <td style={cellStyle}>{r.modelo}</td>
+                  <td style={cellStyle}>{r.marca}</td>
+                  <td style={cellStyle}>{r.segmento}</td>
+                  <td style={cellStyle}>{r.importador}</td>
+                  <td style={cellRight}>{fmtNumber(r.fob)}</td>
+                  <td style={cellRight}>{r.fobPct.toFixed(1)}%</td>
+                  <td style={cellRight}>{fmtNumber(r.unidades)}</td>
+                  <td style={cellRight}>{r.unidadesPct.toFixed(1)}%</td>
+                  <td style={cellStyle}>
                     <button
                       onClick={() => onViewImage(r.marca, r.modelo)}
-                      style={{ fontSize: 12, padding: "3px 8px", whiteSpace: "nowrap" }}
+                      style={{ fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap" }}
                     >
                       {IMAGE_BUTTON_LABEL[status] ?? "Pendiente"}
                     </button>
@@ -260,7 +268,7 @@ function ModelShareTable({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ color: "var(--muted)" }}>Sin datos</td>
+                <td colSpan={9} style={{ color: "var(--muted)" }}>Sin datos</td>
               </tr>
             )}
           </tbody>
@@ -434,14 +442,18 @@ export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [slug, setSlug] = useState<string>("");
   const [marcas, setMarcas] = useState<string[]>([]);
-  const [modelo, setModelo] = useState<string>("");
+  const [modelosSel, setModelosSel] = useState<string[]>([]);
   const [importadores, setImportadores] = useState<string[]>([]);
+  const [colores, setColores] = useState<string[]>([]);
+  const [segmentos, setSegmentos] = useState<string[]>([]);
   const [meses, setMeses] = useState<string[]>([]);
   const [groupBy, setGroupBy] = useState<"marca" | "modelo" | "proveedor">("marca");
   const [metric, setMetric] = useState<"total_fob_dolars" | "total_unidades">("total_fob_dolars");
   const [series, setSeries] = useState<SeriesPoint[]>([]);
   const [options, setOptions] = useState<{ marca: string; modelo: string }[]>([]);
   const [importerOptions, setImporterOptions] = useState<string[]>([]);
+  const [colorOptions, setColorOptions] = useState<string[]>([]);
+  const [segmentoOptions, setSegmentoOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [pivot, setPivot] = useState<PivotResult | null>(null);
   const [modelImages, setModelImages] = useState<Map<string, ModelImageEntry>>(new Map());
@@ -462,16 +474,20 @@ export default function Home() {
     const params = new URLSearchParams({ category: slug });
     for (const m of marcas) params.append("marca", m);
     for (const i of importadores) params.append("importador", i);
-    if (modelo) params.set("modelo", modelo);
+    for (const m of modelosSel) params.append("modelo", m);
+    for (const c of colores) params.append("color", c);
+    for (const s2 of segmentos) params.append("segmento", s2);
     fetch(`/api/evolution?${params}`)
       .then((r) => r.json())
       .then((d) => {
         setSeries(d.series ?? []);
         setOptions(d.options ?? []);
         setImporterOptions(d.importerOptions ?? []);
+        setColorOptions(d.colorOptions ?? []);
+        setSegmentoOptions(d.segmentoOptions ?? []);
       })
       .finally(() => setLoading(false));
-  }, [slug, marcas, modelo, importadores]);
+  }, [slug, marcas, modelosSel, importadores, colores, segmentos]);
 
   useEffect(() => {
     if (!slug) return;
@@ -613,7 +629,15 @@ export default function Home() {
           <select
             style={{ width: "100%" }}
             value={slug}
-            onChange={(e) => { setSlug(e.target.value); setMarcas([]); setModelo(""); setMeses([]); setImportadores([]); }}
+            onChange={(e) => {
+              setSlug(e.target.value);
+              setMarcas([]);
+              setModelosSel([]);
+              setMeses([]);
+              setImportadores([]);
+              setColores([]);
+              setSegmentos([]);
+            }}
           >
             {categories.map((c) => (
               <option key={c.slug} value={c.slug}>{c.name}</option>
@@ -642,11 +666,33 @@ export default function Home() {
         </div>
 
         <div style={filterFieldStyle}>
-          <label>Modelo</label>
-          <select style={{ width: "100%" }} value={modelo} onChange={(e) => setModelo(e.target.value)}>
-            <option value="">Todos</option>
-            {modelos.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
+          <MultiSelectDropdown
+            label="Modelo"
+            options={modelos.map((m) => ({ value: m, label: m }))}
+            selected={modelosSel}
+            onChange={setModelosSel}
+            placeholder="Todos"
+          />
+        </div>
+
+        <div style={filterFieldStyle}>
+          <MultiSelectDropdown
+            label="Color"
+            options={colorOptions.map((c) => ({ value: c, label: c }))}
+            selected={colores}
+            onChange={setColores}
+            placeholder="Todos"
+          />
+        </div>
+
+        <div style={filterFieldStyle}>
+          <MultiSelectDropdown
+            label="Segmento"
+            options={segmentoOptions.map((s) => ({ value: s, label: s }))}
+            selected={segmentos}
+            onChange={setSegmentos}
+            placeholder="Todos"
+          />
         </div>
 
         <div style={filterFieldStyle}>
