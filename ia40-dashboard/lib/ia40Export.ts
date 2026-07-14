@@ -176,7 +176,7 @@ async function triggerExport(token: string, p: TriggerExportParams): Promise<Tri
 async function checkNotification(
   token: string,
   notificationId: number
-): Promise<{ state: string; value: string | null }> {
+): Promise<{ state: string; value: string | null; raw: any }> {
   const resp = await fetch(`${BASE_URL}/notification/${notificationId}`, {
     headers: headers(token),
     cache: "no-store",
@@ -187,7 +187,8 @@ async function checkNotification(
   if (!resp.ok) {
     throw new Error(`notification respondio ${resp.status}: ${await resp.text()}`);
   }
-  return resp.json();
+  const json = await resp.json();
+  return { state: json.state, value: json.value ?? null, raw: json };
 }
 
 async function waitForExportFile(
@@ -205,7 +206,12 @@ async function waitForExportFile(
       return status.value;
     }
     if (status.state === "ERROR" || status.state === "FAILED") {
-      throw new Error(`La exportacion en IA40 termino con estado ${status.state}`);
+      // Diagnostico: incluimos la respuesta cruda de la notificacion por si
+      // IA40 mando algun detalle del motivo (campo message/error/etc.), asi
+      // la proxima vez que pase no hay que adivinar.
+      throw new Error(
+        `La exportacion en IA40 termino con estado ${status.state}. Respuesta completa: ${JSON.stringify(status.raw)}`
+      );
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
