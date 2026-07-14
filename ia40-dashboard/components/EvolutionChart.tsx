@@ -83,4 +83,62 @@ function pivot(data: SeriesPoint[], groupBy: Props["groupBy"], metric: Metric, t
 
   const rows = periods.map((period) => {
     const row: Record<string, any> = { period };
-    for (const key of keys) row[key] 
+    for (const key of keys) row[key] = 0;
+    for (const d of data.filter((x) => x.period === period)) {
+      const rawKey = (d[groupBy] ?? "sin_dato") as string;
+      const key = restKeys.has(rawKey) ? OTROS_KEY : rawKey;
+      row[key] = (row[key] ?? 0) + Number(d[metric]);
+    }
+    return row;
+  });
+
+  return { rows, keys, periods };
+}
+
+const COLORS = [
+  "#4f8cff", "#ff8a4f", "#4fffa0", "#ff4f8c", "#c04fff", "#ffd24f",
+  "#4fd7ff", "#ff4f4f", "#8cff4f",
+];
+const OTROS_COLOR = "#6b7280";
+
+export default function EvolutionChart({ data, groupBy, metric, topN = 9, onPivotChange }: Props) {
+  const result = pivot(data, groupBy, metric, topN);
+
+  useEffect(() => {
+    onPivotChange?.(result);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(result.keys), JSON.stringify(result.periods), groupBy, metric]);
+
+  if (data.length === 0) {
+    return <p style={{ color: "var(--muted)" }}>Todavia no hay datos sincronizados para esta seleccion.</p>;
+  }
+
+  const { rows, keys } = result;
+
+  return (
+    <ResponsiveContainer width="100%" height={380}>
+      <LineChart data={rows}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#2a2e37" />
+        <XAxis dataKey="period" stroke="#9aa1ad" tickFormatter={formatPeriod} />
+        <YAxis stroke="#9aa1ad" tickFormatter={(v) => fmtNumber(Number(v))} />
+        <Tooltip
+          contentStyle={{ background: "#171a21", border: "1px solid #2a2e37" }}
+          labelFormatter={(label) => formatPeriod(String(label))}
+          formatter={(value: any) => fmtNumber(Number(value))}
+        />
+        <Legend />
+        {keys.map((key, i) => (
+          <Line
+            key={key}
+            type="monotone"
+            dataKey={key}
+            stroke={key === OTROS_KEY ? OTROS_COLOR : COLORS[i % COLORS.length]}
+            strokeWidth={2}
+            dot={false}
+            strokeDasharray={key === OTROS_KEY ? "4 3" : undefined}
+          />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
