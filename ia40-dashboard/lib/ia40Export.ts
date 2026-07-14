@@ -249,6 +249,16 @@ export async function fetchIa40ExportRows(params: {
   const csvText = await downloadExportFile(downloadUrl);
   const csvRows = parseExportCsv(csvText);
 
+  // Diagnostico temporal: si no se parseo ninguna fila, tiramos un error
+  // con un adelanto del contenido descargado para poder ver en la
+  // respuesta de /api/sync que fue lo que realmente devolvio IA40 (en vez
+  // de fallar en silencio con fetched:0 sin explicacion).
+  if (csvRows.length === 0) {
+    throw new Error(
+      `Export devolvio 0 filas parseadas. downloadUrl=${downloadUrl} | largo del texto descargado=${csvText.length} | primeros 500 caracteres: ${csvText.slice(0, 500)}`
+    );
+  }
+
   return csvRows.map((row) => ({
     nombre: row["RAZÓN SOCIAL"] ?? "",
     cuit: row["CUIT"] ?? null,
