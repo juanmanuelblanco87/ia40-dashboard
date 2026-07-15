@@ -18,13 +18,19 @@ categorías de confianza baja/media queda pendiente (ver sección
 
 | Categoría | Slug propuesto | NCM elegido | Confianza | Alternativas si el elegido no trae datos |
 |---|---|---|---|---|
-| Sillas de Ruedas Eléctricas | `sillas_ruedas_electricas` | **8713.90.00** | Alta | — |
-| Andadores | `andadores` | **9021.10.00** | Media-alta | — |
-| Bastones | `bastones` | **6602.00.00** | Alta | — |
-| Almohadones Ortopédicos | `almohadones_ortopedicos` | **9021.10.00** | Baja | 9404.90.00 |
-| Sillas de Ducha | `sillas_ducha` | **9401.79.00** | Baja | 9401.71.00, 9021.10.00 |
-| Elevadores de Inodoro | `elevadores_inodoro` | **3922.20.00** | Baja | 9021.10.00 |
-| Camas Hospitalarias | `camas_hospitalarias` | **9402.90.20** | Alta (código base) | — |
+| Sillas de Ruedas Eléctricas | `sillas_ruedas_electricas` | **8713.90.00** | Confirmado con sync real (474 filas) | — |
+| Andadores | `andadores` | ~~9021.10.00~~ → **9021.10.10** | Confirmado por el usuario + sync real (2577 filas). 9021.10.00 dio 0 filas. | — |
+| Bastones | `bastones` | **6602.00.00** | Confirmado con sync real (737 filas) | — |
+| Almohadones Ortopédicos | `almohadones_ortopedicos` | ~~9021.10.00~~ → **9404.90.00** | Confirmado con sync real (2300 filas). 9021.10.00 dio 0 filas. | — |
+| Sillas de Ducha | `sillas_ducha` | **9401.79.00** | Confirmado con sync real (3295 filas) | — |
+| Elevadores de Inodoro | `elevadores_inodoro` | **3922.20.00** | Confirmado con sync real (1702 filas) | — |
+| Camas Hospitalarias | `camas_hospitalarias` | **9402.90.20** | Confirmado con sync real (312 filas) | — |
+
+**Actualización 15/07/2026 (post primer sync real):** de los 8 códigos originales, 2 dieron 0 filas
+(Andadores y Almohadones Ortopédicos, ambos con 9021.10.00) y se corrigieron con los códigos de
+arriba (9021.10.10 confirmado por el usuario; 9404.90.00 era la alternativa ya documentada). Los
+otros 6, incluidas las 3 categorías marcadas originalmente "confianza baja" (Sillas de Ducha,
+Elevadores de Inodoro, y Almohadones ya corregido), resultaron correctos con datos reales.
 
 ## Detalle por categoría
 
