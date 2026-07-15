@@ -19,7 +19,14 @@ interface NcmRow {
 function isAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true; // sin secreto configurado, no bloquea (solo para dev local)
-  return req.headers.get("authorization") === `Bearer ${secret}`;
+  if (req.headers.get("authorization") === `Bearer ${secret}`) return true;
+  // Fallback: mismo secreto pero pasado como ?secret=... en la URL. El cron
+  // de Vercel (vercel.json) manda el header Authorization automaticamente,
+  // pero para probar a mano desde el navegador (o desde herramientas sin
+  // soporte de headers custom) no hay forma de mandar un header - por eso
+  // se acepta tambien este query param equivalente.
+  const { searchParams } = new URL(req.url);
+  return searchParams.get("secret") === secret;
 }
 
 function dateRangeLastNMonths(n: number): { start: string; end: string } {
