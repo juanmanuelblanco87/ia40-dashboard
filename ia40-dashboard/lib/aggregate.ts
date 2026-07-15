@@ -60,12 +60,26 @@ function toMonthStart(dateStr: string | null): string | null {
  * si se agrega o mejora un parser mas adelante, con solo re-correr el sync
  * se reclasifican las filas ya guardadas sin duplicarlas.
  */
-export async function upsertRawRecords(categoryId: number, categorySlug: string, ncmCode: string, rows: any[]): Promise<number> {
-  if (rows.length === 0) return 0;
+export interface UpsertResult {
+  inserted: number;
+  /** DIAGNOSTICO TEMPORAL (15/07/2026): cuantos hashes UNICOS hay entre las
+   * filas recibidas, calculado en memoria ANTES de tocar la base. Si esto
+   * es mucho menor a rows.length, IA40 esta mandando filas duplicadas (o
+   * casi identicas) y el ON CONFLICT(source_hash) las esta colapsando todas
+   * en unas pocas filas reales -- explicaria por que "inserted" reporta
+   * miles pero trade_records termina con pocas filas. Sacar una vez
+   * resuelto el misterio. */
+  uniqueHashesInBatch: number;
+}
+
+export async function upsertRawRecords(categoryId: number, categorySlug: string, ncmCode: string, rows: any[]): Promise<UpsertResult> {
+  if (rows.length === 0) return { inserted: 0, uniqueHashesInBatch: 0 };
   const mappings = await getFieldMappings(categoryId);
   const fechaPath = mappingLookup(mappings, "fecha") ?? "fecha";
   const fobPath = mappingLookup(mappings, "fob_dolars") ?? "fob_dolars_item";
   const parser = CATEGORY_PARSERS[categorySlug];
+
+  const hashSet = new Set(rows.map((row) => crypto.createHash("sha256").update(JSON.stringify(row)).digest("hex")));
 
   let inserted = 0;
   for (const row of rows) {
@@ -97,7 +111,7 @@ export async function upsertRawRecords(categoryId: number, categorySlug: string,
     );
     inserted += result.length ? 1 : 0;
   }
-  return inserted;
+  return { inserted, uniqueHashesInBatch: hashSet.size };
 }
 
 /**
