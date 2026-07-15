@@ -40,16 +40,17 @@ export async function GET(req: Request) {
        sum(coalesce(tr.fob_dolars, 0)) as total_fob_dolars,
        count(*) as record_count,
        pbm.marca,
-       pbm.modelo
+       pbm.modelo,
+       pbm.color
      from trade_records tr
      left join provider_brand_map pbm
        on pbm.category_id = tr.category_id
       and pbm.importer_name = tr.raw ->> $2::text
      where tr.category_id = $1
-     -- Agrupar por posicion, no por nombre: "importer_name", "marca" y
-     -- "modelo" tambien son columnas reales de provider_brand_map, y
+     -- Agrupar por posicion, no por nombre: "importer_name", "marca", "modelo"
+     -- y "color" tambien son columnas reales de provider_brand_map, y
      -- Postgres prioriza esa columna sobre el alias del SELECT.
-     group by 1, 4, 5
+     group by 1, 4, 5, 6
      order by total_fob_dolars desc`,
     [categoryId, proveedorPath]
   );
@@ -59,10 +60,13 @@ export async function GET(req: Request) {
 
 /**
  * POST /api/providers
- * Body: { category: string, importer_name: string, marca: string, modelo?: string }
- * Guarda (o actualiza) el mapeo importador -> marca/modelo y recalcula el
- * agregado mensual al instante, para que el dashboard refleje el cambio
- * sin esperar al proximo /api/sync.
+ * Body: { category: string, importer_name: string, marca: string, modelo?: string, color?: string }
+ * Guarda (o actualiza) el mapeo importador -> marca/modelo/color y recalcula
+ * el agregado mensual al instante, para que el dashboard refleje el cambio
+ * sin esperar al proximo /api/sync. Esta es la forma "dinamica" de corregir
+ * una marca o un color que el parser automatico no reconocio (por ejemplo al
+ * sincronizar un mes con datos nuevos): queda guardado en la base y se
+ * re-aplica solo en cada sync futuro, sin tocar codigo.
  */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
@@ -70,6 +74,7 @@ export async function POST(req: Request) {
   const importerName = body?.importer_name;
   const marca = body?.marca;
   const modelo = body?.modelo ?? null;
+  const color = body?.color ?? null;
 
   if (!category || !importerName || !marca) {
     return NextResponse.json(
@@ -84,11 +89,11 @@ export async function POST(req: Request) {
   }
 
   await query(
-    `insert into provider_brand_map (category_id, importer_name, marca, modelo)
-     values ($1, $2, $3, $4)
+    `insert into provider_brand_map (category_id, importer_name, marca, modelo, color)
+     values ($1, $2, $3, $4, $5)
      on conflict (category_id, importer_name)
-     do update set marca = excluded.marca, modelo = excluded.modelo, updated_at = now()`,
-    [categoryId, importerName, marca, modelo]
+     do update set marca = excluded.marca, modelo = excluded.modelo, color = excluded.color, updated_at = now()`,
+    [categoryId, importerName, marca, modelo, color]
   );
 
   await recomputeMonthlyAgg(categoryId);
