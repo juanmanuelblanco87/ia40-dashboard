@@ -70,10 +70,17 @@ export interface UpsertResult {
    * miles pero trade_records termina con pocas filas. Sacar una vez
    * resuelto el misterio. */
   uniqueHashesInBatch: number;
+  /** Los hashes unicos encontrados (maximo 5), para poder buscarlos directo
+   * en trade_records y ver a que categoria/ncm_code le pertenecen HOY. */
+  sampleHashes: string[];
+  /** El primer objeto de fila tal cual llega (post-normalizacion de
+   * fetchIa40ExportRows), para ver si viene realmente vacio/null en todos
+   * lados o si tiene datos reales. */
+  sampleRow: any;
 }
 
 export async function upsertRawRecords(categoryId: number, categorySlug: string, ncmCode: string, rows: any[]): Promise<UpsertResult> {
-  if (rows.length === 0) return { inserted: 0, uniqueHashesInBatch: 0 };
+  if (rows.length === 0) return { inserted: 0, uniqueHashesInBatch: 0, sampleHashes: [], sampleRow: null };
   const mappings = await getFieldMappings(categoryId);
   const fechaPath = mappingLookup(mappings, "fecha") ?? "fecha";
   const fobPath = mappingLookup(mappings, "fob_dolars") ?? "fob_dolars_item";
@@ -111,7 +118,12 @@ export async function upsertRawRecords(categoryId: number, categorySlug: string,
     );
     inserted += result.length ? 1 : 0;
   }
-  return { inserted, uniqueHashesInBatch: hashSet.size };
+  return {
+    inserted,
+    uniqueHashesInBatch: hashSet.size,
+    sampleHashes: Array.from(hashSet).slice(0, 5),
+    sampleRow: rows[0] ?? null,
+  };
 }
 
 /**
