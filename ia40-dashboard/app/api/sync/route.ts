@@ -57,7 +57,22 @@ export async function GET(req: Request) {
   const monthsBack = Number(process.env.SYNC_MONTHS_BACK ?? 24);
   const { start, end } = dateRangeLastNMonths(monthsBack);
 
-  const categories = await query<CategoryRow>(`select id, slug from categories`);
+  // ?category=<slug> -> sincroniza SOLO esa categoria (mas rapido, entra
+  // comodo en el limite de 60s del plan Hobby de Vercel, y sirve para
+  // aislar/diagnosticar una categoria puntual sin esperar a las otras 7).
+  // Sin el parametro, se comporta como siempre (todas las categorias), que
+  // es lo que sigue usando el cron diario de vercel.json.
+  const { searchParams } = new URL(req.url);
+  const onlySlug = searchParams.get("category");
+
+  const categories = onlySlug
+    ? await query<CategoryRow>(`select id, slug from categories where slug = $1`, [onlySlug])
+    : await query<CategoryRow>(`select id, slug from categories`);
+
+  if (onlySlug && categories.length === 0) {
+    return NextResponse.json({ error: `Categoria "${onlySlug}" no encontrada` }, { status: 404 });
+  }
+
   const results: any[] = [];
 
   for (const cat of categories) {
