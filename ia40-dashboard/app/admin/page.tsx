@@ -14,6 +14,7 @@ interface ProviderRow {
   record_count: string;
   marca: string | null;
   modelo: string | null;
+  color: string | null;
 }
 
 interface RecordRow {
@@ -26,6 +27,7 @@ interface RecordRow {
   fob_dolars: string | null;
   marca: string | null;
   modelo: string | null;
+  color: string | null;
 }
 
 export default function AdminPage() {
@@ -34,18 +36,19 @@ export default function AdminPage() {
 
   // --- Clasificacion rapida por importador (todas sus lineas comparten marca/modelo) ---
   const [providers, setProviders] = useState<ProviderRow[]>([]);
-  const [drafts, setDrafts] = useState<Record<string, { marca: string; modelo: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { marca: string; modelo: string; color: string }>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   // --- Clasificacion por linea de detalle (un importador puede tener varias marcas) ---
   const [importerFilter, setImporterFilter] = useState("");
   const [records, setRecords] = useState<RecordRow[]>([]);
-  const [recordDrafts, setRecordDrafts] = useState<Record<number, { marca: string; modelo: string }>>({});
+  const [recordDrafts, setRecordDrafts] = useState<Record<number, { marca: string; modelo: string; color: string }>>({});
   const [savingRecordId, setSavingRecordId] = useState<number | null>(null);
   const [loadingRecords, setLoadingRecords] = useState(false);
   const [bulkMarca, setBulkMarca] = useState("");
   const [bulkModelo, setBulkModelo] = useState("");
+  const [bulkColor, setBulkColor] = useState("");
   const [savingAll, setSavingAll] = useState(false);
 
   useEffect(() => {
@@ -65,9 +68,9 @@ export default function AdminPage() {
       .then((d) => {
         const rows: ProviderRow[] = d.providers ?? [];
         setProviders(rows);
-        const nextDrafts: Record<string, { marca: string; modelo: string }> = {};
+        const nextDrafts: Record<string, { marca: string; modelo: string; color: string }> = {};
         for (const r of rows) {
-          nextDrafts[r.importer_name] = { marca: r.marca ?? "", modelo: r.modelo ?? "" };
+          nextDrafts[r.importer_name] = { marca: r.marca ?? "", modelo: r.modelo ?? "", color: r.color ?? "" };
         }
         setDrafts(nextDrafts);
       })
@@ -98,6 +101,7 @@ export default function AdminPage() {
           importer_name: importerName,
           marca: draft.marca,
           modelo: draft.modelo || null,
+          color: draft.color || null,
         }),
       });
       reloadProviders();
@@ -116,9 +120,9 @@ export default function AdminPage() {
       .then((d) => {
         const rows: RecordRow[] = d.records ?? [];
         setRecords(rows);
-        const nextDrafts: Record<number, { marca: string; modelo: string }> = {};
+        const nextDrafts: Record<number, { marca: string; modelo: string; color: string }> = {};
         for (const r of rows) {
-          nextDrafts[r.id] = { marca: r.marca ?? "", modelo: r.modelo ?? "" };
+          nextDrafts[r.id] = { marca: r.marca ?? "", modelo: r.modelo ?? "", color: r.color ?? "" };
         }
         setRecordDrafts(nextDrafts);
       })
@@ -146,6 +150,7 @@ export default function AdminPage() {
           trade_record_id: id,
           marca: draft.marca,
           modelo: draft.modelo || null,
+          color: draft.color || null,
         }),
       });
       loadRecords(importerFilter);
@@ -162,7 +167,7 @@ export default function AdminPage() {
     setRecordDrafts((d) => {
       const next = { ...d };
       for (const r of records) {
-        next[r.id] = { marca: bulkMarca, modelo: bulkModelo };
+        next[r.id] = { marca: bulkMarca, modelo: bulkModelo, color: bulkColor };
       }
       return next;
     });
@@ -181,6 +186,7 @@ export default function AdminPage() {
             trade_record_id: r.id,
             marca: draft.marca,
             modelo: draft.modelo || null,
+            color: draft.color || null,
           }),
         });
       }
@@ -223,6 +229,7 @@ export default function AdminPage() {
                 <th>Registros</th>
                 <th>Marca</th>
                 <th>Modelo</th>
+                <th>Color</th>
                 <th></th>
                 <th></th>
               </tr>
@@ -262,6 +269,18 @@ export default function AdminPage() {
                     />
                   </td>
                   <td>
+                    <input
+                      value={drafts[p.importer_name]?.color ?? ""}
+                      onChange={(e) =>
+                        setDrafts((d) => ({
+                          ...d,
+                          [p.importer_name]: { ...d[p.importer_name], color: e.target.value },
+                        }))
+                      }
+                      placeholder="Color (opcional)"
+                    />
+                  </td>
+                  <td>
                     <button onClick={() => save(p.importer_name)} disabled={saving === p.importer_name}>
                       {saving === p.importer_name ? "Guardando..." : "Guardar"}
                     </button>
@@ -282,7 +301,7 @@ export default function AdminPage() {
               ))}
               {providers.length === 0 && (
                 <tr>
-                  <td colSpan={7} style={{ color: "var(--muted)" }}>
+                  <td colSpan={8} style={{ color: "var(--muted)" }}>
                     No hay datos todavia para esta categoria. Corre /api/sync primero.
                   </td>
                 </tr>
@@ -319,6 +338,10 @@ export default function AdminPage() {
             <input value={bulkModelo} onChange={(e) => setBulkModelo(e.target.value)} placeholder="Modelo" />
           </div>
           <div>
+            <label>Color (opcional)</label>
+            <input value={bulkColor} onChange={(e) => setBulkColor(e.target.value)} placeholder="Color" />
+          </div>
+          <div>
             <button onClick={applyBulkToDrafts}>Aplicar a todas</button>
           </div>
           <div>
@@ -341,6 +364,7 @@ export default function AdminPage() {
                 <th>FOB (USD)</th>
                 <th>Marca</th>
                 <th>Modelo</th>
+                <th>Color</th>
                 <th></th>
               </tr>
             </thead>
@@ -381,6 +405,18 @@ export default function AdminPage() {
                     />
                   </td>
                   <td>
+                    <input
+                      value={recordDrafts[r.id]?.color ?? ""}
+                      onChange={(e) =>
+                        setRecordDrafts((d) => ({
+                          ...d,
+                          [r.id]: { ...d[r.id], color: e.target.value },
+                        }))
+                      }
+                      placeholder="Color (opcional)"
+                    />
+                  </td>
+                  <td>
                     <button onClick={() => saveRecord(r.id)} disabled={savingRecordId === r.id}>
                       {savingRecordId === r.id ? "..." : "Guardar"}
                     </button>
@@ -389,7 +425,7 @@ export default function AdminPage() {
               ))}
               {records.length === 0 && (
                 <tr>
-                  <td colSpan={8} style={{ color: "var(--muted)" }}>
+                  <td colSpan={9} style={{ color: "var(--muted)" }}>
                     No hay lineas para mostrar.
                   </td>
                 </tr>
