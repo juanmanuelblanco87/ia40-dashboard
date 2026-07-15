@@ -10,6 +10,7 @@
     "sync": "tsx scripts/sync.ts"
   },
   "dependencies": {
+    "jszip": "3.10.1",
     "next": "^14.2.35",
     "pg": "8.12.0",
     "react": "18.3.1",
