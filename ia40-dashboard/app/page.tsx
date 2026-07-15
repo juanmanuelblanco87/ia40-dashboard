@@ -1,8 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import EvolutionChart, { SeriesPoint, PivotResult, formatPeriod, fmtNumber } from "@/components/EvolutionChart";
 import MultiSelectDropdown from "@/components/MultiSelectDropdown";
+
+// Colores fijos por segmento (6 valores posibles, ver SEGMENTO_CHOICES mas
+// abajo), para que el grafico de torta de Share por Segmento sea consistente
+// entre categorias y no dependa del orden en que aparecen los datos.
+const SEGMENTO_COLORS: Record<string, string> = {
+  "Silla Estándar": "#2f6fe0",
+  "Silla Ultra Livianas": "#1f9e63",
+  "Sillas Infantiles": "#e8722f",
+  "Silla Postural": "#9b30d9",
+  "Silla Activa y Deportivas": "#d93a3a",
+  "Silla de Traslado": "#1aa8c9",
+};
+const SEGMENTO_COLOR_FALLBACK = "#8a95a0";
 
 interface Category {
   id: number;
@@ -51,7 +65,7 @@ interface ShareRow {
 function computeShareTable(
   series: SeriesPoint[],
   periodSet: Set<string> | null,
-  dimension: "proveedor" | "marca"
+  dimension: "proveedor" | "marca" | "segmento"
 ): ShareRow[] {
   const totals = new Map<string, { fob: number; uni: number }>();
   let totalFob = 0;
@@ -79,7 +93,17 @@ function computeShareTable(
   return rows;
 }
 
-function ShareTable({ title, rows, last12Label }: { title: string; rows: ShareRow[]; last12Label: string }) {
+function ShareTable({
+  title,
+  rows,
+  last12Label,
+  nameLabel = "Nombre",
+}: {
+  title: string;
+  rows: ShareRow[];
+  last12Label: string;
+  nameLabel?: string;
+}) {
   return (
     <div className="panel" style={{ flex: 1, minWidth: 320 }}>
       <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>{title}</h1>
@@ -88,7 +112,7 @@ function ShareTable({ title, rows, last12Label }: { title: string; rows: ShareRo
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Nombre</th>
+              <th>{nameLabel}</th>
               <th style={{ textAlign: "right" }}>FOB USD</th>
               <th style={{ textAlign: "right" }}>FOB %</th>
               <th style={{ textAlign: "right" }}>Unidades</th>
@@ -113,6 +137,38 @@ function ShareTable({ title, rows, last12Label }: { title: string; rows: ShareRo
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function SegmentoPieChart({ rows, last12Label }: { rows: ShareRow[]; last12Label: string }) {
+  return (
+    <div className="panel" style={{ flex: 1, minWidth: 320 }}>
+      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>Share por Segmento (FOB)</h1>
+      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>{last12Label}</div>
+      {rows.length === 0 ? (
+        <p style={{ color: "var(--muted)" }}>Sin datos.</p>
+      ) : (
+        <ResponsiveContainer width="100%" height={300}>
+          <PieChart>
+            <Pie
+              data={rows}
+              dataKey="fob"
+              nameKey="key"
+              cx="50%"
+              cy="50%"
+              outerRadius={100}
+              label={(entry: any) => `${Number(entry.fobPct ?? 0).toFixed(0)}%`}
+            >
+              {rows.map((r) => (
+                <Cell key={r.key} fill={SEGMENTO_COLORS[r.key] ?? SEGMENTO_COLOR_FALLBACK} />
+              ))}
+            </Pie>
+            <Tooltip formatter={(value: any) => fmtNumber(Number(value))} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+          </PieChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }
@@ -706,6 +762,10 @@ export default function Home() {
     () => computeShareByModel(series, periodInfo.last12Set),
     [series, periodInfo]
   );
+  const shareBySegmento = useMemo(
+    () => computeShareTable(series, periodInfo.last12Set, "segmento"),
+    [series, periodInfo]
+  );
 
   const imageStatusFor = (marca: string, modelo: string) =>
     modelImages.get(modelImageKey(marca, modelo))?.status ?? "pending";
@@ -937,6 +997,19 @@ export default function Home() {
           onOverrideSaved={reloadSeries}
         />
       )}
+
+      <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+        <SegmentoPieChart
+          rows={shareBySegmento}
+          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        />
+        <ShareTable
+          title="Share por Segmento"
+          nameLabel="Segmento"
+          rows={shareBySegmento}
+          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        />
+      </div>
 
       {pivot && pivot.rows.length > 0 && (
         <div className="panel">
