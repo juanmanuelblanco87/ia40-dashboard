@@ -368,6 +368,13 @@ function ModelImageModal({
   const [imageUrlInput, setImageUrlInput] = useState("");
   const [segmentoInput, setSegmentoInput] = useState(segmentoActual);
   const [saving, setSaving] = useState(false);
+  const [imgError, setImgError] = useState(false);
+
+  // Si cambia la imagen (ej. se guarda una correccion nueva), se resetea el
+  // estado de error para volver a intentar cargarla.
+  useEffect(() => {
+    setImgError(false);
+  }, [local?.image_url]);
 
   useEffect(() => {
     setLocal(entry);
@@ -534,11 +541,12 @@ function ModelImageModal({
             proba "Reintentar" mas tarde.
           </p>
         )}
-        {status === "found" && local?.image_url && (
+        {status === "found" && local?.image_url && !imgError && (
           <>
             <img
               src={local.image_url}
               alt={`${marca} ${modelo}`}
+              onError={() => setImgError(true)}
               style={{ maxWidth: "100%", maxHeight: 360, borderRadius: 6 }}
             />
             {local.source_url && (
@@ -549,6 +557,14 @@ function ModelImageModal({
               </p>
             )}
           </>
+        )}
+        {status === "found" && local?.image_url && imgError && (
+          <p style={{ color: "var(--muted)" }}>
+            No se pudo cargar la imagen desde ese link. Probablemente pegaste la URL de la <em>pagina</em> del
+            producto en vez de la URL directa de la imagen (que tiene que terminar en algo como .jpg, .png o
+            .webp). Para conseguirla: abri la pagina del producto, click derecho sobre la imagen y elegi
+            "Copiar direccion de la imagen" (o "Copy image address"), y pega eso con "✎ Corregir".
+          </p>
         )}
       </div>
     </div>
