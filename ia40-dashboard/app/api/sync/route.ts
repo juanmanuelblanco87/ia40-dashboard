@@ -121,7 +121,7 @@ export async function GET(req: Request) {
               })
             ).rows;
 
-        const inserted = await upsertRawRecords(cat.id, cat.slug, ncm_code, rows);
+        const { inserted, uniqueHashesInBatch } = await upsertRawRecords(cat.id, cat.slug, ncm_code, rows);
 
         // DIAGNOSTICO TEMPORAL (15/07/2026): algunas categorias reportan
         // "inserted" en miles pero trade_records termina con 0-1 filas al
@@ -146,6 +146,7 @@ export async function GET(req: Request) {
           ncm_code,
           fetched: rows.length,
           inserted,
+          unique_hashes_in_batch: uniqueHashesInBatch,
           trade_records_total_now: Number(verify[0]?.total ?? 0),
           trade_records_distinct_hash_now: Number(verify[0]?.distinct_hash ?? 0),
         });
