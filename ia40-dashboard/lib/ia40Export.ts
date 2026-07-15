@@ -14,6 +14,7 @@
  *   3. Descargar ese link (CSV plano, sin auth adicional).
  */
 
+import JSZip from "jszip";
 import { query } from "./db";
 
 const BASE_URL = "https://api.cobusgroup.com/api/v1/f";
@@ -218,12 +219,49 @@ async function waitForExportFile(
   throw new Error("Timeout esperando que la exportacion de IA40 termine.");
 }
 
+/**
+ * BUG ENCONTRADO 15/07/2026 (hipotesis del usuario, confirmada por como
+ * encajaba con el sintoma): para exports GRANDES (miles de filas: andadores,
+ * almohadones_ortopedicos, sillas_ducha), IA40 no siempre entrega el archivo
+ * como CSV plano -- a veces lo entrega comprimido en un ZIP (probablemente
+ * quien decide esto es el propio backend de IA40 segun el tamano del
+ * archivo). El codigo anterior asumia siempre texto plano (`resp.text()`) y
+ * trataba de parsearlo directo como CSV: como un ZIP es binario, al
+ * "parsearlo" como CSV daba un header de basura que no calzaba con ninguna
+ * columna esperada ("RAZON SOCIAL", "CUIT", etc.), asi que TODAS las filas
+ * terminaban con los mismos campos vacios/null -- de ahi que
+ * unique_hashes_in_batch diera 1 (todas las filas hasheaban igual, por tener
+ * el mismo contenido vacio) aun con miles de "filas" fantasma detectadas.
+ *
+ * Fix: se descarga como binario, se detecta la firma ZIP ("PK", bytes 50 4B
+ * 03 04) en vez de confiar en el content-type (que puede decir text/csv
+ * igual aunque el contenido real sea un zip), y si es zip se descomprime
+ * con JSZip antes de parsear como CSV.
+ */
 async function downloadExportFile(url: string): Promise<string> {
   const resp = await fetch(url, { cache: "no-store" });
   if (!resp.ok) {
     throw new Error(`No se pudo descargar el archivo de exportacion (${resp.status})`);
   }
-  return resp.text();
+
+  const buffer = Buffer.from(await resp.arrayBuffer());
+
+  const isZip =
+    buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
+
+  if (!isZip) {
+    return buffer.toString("utf-8");
+  }
+
+  const zip = await JSZip.loadAsync(buffer);
+  const fileNames = Object.keys(zip.files).filter((name) => !zip.files[name].dir);
+  if (fileNames.length === 0) {
+    throw new Error("El archivo descargado es un ZIP pero no contiene ningun archivo adentro.");
+  }
+  // Se espera un unico CSV adentro del zip; si hay varios, se prioriza el
+  // que termine en .csv y si no se toma el primero.
+  const csvEntry = fileNames.find((name) => name.toLowerCase().endsWith(".csv")) ?? fileNames[0];
+  return zip.files[csvEntry].async("string");
 }
 
 /**
