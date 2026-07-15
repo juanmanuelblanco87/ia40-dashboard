@@ -104,16 +104,21 @@ export async function upsertRawRecords(categoryId: number, categorySlug: string,
  * Recalcula el agregado mensual por marca/modelo/proveedor para una categoria.
  *
  * "proveedor" = la empresa importadora (campo "nombre" en el JSON crudo de IA40).
- * "marca"/"modelo" se resuelven en este orden de prioridad:
+ * "marca"/"modelo"/"color" se resuelven en este orden de prioridad:
  *
  *   1. `record_brand_map`: correccion manual por LINEA de detalle individual
  *      (un importador puede tener varias marcas, y una marca varios
  *      modelos - se ve en la pantalla /admin, seccion "Lineas de detalle").
  *   2. `provider_brand_map`: correccion manual rapida por importador completo.
- *   3. `trade_records.marca`/`modelo`: lo que calculo automaticamente el
- *      parser de la categoria (ver lib/parsers) a partir del texto de
+ *   3. `trade_records.marca`/`modelo`/`color`: lo que calculo automaticamente
+ *      el parser de la categoria (ver lib/parsers) a partir del texto de
  *      aduana, si la categoria tiene uno registrado.
- *   4. "sin_identificar" si nada de lo anterior aplico.
+ *   4. "sin_identificar" (marca) / "sin_dato" (color) si nada de lo anterior aplico.
+ *
+ * Esto es lo que permite que, cuando aparece una marca o un color nuevo que
+ * el parser no reconoce (por ejemplo al sincronizar un mes nuevo), se pueda
+ * corregir desde /admin sin tocar codigo ni redesplegar: el fix queda en la
+ * base y se re-aplica solo en cada sync futuro.
  *
  * Si el JSON trae marca/modelo directo (field_mappings con target_field
  * 'marca'/'modelo'), esa fuente tiene prioridad sobre todo lo demas.
@@ -142,7 +147,7 @@ export async function recomputeMonthlyAgg(categoryId: number): Promise<void> {
          else tr.raw ->> $3::text
        end as modelo,
        coalesce(tr.raw ->> $4::text, 'sin_dato') as proveedor,
-       coalesce(tr.color, 'sin_dato') as color,
+       coalesce(rbm.color, pbm.color, tr.color, 'sin_dato') as color,
        coalesce(tr.segmento, 'sin_dato') as segmento,
        sum(coalesce(tr.fob_dolars, 0)) as total_fob_dolars,
        sum(coalesce(nullif(tr.raw ->> $5::text, '')::numeric, 0)) as total_unidades,
