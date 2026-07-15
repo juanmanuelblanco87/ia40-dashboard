@@ -287,6 +287,41 @@ function parseArgNumber(v: string | undefined): number | null {
 }
 
 /**
+ * Convierte los campos numericos de montos de la exportacion de IA40
+ * ("SUB ITEMS - FOB U$S", "SUB ITEMS - CANTIDAD", "SUB ITEMS - P.U. U$S")
+ * soportando los dos formatos que en la practica manda IA40:
+ *   - Formato argentino: "." = miles, "," = decimal (ej. "11.748,24").
+ *   - Formato plano: "." = decimal, SIN separador de miles (ej. "2623.68",
+ *     o "10870.2" cuando el centavo termina en 0 y IA40 recorta el cero).
+ * Si el string trae coma, se asume formato argentino. Si no trae coma pero
+ * si trae punto, se asume que el punto es el separador decimal (no de
+ * miles) y se parsea directo.
+ *
+ * BUG HISTORICO (encontrado 15/07/2026): "SUB ITEMS - FOB U$S" viene
+ * siempre en formato plano (sin coma), pero se parseaba con
+ * parseArgNumber, que le borraba el punto pensando que era separador de
+ * miles: "2623.68" -> "262368" (x100 de mas) o "10870.2" -> "108702" (x10
+ * de mas, cuando quedaba un solo decimal por el cero recortado). Esto
+ * inflaba el FOB guardado en trade_records entre 10x y 100x segun la
+ * cantidad de decimales del valor real. Confirmado comparando trade_records
+ * contra datos crudos de aduana para KI Mobility / FOCUS CR. Ver migracion
+ * de recalculo (fix_fob_inflado.sql) para los datos ya sincronizados antes
+ * de este fix.
+ */
+function parseMoneyOrPlain(v: string | undefined): number | null {
+  if (!v) return null;
+  const trimmed = v.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes(",")) {
+    return parseArgNumber(trimmed);
+  }
+  const cleaned = trimmed.replace(/[^0-9.\-]/g, "");
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+/**
  * Pide la exportacion completa (con Sufijos) para un rango de fechas +
  * filtro de posicion arancelaria, espera a que termine, la descarga, y
  * devuelve filas normalizadas con las MISMAS claves que ya usa el resto
@@ -337,9 +372,9 @@ export async function fetchIa40ExportRows(params: {
     aduana_desc: row["ADUANA"] ?? null,
     posicion_arancelaria: row["POSICIÓN ARANCELARIA"] ?? null,
     posicion_descripcion: row["DESCRIPCIÓN DE LA POSICIÓN"] ?? null,
-    fob_dolars_item: parseArgNumber(row["SUB ITEMS - FOB U$S"]),
-    cant_decla_item: parseArgNumber(row["SUB ITEMS - CANTIDAD"]),
-    precio_unitario: parseArgNumber(row["SUB ITEMS - P.U. U$S"]),
+    fob_dolars_item: parseMoneyOrPlain(row["SUB ITEMS - FOB U$S"]),
+    cant_decla_item: parseMoneyOrPlain(row["SUB ITEMS - CANTIDAD"]),
+    precio_unitario: parseMoneyOrPlain(row["SUB ITEMS - P.U. U$S"]),
     sufijos: row["SUB ITEMS - SUFIJOS"] ?? "",
   }));
 }
