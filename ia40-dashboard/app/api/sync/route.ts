@@ -101,13 +101,32 @@ export async function GET(req: Request) {
 
         const inserted = await upsertRawRecords(cat.id, cat.slug, ncm_code, rows);
 
+        // DIAGNOSTICO TEMPORAL (15/07/2026): algunas categorias reportan
+        // "inserted" en miles pero trade_records termina con 0-1 filas al
+        // consultarlo despues desde afuera. Este count corre en la MISMA
+        // conexion/request, inmediatamente despues del upsert, para saber
+        // si el dato esta ahi en el momento mismo de escribirlo o si nunca
+        // llego a persistir. Sacar una vez resuelto el misterio.
+        const verify = await query<{ total: string; distinct_hash: string }>(
+          `select count(*) as total, count(distinct source_hash) as distinct_hash
+           from trade_records where category_id = $1`,
+          [cat.id]
+        );
+
         await query(
           `insert into sync_runs (category_id, ncm_code, period_start, period_end, rows_ingested, status)
            values ($1, $2, $3, $4, $5, 'ok')`,
           [cat.id, ncm_code, start, end, inserted]
         );
 
-        results.push({ category: cat.slug, ncm_code, fetched: rows.length, inserted });
+        results.push({
+          category: cat.slug,
+          ncm_code,
+          fetched: rows.length,
+          inserted,
+          trade_records_total_now: Number(verify[0]?.total ?? 0),
+          trade_records_distinct_hash_now: Number(verify[0]?.distinct_hash ?? 0),
+        });
       } catch (err: any) {
         const status =
           err instanceof Ia40AuthError || err instanceof Ia40ExportAuthError ? "auth_error" : "error";
