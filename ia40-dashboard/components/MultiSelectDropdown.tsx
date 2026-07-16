@@ -69,7 +69,7 @@ export default function MultiSelectDropdown({
       : `${selected.length} seleccionadas`;
 
   return (
-    <div ref={ref} style={{ position: "relative", minWidth: 180 }}>
+    <div ref={ref} style={{ position: "relative", minWidth: 0, width: "100%" }}>
       <label>{label}</label>
       <button
         type="button"
@@ -95,7 +95,8 @@ export default function MultiSelectDropdown({
             left: 0,
             zIndex: 30,
             marginTop: 4,
-            width: 260,
+            width: "max(100%, 220px)",
+            maxWidth: "calc(100vw - 32px)",
             maxHeight: 320,
             overflowY: "auto",
             background: "var(--panel, #171a21)",
