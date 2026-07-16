@@ -42,10 +42,11 @@ export interface UpsertResult {
   uniqueHashesInBatch: number;
   sampleHashes: string[];
   sampleRow: any;
+  skippedSinFecha: number;
 }
 
 export async function upsertRawRecords(categoryId: number, categorySlug: string, ncmCode: string, rows: any[]): Promise<UpsertResult> {
-  if (rows.length === 0) return { inserted: 0, uniqueHashesInBatch: 0, sampleHashes: [], sampleRow: null };
+  if (rows.length === 0) return { inserted: 0, uniqueHashesInBatch: 0, sampleHashes: [], sampleRow: null, skippedSinFecha: 0 };
   const mappings = await getFieldMappings(categoryId);
   const fechaPath = mappingLookup(mappings, "fecha") ?? "fecha";
   const fobPath = mappingLookup(mappings, "fob_dolars") ?? "fob_dolars_item";
@@ -54,9 +55,14 @@ export async function upsertRawRecords(categoryId: number, categorySlug: string,
   const hashSet = new Set(rows.map((row) => crypto.createHash("sha256").update(JSON.stringify(row)).digest("hex")));
 
   let inserted = 0;
+  let skippedSinFecha = 0;
   for (const row of rows) {
     const hash = crypto.createHash("sha256").update(JSON.stringify(row)).digest("hex");
-    const period = toMonthStart(extract(row, fechaPath)) ?? new Date().toISOString().slice(0, 7) + "-01";
+    const period = toMonthStart(extract(row, fechaPath));
+    if (!period) {
+      skippedSinFecha++;
+      continue;
+    }
     const fob = Number(extract(row, fobPath)) || null;
     const cuit = row.cuit ?? null;
 
@@ -98,6 +104,7 @@ export async function upsertRawRecords(categoryId: number, categorySlug: string,
     uniqueHashesInBatch: hashSet.size,
     sampleHashes: Array.from(hashSet).slice(0, 5),
     sampleRow: rows[0] ?? null,
+    skippedSinFecha,
   };
 }
 
@@ -114,7 +121,7 @@ export async function upsertPreParsedRecords(
   ncmCode: string,
   items: PreParsedRow[]
 ): Promise<UpsertResult> {
-  if (items.length === 0) return { inserted: 0, uniqueHashesInBatch: 0, sampleHashes: [], sampleRow: null };
+  if (items.length === 0) return { inserted: 0, uniqueHashesInBatch: 0, sampleHashes: [], sampleRow: null, skippedSinFecha: 0 };
   const mappings = await getFieldMappings(categoryId);
   const fechaPath = mappingLookup(mappings, "fecha") ?? "fecha";
   const fobPath = mappingLookup(mappings, "fob_dolars") ?? "fob_dolars_item";
@@ -122,9 +129,14 @@ export async function upsertPreParsedRecords(
   const hashSet = new Set(items.map((it) => crypto.createHash("sha256").update(JSON.stringify(it.row)).digest("hex")));
 
   let inserted = 0;
+  let skippedSinFecha = 0;
   for (const { row, marca, modelo, color, segmento } of items) {
     const hash = crypto.createHash("sha256").update(JSON.stringify(row)).digest("hex");
-    const period = toMonthStart(extract(row, fechaPath)) ?? new Date().toISOString().slice(0, 7) + "-01";
+    const period = toMonthStart(extract(row, fechaPath));
+    if (!period) {
+      skippedSinFecha++;
+      continue;
+    }
     const fob = Number(extract(row, fobPath)) || null;
     const cuit = row.cuit ?? null;
 
@@ -152,6 +164,7 @@ export async function upsertPreParsedRecords(
     uniqueHashesInBatch: hashSet.size,
     sampleHashes: Array.from(hashSet).slice(0, 5),
     sampleRow: items[0]?.row ?? null,
+    skippedSinFecha,
   };
 }
 
