@@ -6,7 +6,7 @@ import { upsertRawRecords, upsertPreParsedRecords, recomputeMonthlyAgg } from "@
 import { categoryUsesExportFlow, parseOrtopedia9021Row, ORTOPEDIA_9021_NCM, ORTOPEDIA_9021_CATEGORY_SLUGS } from "@/lib/parsers";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 300; // requiere plan Pro para superar 60s
 
 interface CategoryRow {
   id: number;
@@ -18,24 +18,36 @@ interface NcmRow {
 
 function isAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return true;
+  if (!secret) return true; // sin secreto configurado, no bloquea (solo para dev local)
   if (req.headers.get("authorization") === `Bearer ${secret}`) return true;
+  // Fallback: mismo secreto pero pasado como ?secret=... en la URL. El cron
+  // de Vercel (vercel.json) manda el header Authorization automaticamente,
+  // pero para probar a mano desde el navegador (o desde herramientas sin
+  // soporte de headers custom) no hay forma de mandar un header - por eso
+  // se acepta tambien este query param equivalente.
   const { searchParams } = new URL(req.url);
   return searchParams.get("secret") === secret;
 }
 
 function dateRangeLastNMonths(n: number): { start: string; end: string } {
+  // Los datos de aduana tienen retraso de carga: el mes recien terminado
+  // todavia no esta completo hasta pasados unos ~15 dias del mes siguiente.
+  // Por eso el mes anterior NO se usa como fin del rango si todavia estamos
+  // dentro de esa ventana de gracia; en ese caso se salta un mes mas atras.
+  // Configurable por si el retraso real de Cobus resulta ser mayor o menor.
   const graceDays = Number(process.env.SYNC_DATA_LAG_DAYS ?? 15);
 
   const now = new Date();
-  let refMonth = now.getMonth();
+  let refMonth = now.getMonth(); // mes actual (0-indexado)
   const refYear = now.getFullYear();
 
   if (now.getDate() <= graceDays) {
+    // Todavia dentro de la ventana de gracia del mes actual -> el mes
+    // anterior tampoco esta completo, se retrocede un mes mas.
     refMonth -= 1;
   }
 
-  const end = new Date(refYear, refMonth, 0);
+  const end = new Date(refYear, refMonth, 0); // dia 0 = ultimo dia del mes anterior a refMonth
   const start = new Date(end.getFullYear(), end.getMonth() - (n - 1), 1);
 
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
@@ -47,9 +59,16 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // Minimo 24 meses de historial (pedido del negocio). Se puede pisar con
+  // la variable de entorno SYNC_MONTHS_BACK si hiciera falta mas o menos.
   const monthsBack = Number(process.env.SYNC_MONTHS_BACK ?? 24);
   const { start, end } = dateRangeLastNMonths(monthsBack);
 
+  // ?category=<slug> -> sincroniza SOLO esa categoria (mas rapido, entra
+  // comodo en el limite de 60s del plan Hobby de Vercel, y sirve para
+  // aislar/diagnosticar una categoria puntual sin esperar a las otras 7).
+  // Sin el parametro, se comporta como siempre (todas las categorias), que
+  // es lo que sigue usando el cron diario de vercel.json.
   const { searchParams } = new URL(req.url);
   const onlySlug = searchParams.get("category");
 
@@ -108,7 +127,7 @@ export async function GET(req: Request) {
 
       for (const cat of sharedOrtopediaCats) {
         const items = buckets[cat.slug] ?? [];
-        const { inserted, uniqueHashesInBatch, sampleHashes, sampleRow } = await upsertPreParsedRecords(
+        const { inserted, uniqueHashesInBatch, sampleHashes, sampleRow, skippedSinFecha } = await upsertPreParsedRecords(
           cat.id,
           ORTOPEDIA_9021_NCM,
           items
@@ -133,6 +152,7 @@ export async function GET(req: Request) {
           fetched_para_esta_categoria: items.length,
           descartadas_otras_categorias: descartadas,
           inserted,
+          skipped_sin_fecha: skippedSinFecha,
           unique_hashes_in_batch: uniqueHashesInBatch,
           sample_hashes: sampleHashes,
           sample_row: sampleRow,
@@ -172,6 +192,10 @@ export async function GET(req: Request) {
 
     for (const { ncm_code } of ncmCodes) {
       try {
+        // Las categorias con parser registrado (ver lib/parsers) necesitan
+        // el flujo de EXPORTACION de IA40, que es el unico que trae la
+        // columna "SUB ITEMS - SUFIJOS" (marca/modelo). Las demas siguen
+        // usando /data como hasta ahora.
         const rows = useExportFlow
           ? await fetchIa40ExportRows({
               countryCodi: "ARG",
@@ -192,8 +216,14 @@ export async function GET(req: Request) {
               })
             ).rows;
 
-        const { inserted, uniqueHashesInBatch, sampleHashes, sampleRow } = await upsertRawRecords(cat.id, cat.slug, ncm_code, rows);
+        const { inserted, uniqueHashesInBatch, sampleHashes, sampleRow, skippedSinFecha } = await upsertRawRecords(cat.id, cat.slug, ncm_code, rows);
 
+        // DIAGNOSTICO TEMPORAL (15/07/2026): algunas categorias reportan
+        // "inserted" en miles pero trade_records termina con 0-1 filas al
+        // consultarlo despues desde afuera. Este count corre en la MISMA
+        // conexion/request, inmediatamente despues del upsert, para saber
+        // si el dato esta ahi en el momento mismo de escribirlo o si nunca
+        // llego a persistir. Sacar una vez resuelto el misterio.
         const verify = await query<{ total: string; distinct_hash: string }>(
           `select count(*) as total, count(distinct source_hash) as distinct_hash
            from trade_records where category_id = $1`,
@@ -211,6 +241,7 @@ export async function GET(req: Request) {
           ncm_code,
           fetched: rows.length,
           inserted,
+          skipped_sin_fecha: skippedSinFecha,
           unique_hashes_in_batch: uniqueHashesInBatch,
           sample_hashes: sampleHashes,
           sample_row: sampleRow,
