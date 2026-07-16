@@ -156,7 +156,7 @@ export default function EvolutionChart({ data, groupBy, metric, topN = 9, pinned
   const { rows, keys } = result;
 
   return (
-    <ResponsiveContainer width="100%" height={380}>
+    <ResponsiveContainer width="100%" height="100%">
       <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e1e8e5" />
         <XAxis dataKey="period" stroke="#6d7e79" tickFormatter={formatPeriod} tick={{ fontSize: 10 }} />
