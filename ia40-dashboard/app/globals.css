@@ -16,7 +16,12 @@ body {
   color: var(--text);
   font-family: "Poppins", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
 }
-.container { max-width: 1180px; margin: 0 auto; padding: 0 24px 40px; }
+/* max-width fluido: en pantallas normales se comporta como el 1180px fijo de
+   siempre (min(1180px, 96vw) da 1180px apenas la ventana supera ~1230px),
+   pero en monitores/tablets anchos (pantallas "apaisadas") crece con la
+   ventana en vez de dejar franjas vacias a los costados. Tope en 1600px
+   para que el texto no quede demasiado estirado en monitores gigantes. */
+.container { max-width: min(1600px, 96vw); margin: 0 auto; padding: 0 24px 40px; }
 
 .app-header {
   background: var(--header-bg);
@@ -24,7 +29,7 @@ body {
   margin-bottom: 24px;
 }
 .app-header-inner {
-  max-width: 1180px;
+  max-width: min(1600px, 96vw);
   margin: 0 auto;
   width: 100%;
   display: flex;
@@ -149,6 +154,18 @@ label {
     flex: 1 1 45%;
     width: auto;
     min-width: 140px;
+  }
+}
+
+/* Pantallas muy anchas (monitores grandes, tablets/notebooks apaisadas):
+   dejar que los campos de filtro crezcan un poco para repartir el ancho
+   extra en vez de quedar todos pegados a la izquierda con hueco a la
+   derecha. Tope en 260px para que no queden gigantes. */
+@media (min-width: 1400px) {
+  .filter-field {
+    flex: 1 1 170px;
+    width: auto;
+    max-width: 260px;
   }
 }
 
