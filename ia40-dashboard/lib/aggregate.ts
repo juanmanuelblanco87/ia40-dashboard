@@ -77,7 +77,17 @@ export async function upsertRawRecords(categoryId: number, categorySlug: string,
     const result = await query(
       `insert into trade_records (category_id, ncm_code, period, cuit, raw, fob_dolars, marca, modelo, color, segmento, source_hash)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       on conflict (source_hash) do update set marca = excluded.marca, modelo = excluded.modelo, color = excluded.color, segmento = excluded.segmento
+       on conflict (source_hash) do update set
+         category_id = excluded.category_id,
+         ncm_code = excluded.ncm_code,
+         period = excluded.period,
+         cuit = excluded.cuit,
+         raw = excluded.raw,
+         fob_dolars = excluded.fob_dolars,
+         marca = excluded.marca,
+         modelo = excluded.modelo,
+         color = excluded.color,
+         segmento = excluded.segmento
        returning id`,
       [categoryId, ncmCode, period, cuit, JSON.stringify(row), fob, marca, modelo, color, segmento, hash]
     );
@@ -99,12 +109,6 @@ export interface PreParsedRow {
   segmento: string;
 }
 
-/**
- * Variante de upsertRawRecords para el caso especial del NCM 9021.10.10
- * (ver lib/parsers/index.ts, parseOrtopedia9021Row): un solo NCM se reparte
- * en varias categorias segun marca/descripcion, asi que marca/modelo/color/
- * segmento ya vienen calculados de antemano por fila.
- */
 export async function upsertPreParsedRecords(
   categoryId: number,
   ncmCode: string,
@@ -127,7 +131,17 @@ export async function upsertPreParsedRecords(
     const result = await query(
       `insert into trade_records (category_id, ncm_code, period, cuit, raw, fob_dolars, marca, modelo, color, segmento, source_hash)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       on conflict (source_hash) do update set marca = excluded.marca, modelo = excluded.modelo, color = excluded.color, segmento = excluded.segmento
+       on conflict (source_hash) do update set
+         category_id = excluded.category_id,
+         ncm_code = excluded.ncm_code,
+         period = excluded.period,
+         cuit = excluded.cuit,
+         raw = excluded.raw,
+         fob_dolars = excluded.fob_dolars,
+         marca = excluded.marca,
+         modelo = excluded.modelo,
+         color = excluded.color,
+         segmento = excluded.segmento
        returning id`,
       [categoryId, ncmCode, period, cuit, JSON.stringify(row), fob, marca, modelo, color, segmento, hash]
     );
