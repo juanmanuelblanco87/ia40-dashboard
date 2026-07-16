@@ -105,10 +105,10 @@ function ShareTable({
   nameLabel?: string;
 }) {
   return (
-    <div className="panel" style={{ flex: 1, minWidth: 320 }}>
+    <div className="panel">
       <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>{title}</h1>
       <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>{last12Label}</div>
-      <div style={{ overflowX: "auto", maxHeight: 360, overflowY: "auto" }}>
+      <div className="table-scroll" style={{ maxHeight: 360, overflowY: "auto" }}>
         <table className="admin-table">
           <thead>
             <tr>
@@ -143,13 +143,14 @@ function ShareTable({
 
 function SegmentoPieChart({ rows, last12Label }: { rows: ShareRow[]; last12Label: string }) {
   return (
-    <div className="panel" style={{ flex: 1, minWidth: 320 }}>
+    <div className="panel">
       <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>Share por Segmento (FOB)</h1>
       <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>{last12Label}</div>
       {rows.length === 0 ? (
         <p style={{ color: "var(--muted)" }}>Sin datos.</p>
       ) : (
-        <ResponsiveContainer width="100%" height={300}>
+        <div className="pie-wrap">
+        <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
               data={rows}
@@ -168,6 +169,7 @@ function SegmentoPieChart({ rows, last12Label }: { rows: ShareRow[]; last12Label
             <Legend wrapperStyle={{ fontSize: 11 }} />
           </PieChart>
         </ResponsiveContainer>
+        </div>
       )}
     </div>
   );
@@ -481,9 +483,9 @@ function ModelImageModal({
           textAlign: "center",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
           <strong style={{ fontSize: 15 }}>{marca} — {modelo}</strong>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {!editing && (
               <button onClick={startEditing} title="Corregir imagen o segmento" style={{ padding: "4px 10px", fontSize: 13 }}>
                 ✎ Corregir
@@ -576,7 +578,7 @@ function AppHeader() {
     <header className="app-header">
       <div className="app-header-inner">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo-icomsalud-teal.png" alt="Icom Salud" style={{ height: 66, width: "auto", flexShrink: 0 }} />
+        <img src="/logo-icomsalud-teal.png" alt="Icom Salud" className="app-header-logo" />
         <div style={{ width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.25)" }} />
         <div className="app-header-title">Módulo de Importaciones</div>
       </div>
@@ -591,7 +593,7 @@ function TopCard({ title, lastMonth, last12, last12Label }: {
   last12Label: string;
 }) {
   return (
-    <div className="panel" style={{ flex: 1, minWidth: 260 }}>
+    <div className="panel">
       <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 14 }}>{title}</h1>
 
       <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, marginBottom: 10, minHeight: 132, boxSizing: "border-box" }}>
@@ -809,8 +811,6 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
-  const filterFieldStyle: React.CSSProperties = { minWidth: 170, width: 170 };
-
   return (
     <>
       <AppHeader />
@@ -825,7 +825,7 @@ export default function Home() {
       </div>
 
       <div className="panel row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <label>🦽 Categoria</label>
           <select
             style={{ width: "100%" }}
@@ -846,7 +846,7 @@ export default function Home() {
           </select>
         </div>
 
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <MultiSelectDropdown
             label="🏷️ Marca"
             options={marcaOptions.map((m) => ({ value: m, label: m }))}
@@ -856,7 +856,7 @@ export default function Home() {
           />
         </div>
 
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <MultiSelectDropdown
             label="🚚 Importador"
             options={importerOptions.map((p) => ({ value: p, label: p }))}
@@ -866,7 +866,7 @@ export default function Home() {
           />
         </div>
 
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <MultiSelectDropdown
             label="📦 Modelo"
             options={modelos.map((m) => ({ value: m, label: m }))}
@@ -876,7 +876,7 @@ export default function Home() {
           />
         </div>
 
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <MultiSelectDropdown
             label="🎨 Color"
             options={colorOptions.map((c) => ({ value: c, label: c }))}
@@ -886,7 +886,7 @@ export default function Home() {
           />
         </div>
 
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <MultiSelectDropdown
             label="🗂️ Segmento"
             options={segmentoOptions.map((s) => ({ value: s, label: s }))}
@@ -896,7 +896,7 @@ export default function Home() {
           />
         </div>
 
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <MultiSelectDropdown
             label="🗓️ Meses"
             options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
@@ -907,7 +907,7 @@ export default function Home() {
           />
         </div>
 
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <label>🔀 Agrupar por</label>
           <select style={{ width: "100%" }} value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
             <option value="marca">Marca</option>
@@ -915,7 +915,7 @@ export default function Home() {
             <option value="proveedor">Proveedor</option>
           </select>
         </div>
-        <div style={filterFieldStyle}>
+        <div className="filter-field">
           <label>📊 Metrica</label>
           <select style={{ width: "100%" }} value={metric} onChange={(e) => setMetric(e.target.value as any)}>
             <option value="total_fob_dolars">FOB USD</option>
@@ -924,8 +924,8 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="row" style={{ gap: 16 }}>
-        <div className="panel" style={{ flex: 1, display: "flex", alignItems: "center", gap: 16 }}>
+      <div className="kpi-row">
+        <div className="panel" style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <div className="kpi-icon">📅</div>
           <div>
             <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
@@ -939,7 +939,7 @@ export default function Home() {
             </div>
           </div>
         </div>
-        <div className="panel" style={{ flex: 1, display: "flex", alignItems: "center", gap: 16 }}>
+        <div className="panel" style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <div className="kpi-icon">🗓️</div>
           <div>
             <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
@@ -955,7 +955,7 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+      <div className="stack-row">
         <TopCard title="Top Importador" lastMonth={topImporter.lastMonth} last12={topImporter.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
         <TopCard title="Top Marca" lastMonth={topBrand.lastMonth} last12={topBrand.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
         <TopCard title="Top Modelo" lastMonth={topModel.lastMonth} last12={topModel.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
@@ -963,18 +963,20 @@ export default function Home() {
 
       <div className="panel">
         {loading ? <p style={{ color: "var(--muted)" }}>Cargando...</p> : (
-          <EvolutionChart
-            data={filteredSeries}
-            groupBy={groupBy}
-            metric={metric}
-            topN={9}
-            pinnedKeys={groupBy === "marca" ? ["Mugi", "Magesa"] : []}
-            onPivotChange={setPivot}
-          />
+          <div className="chart-wrap">
+            <EvolutionChart
+              data={filteredSeries}
+              groupBy={groupBy}
+              metric={metric}
+              topN={9}
+              pinnedKeys={groupBy === "marca" ? ["Mugi", "Magesa"] : []}
+              onPivotChange={setPivot}
+            />
+          </div>
         )}
       </div>
 
-      <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+      <div className="stack-row">
         <ShareTable
           title="Share por Importador"
           rows={shareByImporter}
@@ -1014,7 +1016,7 @@ export default function Home() {
         />
       )}
 
-      <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+      <div className="stack-row">
         <SegmentoPieChart
           rows={shareBySegmento}
           last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
