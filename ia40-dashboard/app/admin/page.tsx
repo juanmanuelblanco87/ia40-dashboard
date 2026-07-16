@@ -221,6 +221,7 @@ export default function AdminPage() {
         {loading ? (
           <p style={{ color: "var(--muted)" }}>Cargando...</p>
         ) : (
+          <div className="table-scroll">
           <table className="admin-table">
             <thead>
               <tr>
@@ -308,6 +309,7 @@ export default function AdminPage() {
               )}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
@@ -354,6 +356,7 @@ export default function AdminPage() {
         {loadingRecords ? (
           <p style={{ color: "var(--muted)" }}>Cargando...</p>
         ) : (
+          <div className="table-scroll">
           <table className="admin-table">
             <thead>
               <tr>
@@ -432,6 +435,7 @@ export default function AdminPage() {
               )}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>
