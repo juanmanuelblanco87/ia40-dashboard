@@ -240,9 +240,6 @@ const COLOR_DICT: [string, string][] = [
 ];
 
 // ---- codigos de color "YC" (marca Magesa, series YK90xx) ----
-// Especifico de sillas de ruedas: tabla aprendida del dataset de esa
-// categoria, no se reutiliza por defecto en las categorias nuevas (se pasa
-// explicitamente en la config de "sillas_de_ruedas" mas abajo).
 const SILLAS_YC_CODE_MAP: Record<string, string> = {
   YCB007: "Azul",
   YC104: "Gris Carbón",
@@ -262,36 +259,19 @@ function titleCase(word: string): string {
 // ============================================================
 
 interface CategoryParserConfig {
-  /** Diccionario multi-palabra de marca. Por defecto: BRAND_MULTI_WORD_DICT (compartido). */
   multiWordDict?: [string, string][];
-  /** Marca de una sola palabra. Por defecto: BRAND_SINGLE_WORD_OVERRIDE (compartido). */
   singleWordOverride?: Record<string, string>;
-  /** Typos conocidos en la primera palabra. Por defecto: BRAND_TYPO_FIXES (compartido). */
   typoFixes?: Record<string, string>;
-  /** Palabras vacias societarias para el fallback por Razon Social. Por defecto: SOCIETARY_STOPWORDS (compartido). */
   societaryStopwords?: Set<string>;
-  /** Diccionario de colores. Por defecto: COLOR_DICT (compartido). */
   colorDict?: [string, string][];
-  /** Codigos "YC<n>" -> color canonico (especifico de sillas de ruedas / Magesa). Por defecto: ninguno. */
   ycCodeMap?: Record<string, string>;
-  /** Color por defecto cuando no se detecta ninguno. Por defecto: "Negro". */
   defaultColor?: string;
-  /** Paso 11.1: palabra clave en Modelo -> segmento (maxima prioridad). Por defecto: ninguno. */
   segmentoKeywords?: [string, string][];
-  /** Paso 11.2: marca exacta + prefijo de Modelo -> segmento. Por defecto: ninguno. */
   segmentoBrandPrefix?: [string, string, string][];
-  /** Paso 11.3: marca -> segmento por defecto. Por defecto: ninguno. */
   segmentoBrandDefault?: Record<string, string>;
-  /** Paso 11.4: segmento si nada de lo anterior matcheo. Obligatorio: cada categoria define el suyo. */
   segmentoFallback: string;
 }
 
-/**
- * Crea un parser de marca/modelo/color/segmento para una categoria,
- * reutilizando el mismo algoritmo que se armo originalmente para
- * "Sillas de ruedas" (ver pasos 1-11 en los comentarios de cada funcion
- * interna), parametrizado por los diccionarios que pasa `config`.
- */
 function createCategoryParser(config: CategoryParserConfig): CategoryParser {
   const multiWordSorted = [...(config.multiWordDict ?? BRAND_MULTI_WORD_DICT)].sort(
     (a, b) => b[0].length - a[0].length
@@ -303,16 +283,6 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
   const ycCodeMap = config.ycCodeMap ?? {};
   const defaultColor = config.defaultColor ?? DEFAULT_COLOR;
 
-  // Paso 9: contador "Modelo N" correlativo por Razon Social + Precio
-  // Unitario, con estado propio por instancia de parser (o sea, por
-  // categoria) para no mezclar numeraciones entre categorias distintas.
-  // NOTA: este contador vive en memoria del proceso. Dentro de una misma
-  // corrida de sync es correcto (se reutiliza el mismo numero para la misma
-  // combinacion razonSocial+precio); entre corridas distintas (cada una un
-  // proceso nuevo en Vercel) se reinicia. Segun los datos reales analizados
-  // de sillas de ruedas, este camino casi no se usa (casi todo trae un
-  // codigo de referencia utilizable como Modelo), asi que por ahora no se
-  // persiste en la base.
   const modeloAssigned = new Map<string, number>();
   const modeloCounterPerRazon = new Map<string, number>();
 
@@ -339,11 +309,6 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
     return { marca, modelo: assignModeloN(razonSocial, precioUnitario) };
   }
 
-  /**
-   * @param sufijoTextRaw  Texto crudo de "SUB ITEMS - SUFIJOS" (puede venir vacio/null).
-   * @param razonSocial    Razon social del importador (columna A), tal cual.
-   * @param precioUnitario Precio unitario FOB del sub-item, para el paso 9.
-   */
   function parseCore(
     sufijoTextRaw: string | null | undefined,
     razonSocial: string,
@@ -351,10 +316,8 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
   ): { marca: string; modelo: string } {
     let text = (sufijoTextRaw ?? "").trim();
 
-    // Paso 1: quitar sufijo de aduana "SIN CODIGO (CODIGO)" al final.
     text = text.replace(/\s*SIN\s+CODIGO(\s*\([^)]*\))?\s*$/i, "").trim();
 
-    // Paso 2: comillas, comas y puntos sueltos -> espacio; colapsar espacios.
     text = text
       .replace(/["'.,]/g, " ")
       .replace(/\s{2,}/g, " ")
@@ -364,14 +327,12 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       return finalize(razonSocial, "", razonSocial, precioUnitario);
     }
 
-    // Paso 3: "sin marca" explicito -> Marca = Razon Social completa.
     const sinMarcaMatch = /^(SIN\s+MARCA|S\/MARCA|S\/M)\b\s*(.*)$/i.exec(text);
     if (sinMarcaMatch) {
       const modelo = sinMarcaMatch[2].trim();
       return finalize(razonSocial, modelo, razonSocial, precioUnitario);
     }
 
-    // Paso 4: corregir typo conocido en la primera palabra.
     let words = text.split(" ").filter(Boolean);
     if (words.length > 0) {
       const firstUpper = words[0].toUpperCase();
@@ -382,7 +343,6 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
     }
     const textUpper = text.toUpperCase();
 
-    // Paso 5: diccionario multi-palabra (match mas largo primero).
     for (const [key, canonical] of multiWordSorted) {
       if (textUpper === key || textUpper.startsWith(key + " ")) {
         const modelo = text.slice(key.length).trim();
@@ -390,7 +350,6 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       }
     }
 
-    // Paso 6: marca de una sola palabra ya conocida (tabla OVERRIDE).
     words = text.split(" ").filter(Boolean);
     if (words.length > 0) {
       const firstUpper = words[0].toUpperCase();
@@ -401,8 +360,6 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       }
     }
 
-    // Paso 7: fallback por Razon Social (probar prefijo de 3, 2 o 1 palabras
-    // de la razon social sin las palabras vacias societarias).
     const razonWords = razonSocial
       .toUpperCase()
       .split(/\s+/)
@@ -417,8 +374,6 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       }
     }
 
-    // Paso 8: fallback generico -> primera palabra como marca (Title Case,
-    // o mayusculas si es sigla de <=3 letras), resto como modelo.
     if (words.length === 0) {
       return finalize(razonSocial, "", razonSocial, precioUnitario);
     }
@@ -427,18 +382,9 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
     return finalize(marca, modelo, razonSocial, precioUnitario);
   }
 
-  /**
-   * Paso 10: separa el color del texto de Modelo (ya limpio, pasos 1-9),
-   * para que variantes de color del mismo modelo (ej. "MEWA BLACK" / "MEWA
-   * LIGHT GRAY") no queden como modelos distintos. Devuelve el modelo sin
-   * el color (si se detecto) y el color canonico (o el color por defecto
-   * de la categoria si no hay informacion de color en el texto).
-   */
   function extractColor(modelo: string): { modelo: string; color: string } {
     if (!modelo) return { modelo, color: defaultColor };
 
-    // Paso 10.1: palabra de color conocida al final, con sufijo " YC<codigo>" opcional
-    // (algunos registros traen un espacio entre "YC" y el codigo, ej. "YC B007").
     for (const [word, canonical] of colorSorted) {
       const re = new RegExp(`^(.*?)\\s+${word}(?:\\s+YC\\s*[\\w]+)?$`, "i");
       const m = re.exec(modelo);
@@ -447,8 +393,6 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       }
     }
 
-    // Paso 10.2: sin palabra de color, pero con codigo "YC<codigo>" al final
-    // (tambien tolera espacio entre "YC" y el codigo).
     const ycMatch = /^(.*?)\s+YC\s*([\w]+)$/i.exec(modelo);
     if (ycMatch && ycMatch[1].trim().length >= 2) {
       const code = `YC${ycMatch[2]}`.toUpperCase();
@@ -456,24 +400,12 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       if (known) {
         return { modelo: ycMatch[1].trim(), color: known };
       }
-      // Codigo no aprendido: igual se quita del modelo (para unificar), pero
-      // el color queda por defecto porque no sabemos cual es realmente.
       return { modelo: ycMatch[1].trim(), color: defaultColor };
     }
 
-    // Paso 10.3: sin color detectado.
     return { modelo, color: defaultColor };
   }
 
-  /**
-   * Paso 11: clasifica cada fila en un segmento a partir de Marca y Modelo
-   * YA limpios (sin color). Orden de evaluacion (el primero que matchea
-   * gana):
-   *   11.1 palabra clave en Modelo (max prioridad, no mira la marca)
-   *   11.2 Marca exacta + Modelo contiene un prefijo de linea de producto
-   *   11.3 Marca por defecto
-   *   11.4 fallback de la categoria si nada matcheo
-   */
   function assignSegmento(marca: string, modelo: string): string {
     const modeloUpper = (modelo || "").toUpperCase();
 
@@ -503,7 +435,6 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
 // analizando datos reales de esta categoria especificamente).
 // ============================================================
 
-// ---- Paso 11.1: palabra clave en Modelo (maxima prioridad) ----
 const SEGMENTO_KEYWORDS: [string, string][] = [
   ["KID", "Sillas Infantiles"],
   ["JUNIOR", "Sillas Infantiles"],
@@ -527,7 +458,6 @@ const SEGMENTO_KEYWORDS: [string, string][] = [
   ["INODORO", "Silla de Traslado"],
 ];
 
-// ---- Paso 11.2: marca + prefijo de Modelo (marcas con lineas mixtas) ----
 const SEGMENTO_BRAND_PREFIX: [string, string, string][] = [
   ["Sunrise Medical", "ZIPPIE", "Sillas Infantiles"],
   ["Sunrise Medical", "QUICKIE IRIS", "Sillas Infantiles"],
@@ -572,11 +502,6 @@ const SEGMENTO_BRAND_PREFIX: [string, string, string][] = [
   ["Alu Rehab", "COYOTE", "Silla Postural"],
 ];
 
-// ---- Paso 11.3: marca por defecto (si no matcheo 11.1 ni 11.2) ----
-// Nota: algunas claves son la Razon Social completa (ej. "JEPOINT S. A.",
-// "TENACTA SOCIEDAD ANONIMA", "TRINIDAD INSUMOS S.R.L.") porque para esas
-// filas el resto del parser uso el fallback de Razon Social (paso 7) o el
-// fallback generico (paso 8) como Marca, no una marca del diccionario.
 const SEGMENTO_BRAND_DEFAULT: Record<string, string> = {
   "A&J": "Silla Estándar",
   "Achieve": "Silla Activa y Deportivas",
@@ -682,14 +607,6 @@ const sillasDeRuedasParser = createCategoryParser({
   segmentoFallback: SILLAS_SEGMENTO_FALLBACK,
 });
 
-// ============================================================
-// Config: Sillas de Ruedas Electricas -- Segmento propio. NO reutiliza el
-// esquema de sillas manuales (Sillas Infantiles / Ultra Livianas / etc.):
-// son ejes de clasificacion distintos, pensados especificamente para
-// sillas con motor (interior vs. exterior, plegable, reclinable,
-// bariatrica). Taxonomia validada con el usuario 15/07/2026. Confianza
-// BAJA en las keywords (ver nota de cabecera del archivo).
-// ============================================================
 const ELECTRICAS_SEGMENTO_KEYWORDS: [string, string][] = [
   ["BARIATRIC", "Bariátrica"],
   ["BARIATRICA", "Bariátrica"],
@@ -712,56 +629,16 @@ const sillasRuedasElectricasParser = createCategoryParser({
   segmentoFallback: "Silla Eléctrica Estándar",
 });
 
-// ============================================================
-// Configs: 6 categorias nuevas restantes -- taxonomia de Segmento propia
-// por categoria, validada con el usuario 15/07/2026 (ver
-// docs/ncm_nuevas_categorias.md para el contexto de cada categoria).
-// Confianza BAJA en las keywords (ver nota de cabecera del archivo): se
-// ajustan/completan con el primer sync real de cada categoria.
-// ============================================================
-
-// ---- Andadores ----
-const ANDADORES_SEGMENTO_KEYWORDS: [string, string][] = [
-  ["PEDIATRIC", "Andador Pediátrico"],
-  ["PEDIATRICO", "Andador Pediátrico"],
-  ["JUNIOR", "Andador Pediátrico"],
-  ["KIDS", "Andador Pediátrico"],
-  ["ROLLATOR", "Rollator (4 Ruedas)"],
-  ["4 WHEEL", "Rollator (4 Ruedas)"],
-  ["FOUR WHEEL", "Rollator (4 Ruedas)"],
-  ["4 RUEDAS", "Rollator (4 Ruedas)"],
-  ["CUATRO RUEDAS", "Rollator (4 Ruedas)"],
-  ["2 WHEEL", "Andador 2 Ruedas"],
-  ["TWO WHEEL", "Andador 2 Ruedas"],
-  ["2 RUEDAS", "Andador 2 Ruedas"],
-  ["DOS RUEDAS", "Andador 2 Ruedas"],
-  ["RIGID", "Andador Rígido"],
-  ["FIXED", "Andador Rígido"],
-  ["RIGIDO", "Andador Rígido"],
-];
-const andadoresParser = createCategoryParser({
-  segmentoKeywords: ANDADORES_SEGMENTO_KEYWORDS,
-  segmentoFallback: "Andador Estándar",
-});
-
-// ---- Bastones ----
-const BASTONES_SEGMENTO_KEYWORDS: [string, string][] = [
-  ["TRIPOD", "Bastón Multipodal (Trípode/Cuádruple)"],
-  ["TRIPODE", "Bastón Multipodal (Trípode/Cuádruple)"],
-  ["QUAD", "Bastón Multipodal (Trípode/Cuádruple)"],
-  ["CUADRUPLE", "Bastón Multipodal (Trípode/Cuádruple)"],
-  ["4 POINT", "Bastón Multipodal (Trípode/Cuádruple)"],
-  ["3 POINT", "Bastón Multipodal (Trípode/Cuádruple)"],
-  ["FOREARM", "Bastón Canadiense"],
-  ["CANADIAN", "Bastón Canadiense"],
-  ["CANADIENSE", "Bastón Canadiense"],
-  ["SEAT", "Bastón con Asiento"],
-  ["ASIENTO", "Bastón con Asiento"],
-];
-const bastonesParser = createCategoryParser({
-  segmentoKeywords: BASTONES_SEGMENTO_KEYWORDS,
-  segmentoFallback: "Bastón Simple",
-});
+// ---- Andadores y Bastones ----
+// NOTA (16/07/2026): estas dos categorias YA NO usan createCategoryParser
+// ni un NCM propio. Se descubrio que el NCM que se les habia asignado
+// (9021.10.10) en realidad agrupa 5 sub-posiciones de aduana muy distintas
+// (cuello, columna, calzado, muletas/bastones, residual) y que ademas el
+// sufijo "LOS DEMAS" sigue mezclando productos no relacionados. El usuario
+// armo un criterio de clasificacion por marca + descripcion de posicion
+// (ver seccion "PARSER NCM 9021.10.10 -- ORTOPEDIA / ODONTOLOGIA" mas abajo
+// en este archivo) que reemplaza el parser/segmento propio que tenian
+// antes. Ver `parseOrtopedia9021Row` y `ORTOPEDIA_9021_CATEGORY_SLUGS`.
 
 // ---- Almohadones Ortopedicos ----
 const ALMOHADONES_SEGMENTO_KEYWORDS: [string, string][] = [
@@ -813,9 +690,6 @@ const elevadoresInodoroParser = createCategoryParser({
 });
 
 // ---- Camas Hospitalarias ----
-// Importante: "SEMI ELECTRIC*" tiene que ir ANTES que "ELECTRIC*" en la
-// lista (el matching es "primer keyword que aparece en el texto, en este
-// orden", y "ELECTRIC" es substring de "SEMI ELECTRIC").
 const CAMAS_SEGMENTO_KEYWORDS: [string, string][] = [
   ["BARIATRIC", "Cama Bariátrica"],
   ["BARIATRICA", "Cama Bariátrica"],
@@ -838,13 +712,13 @@ const camasHospitalariasParser = createCategoryParser({
 // ============================================================
 
 export const CATEGORY_PARSERS: Record<string, CategoryParser> = {
-  // Importante: SIEMPRE se llama al parser, incluso si "sufijos" viene vacio.
-  // El parser mismo sabe que hacer en ese caso (usa la Razon Social del
-  // importador como Marca).
+  // NOTA: "andadores", "bastones" y "calzado_ortopedico" NO estan aca --
+  // usan el parser especial de NCM 9021.10.10 (parseOrtopedia9021Row, mas
+  // abajo), que se invoca directo desde app/api/sync/route.ts en vez de a
+  // traves de este registro (porque un solo NCM se reparte en 3 categorias
+  // segun marca/descripcion, no es 1 categoria = 1 parser).
   sillas_de_ruedas: sillasDeRuedasParser,
   sillas_ruedas_electricas: sillasRuedasElectricasParser,
-  andadores: andadoresParser,
-  bastones: bastonesParser,
   almohadones_ortopedicos: almohadonesOrtopedicosParser,
   sillas_ducha: sillasDuchaParser,
   elevadores_inodoro: elevadoresInodoroParser,
@@ -853,5 +727,311 @@ export const CATEGORY_PARSERS: Record<string, CategoryParser> = {
 
 /** Categorias que necesitan el flujo de EXPORTACION (con Sufijos) en vez de /data normal. */
 export function categoryUsesExportFlow(categorySlug: string): boolean {
-  return categorySlug in CATEGORY_PARSERS;
+  return categorySlug in CATEGORY_PARSERS || ORTOPEDIA_9021_CATEGORY_SLUGS.includes(categorySlug as any);
+}
+
+// ============================================================
+// PARSER NCM 9021.10.10 — ORTOPEDIA / ODONTOLOGIA (16/07/2026)
+// ============================================================
+export const ORTOPEDIA_9021_NCM = "9021.10.10";
+export const ORTOPEDIA_9021_CATEGORY_SLUGS = ["andadores", "bastones", "calzado_ortopedico"] as const;
+
+export interface OrtopediaParsed {
+  marca: string;
+  modelo: string;
+  color: string;
+  segmento: string;
+  categoriaSlug: "andadores" | "bastones" | "calzado_ortopedico" | null;
+}
+
+type OrtopediaCategoria =
+  | "Ortodoncia"
+  | "Ortopedia y Protesis"
+  | "Implantes de Columna"
+  | "Implantes de Trauma y Cirugia"
+  | "Inmovilizadores y Ferulas"
+  | "Ayudas para la Marcha"
+  | "Bipedestacion y Rehab. Pediatrica"
+  | "Calzado Ortopedico"
+  | "Otros";
+
+const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
+  ["ADITEK", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["MORELLI", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["ASTAR", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["AMERICAN ORTHODONTICS", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["GC", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["TECNIDENT", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["ORTHO ORGANIZERS", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["ORTHOMETRIC", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["MODERN ORTHODONTICS", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["LM-DENTAL", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["LM DENTAL", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["HUBIT", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["WORLD CLASS TECHNOLOGY", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["EKSEN", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["DTC", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["G&H ORTHODONTICS", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["DENTAURUM", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["FORESTADENT", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["LEONE", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["ORTHO TECHNOLOGY", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["DYNAFLEX", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["TDM", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["DENSELL", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["SHINYE", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["AOSUO", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["RAISE", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["VOYAR", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["FROGGY MOUTH", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
+  ["CLEARCORRECT", "Ortodoncia", "Alineadores Transparentes"],
+  ["ALIGN TECHNOLOGY", "Ortodoncia", "Alineadores Transparentes"],
+  ["SPARK (ORMCO)", "Ortodoncia", "Alineadores Transparentes"],
+
+  ["OSSUR", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["ÖSSUR", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["OTTOBOCK", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["FILLAUER", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["ALPS", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["STREIFENEDER", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["PROTEOR", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["STEEPER", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["TOUCH BIONICS", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["PECLAB", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["IMD", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["PER ROS", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["AMBROISE", "Ortopedia y Protesis", "Protesis de Miembro"],
+  ["BECKER ORTHOPEDIC", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["FIOR & GENTZ", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["FIOR GENTZ", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["ALLARD", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["TURBOMED", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["CAMP SCANDINAVIA", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["SYMMETRIC DESIGNS", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["SPIO", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["DESIGN VERONIQUE", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["REHANORM", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["VELA", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["VOE", "Ortopedia y Protesis", "Ortesis de Miembro"],
+  ["ANJON", "Ortopedia y Protesis", "Ortesis de Miembro"],
+
+  ["ULRICH MEDICAL", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
+  ["CANWELL", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
+  ["PETER LAZIC", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
+  ["ARTUS", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
+  ["MEDTRONIC", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
+  ["JAZZ LOCK", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
+  ["CDH", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
+  ["CENTINEL SPINE", "Implantes de Columna", "Dispositivos Intersomaticos"],
+  ["SILONY SPINE", "Implantes de Columna", "Dispositivos Intersomaticos"],
+  ["TRIADYME", "Implantes de Columna", "Dispositivos Intersomaticos"],
+
+  ["ARTHREX", "Implantes de Trauma y Cirugia", "Artroscopia y Medicina Deportiva"],
+  ["JIANGSU SHUANGYANG", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
+  ["JIANGSU", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
+  ["WONDERFU", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
+  ["CALDERA MEDICAL", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
+  ["CIZETA SURGICAL", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
+  ["TECRES", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
+  ["KLS MARTIN", "Implantes de Trauma y Cirugia", "Cirugia Maxilofacial"],
+
+  ["ASPEN", "Inmovilizadores y Ferulas", "Ortesis de Columna y Lumbar"],
+  ["BAXMAX", "Inmovilizadores y Ferulas", "Ortesis de Columna y Lumbar"],
+  ["BODY CARE", "Inmovilizadores y Ferulas", "Ortesis de Columna y Lumbar"],
+  ["DONJOY", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["AIRCAST", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["DJO", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["PROCARE", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["REH4MAT", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["STABILO", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["ANTARES", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["THERAMART", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["EMERALD SUPPLY", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["BLISS MEDICAL", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["MEDLINE", "Inmovilizadores y Ferulas", "Inmovilizadores y Ferulas de Miembro"],
+  ["AMELIFE", "Inmovilizadores y Ferulas", "Collares Cervicales"],
+  ["MEDRESQ", "Inmovilizadores y Ferulas", "Collares Cervicales"],
+  ["XIEHE MEDICAL", "Inmovilizadores y Ferulas", "Collares Cervicales"],
+  ["TINGEER", "Inmovilizadores y Ferulas", "Collares Cervicales"],
+  ["IRON DUCK", "Inmovilizadores y Ferulas", "Collares Cervicales"],
+
+  ["MAVERICK", "Ayudas para la Marcha", "Muletas y Bastones"],
+  ["SUNCARE", "Ayudas para la Marcha", "Muletas y Bastones"],
+  ["MAGESA", "Ayudas para la Marcha", "Muletas y Bastones"],
+  ["ACHIEVE", "Ayudas para la Marcha", "Muletas y Bastones"],
+  ["SAN UP", "Ayudas para la Marcha", "Muletas y Bastones"],
+  ["SILFAB", "Ayudas para la Marcha", "Muletas y Bastones"],
+  ["VOLARIS", "Ayudas para la Marcha", "Andadores y Ayudas de Marcha"],
+  ["JIANLIAN", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["DRIVE MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["REBOTEC", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["LIFECARE", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["KAIYANG MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["INTCO", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["JIANGSU INTCO MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["MPSHOP", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["YUWELL", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["MUGI", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["MOVICARE", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["VERMEIREN", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["SUNRISE MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["WATER", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["U NURSE", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["A&J", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["DONGGUAN LEYUAN", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["DOUBLE CARE MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["JIANWEI", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["FOSHAN", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["FOSHAN GEGE", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["FOSHAN KAIYANG", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["FOSHAN RAFU MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["FOSHAN ECARRE MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
+  ["FOSHAN DONGFANG MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
+
+  ["EASYSTAND", "Bipedestacion y Rehab. Pediatrica", "Bipedestadores"],
+  ["R82", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["RIFTON", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["AKCES MED", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["ORMESA", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["JENX", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["LIW CARE TECHNOLOGY", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["HOGGI", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["CIRCLE SPECIALTY", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["BEROLLKA", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["MYWAM", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["NEXTSTEP ROBOTICS", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["USL ROBOTICS", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+  ["AUXIVO", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
+
+  ["MEMO", "Calzado Ortopedico", "Calzado Ortopedico"],
+  ["MD ORTHOPAEDICS", "Calzado Ortopedico", "Calzado Ortopedico"],
+  ["BILLY FOOTWEAR", "Calzado Ortopedico", "Calzado Ortopedico"],
+  ["STEP ON", "Calzado Ortopedico", "Calzado Ortopedico"],
+
+  ["TRINIDAD INSUMOS S.R.L.", "Otros", "Otros"],
+  ["TRINIDAD INSUMOS", "Otros", "Otros"],
+  ["IOWA", "Otros", "Otros"],
+  ["OTOSTICK", "Otros", "Otros"],
+  ["DQM VETERINARIA", "Otros", "Otros"],
+  ["GE RUI HONG KANG", "Otros", "Otros"],
+];
+
+const ORTOPEDIA_MARCA_DICT: Record<string, { categoria: OrtopediaCategoria; segmento: string }> = Object.fromEntries(
+  ORTOPEDIA_MARCA_TABLE.map(([marca, categoria, segmento]) => [marca, { categoria, segmento }])
+);
+
+const ORTOPEDIA_MARCA_TYPOS: [RegExp, string][] = [
+  [/^OTTO ?BOCKK?$/, "OTTOBOCK"],
+  [/^OTTTOBOCK$/, "OTTOBOCK"],
+  [/^FORESTA ?DENT$/, "FORESTADENT"],
+  [/^FIOR (GENTZ|& GENTZ)$/, "FIOR & GENTZ"],
+  [/^CANWELLL?$/, "CANWELL"],
+  [/^KLS( MARTIN)?( GROUP)?$/, "KLS MARTIN"],
+  [/^KLS MATIN$/, "KLS MARTIN"],
+  [/^(ULRICH|URLICH) ME[DI]?ICAL$/, "ULRICH MEDICAL"],
+  [/^R ?82 A\/?S$/, "R82"],
+  [/^TENCIDENT$/, "TECNIDENT"],
+  [/^AICARST$/, "AIRCAST"],
+];
+
+function normalizeOrtopediaMarcaTypo(marca: string): string {
+  for (const [re, canon] of ORTOPEDIA_MARCA_TYPOS) {
+    if (re.test(marca)) return canon;
+  }
+  return marca;
+}
+
+function ortopediaCategoriaSinMarca(descripcion: string): { categoria: OrtopediaCategoria; segmento: string } {
+  const d = (descripcion || "").toUpperCase();
+  if (d.includes("CALZADO")) return { categoria: "Calzado Ortopedico", segmento: "Calzado Ortopedico" };
+  if (d.includes("COLUMNA")) return { categoria: "Implantes de Columna", segmento: "Sistemas de Fijacion Vertebral" };
+  if (d.includes("CUELLO")) return { categoria: "Inmovilizadores y Ferulas", segmento: "Collares Cervicales" };
+  if (d.includes("MULETA") || d.includes("BASTON")) return { categoria: "Ayudas para la Marcha", segmento: "Muletas y Bastones" };
+  return { categoria: "Otros", segmento: "Otros" };
+}
+
+function ortopediaSegmentoMarchaPorDescripcion(descripcion: string): string {
+  const d = (descripcion || "").toUpperCase();
+  if (d.includes("MULETA") || d.includes("BASTON")) return "Muletas y Bastones";
+  return "Andadores y Ayudas de Marcha";
+}
+
+function ortopediaCategoriaSlug(
+  categoria: OrtopediaCategoria,
+  segmento: string
+): "andadores" | "bastones" | "calzado_ortopedico" | null {
+  if (categoria === "Calzado Ortopedico") return "calzado_ortopedico";
+  if (categoria === "Ayudas para la Marcha") {
+    if (segmento === "Andadores y Ayudas de Marcha") return "andadores";
+    if (segmento === "Muletas y Bastones") return "bastones";
+  }
+  return null;
+}
+
+/**
+ * Clasifica una fila cruda de la exportacion IA40 (NCM 9021.10.10) en
+ * marca/modelo/color/segmento + la categoria interna a la que pertenece
+ * (o null si no es ninguna de las 3 que trackea este dashboard).
+ *
+ * Formato del texto de aduana en esta NCM (columna "sufijos", distinto al
+ * de sillas de ruedas): "<MARCA> SIN MODELO <codigo> (CA00)".
+ */
+export function parseOrtopedia9021Row(row: any): OrtopediaParsed {
+  const sufijoRaw: string = row.sufijos ?? "";
+  const razonSocial: string = row.nombre ?? "";
+  const descripcionPosicion: string = row.posicion_descripcion ?? "";
+
+  const textoSinParentesis = sufijoRaw.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const sinModeloMatch = /\sSIN\s+MODELO\b/i.exec(textoSinParentesis);
+
+  let marcaRaw: string;
+  let modelo: string;
+  if (sinModeloMatch) {
+    marcaRaw = textoSinParentesis.slice(0, sinModeloMatch.index).trim();
+    modelo = textoSinParentesis.slice(sinModeloMatch.index + sinModeloMatch[0].length).trim();
+  } else {
+    marcaRaw = textoSinParentesis;
+    modelo = "";
+  }
+
+  const marcaVacia = marcaRaw.trim() === "" || /^(SIN\s+MARCA|S\/M|NO\s+POSEE|0)\b/i.test(marcaRaw.trim());
+
+  if (marcaVacia) {
+    const { categoria, segmento } = ortopediaCategoriaSinMarca(descripcionPosicion);
+    return {
+      marca: razonSocial || "Sin Identificar",
+      modelo: modelo || textoSinParentesis,
+      color: "S/D",
+      segmento,
+      categoriaSlug: ortopediaCategoriaSlug(categoria, segmento),
+    };
+  }
+
+  let marcaNorm = marcaRaw.toUpperCase().replace(/[.,/]/g, " ").replace(/\s+/g, " ").trim();
+  marcaNorm = normalizeOrtopediaMarcaTypo(marcaNorm);
+
+  const dictEntry = ORTOPEDIA_MARCA_DICT[marcaNorm];
+  if (!dictEntry) {
+    const { categoria, segmento } = ortopediaCategoriaSinMarca(descripcionPosicion);
+    return {
+      marca: marcaRaw,
+      modelo: modelo || textoSinParentesis,
+      color: "S/D",
+      segmento,
+      categoriaSlug: ortopediaCategoriaSlug(categoria, segmento),
+    };
+  }
+
+  let { categoria, segmento } = dictEntry;
+  if (segmento === "(segun descripcion)") {
+    segmento = ortopediaSegmentoMarchaPorDescripcion(descripcionPosicion);
+  }
+
+  return {
+    marca: marcaRaw,
+    modelo: modelo || textoSinParentesis,
+    color: "S/D",
+    segmento,
+    categoriaSlug: ortopediaCategoriaSlug(categoria, segmento),
+  };
 }
