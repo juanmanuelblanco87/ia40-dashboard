@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import EvolutionChart, { SeriesPoint, PivotResult, formatPeriod, fmtNumber } from "@/components/EvolutionChart";
 import MultiSelectDropdown from "@/components/MultiSelectDropdown";
+import { segmentosValidos } from "@/lib/segmentos";
 
 // Colores fijos por segmento (6 valores posibles, ver SEGMENTO_CHOICES mas
 // abajo), para que el grafico de torta de Share por Segmento sea consistente
@@ -336,14 +337,12 @@ function ModelShareTable({
   );
 }
 
-const SEGMENTO_CHOICES = [
-  "Silla Estándar",
-  "Silla Ultra Livianas",
-  "Sillas Infantiles",
-  "Silla Postural",
-  "Silla Activa y Deportivas",
-  "Silla de Traslado",
-];
+// NOTA (17/07/2026): las opciones del <select> de Segmento en el modal de
+// correccion ("Corregir") ya NO son una lista fija -- vienen de
+// segmentosValidos(categorySlug) (lib/segmentos.ts), que tiene una lista
+// distinta por categoria. Antes esto solo mostraba (y el backend solo
+// aceptaba) los 6 segmentos de "Sillas de ruedas", asi que corregir el
+// segmento de un andador, una cama, etc. era imposible.
 
 function ModelImageModal({
   marca,
@@ -516,7 +515,7 @@ function ModelImageModal({
               onChange={(e) => setSegmentoInput(e.target.value)}
               style={{ width: "100%", padding: "6px 8px", fontSize: 13, marginBottom: 14 }}
             >
-              {SEGMENTO_CHOICES.map((s) => (
+              {segmentosValidos(categorySlug).map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
@@ -634,6 +633,22 @@ function TopCard({ title, lastMonth, last12, last12Label }: {
 // demas segmentos NO se pierden ni se descartan (siguen sincronizados) --
 // el usuario puede ampliar o cambiar la seleccion de Segmento en cualquier
 // momento para verlos.
+interface SieveSummary {
+  categoria?: string;
+  solicitados?: number;
+  procesados?: number;
+  sin_cambios?: number;
+  segmento_corregido?: number;
+  categoria_movida?: number;
+  sin_evidencia?: number;
+  errores?: number;
+  movidos?: { marca: string; modelo: string; de: string; a: string; segmento: string | null; razonamiento: string }[];
+  corregidos?: { marca: string; modelo: string; segmento: string; razonamiento: string }[];
+  detalle_errores?: string[];
+  cuota_agotada?: boolean;
+  error?: string;
+}
+
 const DEFAULT_SEGMENTO_FILTER: Record<string, string[]> = {
   sillas_ducha: ["Sillas de Ducha / Sanitarias"],
   almohadones_ortopedicos: ["Cojín Ortopédico / Antiescaras"],
@@ -660,6 +675,24 @@ export default function Home() {
   const [pivot, setPivot] = useState<PivotResult | null>(null);
   const [modelImages, setModelImages] = useState<Map<string, ModelImageEntry>>(new Map());
   const [viewingModel, setViewingModel] = useState<{ marca: string; modelo: string; segmento: string } | null>(null);
+  const [sieving, setSieving] = useState(false);
+  const [sieveResult, setSieveResult] = useState<SieveSummary | null>(null);
+
+  const runSieve = () => {
+    if (!slug || sieving) return;
+    setSieving(true);
+    setSieveResult(null);
+    fetch(`/api/sieve?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setSieveResult(d);
+        // Si se corrigieron segmentos o se movieron filas de categoria, la
+        // serie actual puede haber cambiado -- se recarga para reflejarlo.
+        if ((d.segmento_corregido ?? 0) > 0 || (d.categoria_movida ?? 0) > 0) reloadSeries();
+      })
+      .catch(() => setSieveResult({ error: "No se pudo correr el tamizador. Proba de nuevo." } as any))
+      .finally(() => setSieving(false));
+  };
 
   useEffect(() => {
     fetch("/api/categories")
@@ -938,6 +971,71 @@ export default function Home() {
             <option value="total_unidades">Unidades</option>
           </select>
         </div>
+      </div>
+
+      <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <button onClick={runSieve} disabled={sieving || !slug}>
+            {sieving ? "🔎 Tamizando..." : "🔎 Tamizar categoría"}
+          </button>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>
+            Busca en la web y valida con IA los modelos de esta categoría que todavía no se revisaron (corrige el
+            segmento, o mueve el modelo a la categoría correcta si corresponde). Corre en lotes chicos — puede hacer
+            falta clickear varias veces para cubrir toda la categoría.
+          </span>
+        </div>
+
+        {sieveResult && (
+          <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
+            {sieveResult.error ? (
+              <div style={{ color: "#d93a3a" }}>{sieveResult.error}</div>
+            ) : (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <strong>
+                    Procesados {sieveResult.procesados ?? 0} de {sieveResult.solicitados ?? 0} pendientes
+                  </strong>
+                  <button onClick={() => setSieveResult(null)} style={{ padding: "2px 8px", fontSize: 12 }}>Cerrar</button>
+                </div>
+                <div style={{ color: "var(--muted)" }}>
+                  Sin cambios: {sieveResult.sin_cambios ?? 0} · Segmento corregido: {sieveResult.segmento_corregido ?? 0} ·
+                  {" "}Categoría movida: {sieveResult.categoria_movida ?? 0} · Sin evidencia: {sieveResult.sin_evidencia ?? 0}
+                  {(sieveResult.errores ?? 0) > 0 && <> · Errores: {sieveResult.errores}</>}
+                </div>
+                {sieveResult.cuota_agotada && (
+                  <div style={{ color: "#d93a3a", marginTop: 6 }}>
+                    ⚠️ Se agotó la cuota mensual de SerpApi a mitad de este lote — probá de nuevo el mes que viene o
+                    ampliando el plan.
+                  </div>
+                )}
+                {(sieveResult.movidos?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Movidos de categoría:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                      {sieveResult.movidos!.map((m, i) => (
+                        <li key={i}>
+                          {m.marca} — {m.modelo}: {m.de} → <strong>{m.a}</strong> ({m.segmento ?? "sin segmento"})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(sieveResult.corregidos?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Segmento corregido:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                      {sieveResult.corregidos!.map((c, i) => (
+                        <li key={i}>
+                          {c.marca} — {c.modelo}: {c.segmento}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="kpi-row">
