@@ -388,6 +388,24 @@ Solo corre bajo demanda (no hay cron) — hace falta clickear el botón una o
 más veces por categoría hasta agotar los pendientes (`model_sieve_log` evita
 reprocesar lo ya validado).
 
+**UI (17/07/2026, segunda vuelta):** el botón "🔎 Tamizar categoría" se movió
+al panel superior del dashboard, en el lugar donde antes estaba el link
+"☁️ Cargar/editar marcas por importador → " hacia `/admin` (se quitó porque,
+con el tamizador corrigiendo automáticamente, ese flujo manual por
+importador pierde sentido para segmento). Junto al botón se muestra:
+
+- Una barra de progreso + `{tamizado}/{total} tamizado (X%)`, calculado por
+  `GET /api/sieve/status?category=<slug>` (nuevo endpoint liviano, **no**
+  gasta cuota de SerpApi ni de Gemini — solo cuenta filas de
+  `monthly_brand_model_agg` vs. `model_sieve_log`).
+- Un tiempo estimado restante (`≈Xm restante`), calculado en el cliente
+  como `pendientes × segundos-por-item-del-último-lote-corrido` (no hay
+  forma de estimarlo sin haber corrido al menos un lote en la sesión).
+- El panel de resultados ahora también lista `detalle_errores` (el texto
+  real de cada error), antes calculado en el backend pero nunca mostrado —
+  necesario para diagnosticar por qué un lote da errores en vez de solo ver
+  el contador.
+
 **Variables de entorno nuevas:**
 - `GEMINI_API_KEY` — obligatoria para que funcione el tamizador. Se obtiene
   gratis en aistudio.google.com (sin tarjeta). Límite: uso por minuto/día
@@ -409,6 +427,7 @@ reprocesar lo ya validado).
 | `/api/model-overrides` | POST | Corrige a mano segmento y/o imagen de una combinación marca+modelo. |
 | `/api/token` | POST (asumido) | Recibe el JWT que manda `refresh_token.py` y lo guarda en `app_settings`. Confirmado funcionando en producción, pero su archivo fuente no está en esta carpeta local (ver sección 7). |
 | `/api/sieve` | GET | Tamizador de segmentos: busca en la web + IA y corrige/mueve modelos no validados de una categoría (ver sección 10.1). Bajo demanda, sin cron. |
+| `/api/sieve/status` | GET | Progreso del tamizador para una categoría (`{total, tamizado, pendientes, porcentaje}`). Liviano, sin llamadas externas — usado para la barra de progreso. |
 
 ## 12. Variables de entorno
 
