@@ -180,18 +180,16 @@ export async function GET(req: Request) {
   ) {
     const status = clasif.pvpUsd != null ? "found" : "not_found";
     await query(
-      `insert into model_pvp (category_id, marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, fuente_url, status, fetched_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+      `insert into model_pvp (category_id, marca, modelo, pvp_usd, confianza, razonamiento, status, fetched_at)
+       values ($1, $2, $3, $4, $5, $6, $7, now())
        on conflict (category_id, marca, modelo) do update set
          pvp_usd = case when excluded.pvp_usd is not null then excluded.pvp_usd else model_pvp.pvp_usd end,
          confianza = case when excluded.pvp_usd is not null then excluded.confianza else model_pvp.confianza end,
-         fuentes_consistentes = case when excluded.pvp_usd is not null then excluded.fuentes_consistentes else model_pvp.fuentes_consistentes end,
          razonamiento = case when excluded.pvp_usd is not null then excluded.razonamiento else model_pvp.razonamiento end,
-         fuente_url = case when excluded.pvp_usd is not null then excluded.fuente_url else model_pvp.fuente_url end,
          status = case when excluded.pvp_usd is not null then 'found' when model_pvp.status = 'found' then 'found' else excluded.status end,
          fetched_at = now(),
          error_message = null`,
-      [categoryId, marca, modelo, clasif.pvpUsd, clasif.confianza, clasif.pvpFuentesConsistentes, clasif.pvpRazonamiento, clasif.pvpFuenteUrl, status]
+      [categoryId, marca, modelo, clasif.pvpUsd, clasif.confianza, clasif.pvpRazonamiento, status]
     );
   }
 
