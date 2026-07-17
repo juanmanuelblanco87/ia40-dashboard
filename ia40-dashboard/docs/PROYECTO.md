@@ -369,20 +369,30 @@ filtros). Al clickearlo, dispara `GET /api/sieve?category=<slug>`, que:
    por **FOB total acumulado descendente** (suma de `total_fob_dolars` de
    todos los meses) — así se revisan primero los modelos con más peso real
    en el negocio, no alfabéticamente.
-2. Para cada una (en lotes de `SIEVE_BATCH_LIMIT`, default 20 por click):
-   le pide a OpenAI (`lib/aiClassifier.ts`, modelo `gpt-5.4-mini` vía
-   Responses API) que decida el segmento real. **El modelo busca en la web
-   por su cuenta** (tool nativo `web_search`) — no se usa SerpApi para esto.
+2. Para cada una (en lotes de `SIEVE_BATCH_LIMIT`, default 100 por click,
+   procesadas de a `SIEVE_CONCURRENCY` en paralelo, default 5): le pide a
+   OpenAI (`lib/aiClassifier.ts`, modelo `gpt-5.4-mini` vía Responses API)
+   que decida el segmento real. **El modelo busca en la web por su cuenta**
+   (tool nativo `web_search`) — no se usa SerpApi para esto. La IA **siempre
+   elige el segmento que mejor aplique**, incluso con evidencia parcial o
+   ambigua (pedido explícito del usuario, 17/07/2026: prefiere una mejor
+   estimación de la IA antes que dejar el modelo sin clasificar) — el campo
+   "confianza" indica qué tan segura estuvo, pero ya no se usa para bloquear
+   la corrección del segmento.
 3. Para las 3 categorías de NCM compartido (`andadores`/`bastones`/
    `calzado_ortopedico`), además le pregunta a la IA si el producto está en
-   la categoría correcta. Si no (como el caso de Double Care Medical), **se
-   mueve automáticamente**: `UPDATE trade_records` cambia el `category_id`
-   (y el segmento) de esa combinación marca+modelo, se recalcula
-   `monthly_brand_model_agg` de ambas categorías (la vieja y la nueva), y se
-   migran (si existían) la imagen cacheada y el override de segmento.
+   la categoría correcta. Este cambio de categoría sigue siendo conservador:
+   solo se aplica con confianza alta/media (a diferencia del segmento), por
+   ser un cambio estructural más grande. Si corresponde mover (como el caso
+   de Double Care Medical), **se mueve automáticamente**: `UPDATE
+   trade_records` cambia el `category_id` (y el segmento) de esa
+   combinación marca+modelo, se recalcula `monthly_brand_model_agg` de
+   ambas categorías (la vieja y la nueva), y se migran (si existían) la
+   imagen cacheada y el override de segmento.
 4. Al terminar el lote, el dashboard muestra un resumen: procesados, sin
-   cambios, segmento corregido, categoría movida, sin evidencia (la IA no
-   tuvo suficiente info y prefirió no adivinar), y errores.
+   cambios, segmento corregido, categoría movida, sin evidencia (caso
+   residual: la IA no devolvió ningún segmento pese a la instrucción de
+   siempre elegir uno — debería ser raro), y errores.
 
 Solo corre bajo demanda (no hay cron) — hace falta clickear el botón una o
 más veces por categoría hasta agotar los pendientes (`model_sieve_log` evita
@@ -414,11 +424,18 @@ importador pierde sentido para segmento). Junto al botón se muestra:
   falta una key generada en platform.openai.com con método de pago propio.
   Costo aproximado: el tool `web_search` cuesta USD 0.01 por búsqueda (10
   USD / 1.000 llamadas) + tokens de la respuesta al precio normal del
-  modelo — un lote de 20 productos sale centavos de dólar.
-- `SIEVE_BATCH_LIMIT` — opcional, tamaño del lote por click (default 20).
-- `SIEVE_DELAY_MS` — opcional, pausa entre cada ítem del lote en milisegundos
-  (default 500 — con un proyecto de OpenAI en tier pago el límite de
-  requests-por-minuto es alto, así que la pausa es solo un margen chico).
+  modelo — un lote de 100 productos sale centavos de dólar.
+- `SIEVE_BATCH_LIMIT` — opcional, tamaño del lote por click (default 100,
+  antes 20 — con SerpApi ya no en el medio no hace falta ser tan
+  conservador con la cuota, así que se subió al tope máximo para que cada
+  click cubra más terreno).
+- `SIEVE_CONCURRENCY` — opcional, cuántos ítems se procesan EN PARALELO
+  dentro de cada lote (default 5, mismo número que `max` del pool de
+  Postgres en `lib/db.ts`). Antes se procesaba de a uno con una pausa fija
+  (`SIEVE_DELAY_MS`) por el límite de Gemini gratis; con OpenAI en tier
+  pago no hace falta esa pausa, pero procesar de a uno hacía que un lote
+  tardara varios minutos (pedido explícito del usuario: "tarda demasiado")
+  — paralelizar de a 5 achica el tiempo total a una fracción.
 
 **Historial de proveedores de IA para el tamizador (todo el 17/07/2026):**
 esta feature pasó por 3 proveedores distintos en el mismo día, cada cambio
@@ -490,7 +507,8 @@ como único mecanismo de auth). Lista real de variables usadas en el código:
 | `IMAGE_BACKFILL_LIMIT` | `app/api/sync-images/route.ts` | Límite de imágenes a buscar por categoría en el backfill manual (default 80). |
 | `TOKEN_UPDATE_SECRET` | referenciada por `refresh_token.py` | Secreto compartido para el endpoint `/api/token` (que hoy no existe — ver sección 7). |
 | `OPENAI_API_KEY` | `lib/aiClassifier.ts` | Clasificación con IA del tamizador de segmentos (sección 10.1). Proyecto "cobus" en platform.openai.com, facturación por uso pagada por la empresa (no es lo mismo que ChatGPT Plus). |
-| `SIEVE_BATCH_LIMIT` | `app/api/sieve/route.ts` | Cuántas combinaciones marca+modelo procesa el tamizador por click (default 20). |
+| `SIEVE_BATCH_LIMIT` | `app/api/sieve/route.ts` | Cuántas combinaciones marca+modelo procesa el tamizador por click (default 100). |
+| `SIEVE_CONCURRENCY` | `app/api/sieve/route.ts` | Cuántas de esas combinaciones procesa en paralelo (default 5). |
 
 ## 13. Frontend
 
