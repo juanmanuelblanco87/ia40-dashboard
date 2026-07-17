@@ -370,7 +370,7 @@ filtros). Al clickearlo, dispara `GET /api/sieve?category=<slug>`, que:
    todos los meses) — así se revisan primero los modelos con más peso real
    en el negocio, no alfabéticamente.
 2. Para cada una (en lotes de `SIEVE_BATCH_LIMIT`, default 100 por click,
-   procesadas de a `SIEVE_CONCURRENCY` en paralelo, default 5): le pide a
+   procesadas de a `SIEVE_CONCURRENCY` en paralelo, default 10): le pide a
    OpenAI (`lib/aiClassifier.ts`, modelo `gpt-5.4-mini` vía Responses API)
    que decida el segmento real. **El modelo busca en la web por su cuenta**
    (tool nativo `web_search`) — no se usa SerpApi para esto. La IA **siempre
@@ -430,12 +430,40 @@ importador pierde sentido para segmento). Junto al botón se muestra:
   conservador con la cuota, así que se subió al tope máximo para que cada
   click cubra más terreno).
 - `SIEVE_CONCURRENCY` — opcional, cuántos ítems se procesan EN PARALELO
-  dentro de cada lote (default 5, mismo número que `max` del pool de
-  Postgres en `lib/db.ts`). Antes se procesaba de a uno con una pausa fija
-  (`SIEVE_DELAY_MS`) por el límite de Gemini gratis; con OpenAI en tier
-  pago no hace falta esa pausa, pero procesar de a uno hacía que un lote
-  tardara varios minutos (pedido explícito del usuario: "tarda demasiado")
-  — paralelizar de a 5 achica el tiempo total a una fracción.
+  dentro de cada lote (default 10). La llamada a OpenAI no pasa por el pool
+  de Postgres (`lib/db.ts`, max 5 conexiones) — solo las queries cortas de
+  insert/update lo usan, así que se puede paralelizar más que esas 5
+  conexiones sin problema (el exceso de queries hace cola un instante nomás).
+- `SIEVE_TIME_BUDGET_MS` — opcional (default 260000 = 260s), presupuesto de
+  tiempo total del request, bien por debajo de `maxDuration` (300s). Ver
+  incidente abajo — sin esto, un lote de 100 podía exceder el límite de
+  Vercel y la función moría sin devolver ninguna respuesta al navegador.
+
+**Incidente 17/07/2026 (segunda vuelta) — lote de 100 lento y sin
+respuesta:** con el `SIEVE_BATCH_LIMIT` subido a 100, un lote real quedó
+"colgado" y terminó devolviendo el error genérico "No se pudo correr el
+tamizador" en el frontend, aunque 60 de los 100 ítems sí se habían
+procesado y guardado bien (se veía en la barra de progreso). Causa: la
+función de `/api/sieve` excedió los 300s de `maxDuration` y Vercel la mató
+de golpe — el navegador nunca recibe una respuesta cuando eso pasa, así que
+cae en el `.catch()` genérico del fetch en vez de mostrar un error
+específico. Tres cambios para esto:
+1. **Menos latencia por ítem** (`lib/aiClassifier.ts`): el prompt le pedía
+   al modelo reintentar la búsqueda con variantes si la primera fallaba —
+   se sacó esa instrucción (una sola búsqueda). Se agregó también
+   `reasoning: { effort: "low" }` en el request a OpenAI (no hace falta
+   razonamiento profundo para elegir de una lista fija de segmentos) y un
+   timeout defensivo de 45s por request individual (`AbortController`).
+2. **Más concurrencia** (`SIEVE_CONCURRENCY`, default 5 → 10).
+3. **Presupuesto de tiempo** (`app/api/sieve/route.ts`): antes de cada
+   tanda paralela se chequea cuánto tiempo pasó desde que arrancó el
+   request; si ya se acerca a `SIEVE_TIME_BUDGET_MS`, se corta ahí mismo y
+   se devuelve el resumen con `parcial: true` en vez de seguir y arriesgarse
+   a que Vercel mate la función sin respuesta. El frontend (`app/page.tsx`)
+   muestra un aviso ("⏱️ Se alcanzó el límite de tiempo... clickeá de nuevo
+   para seguir") cuando esto pasa. Como cada ítem procesado se loguea en
+   `model_sieve_log` al momento (no al final), no se pierde ni se reprocesa
+   nada — el próximo click retoma justo donde quedó.
 
 **Historial de proveedores de IA para el tamizador (todo el 17/07/2026):**
 esta feature pasó por 3 proveedores distintos en el mismo día, cada cambio
@@ -508,7 +536,8 @@ como único mecanismo de auth). Lista real de variables usadas en el código:
 | `TOKEN_UPDATE_SECRET` | referenciada por `refresh_token.py` | Secreto compartido para el endpoint `/api/token` (que hoy no existe — ver sección 7). |
 | `OPENAI_API_KEY` | `lib/aiClassifier.ts` | Clasificación con IA del tamizador de segmentos (sección 10.1). Proyecto "cobus" en platform.openai.com, facturación por uso pagada por la empresa (no es lo mismo que ChatGPT Plus). |
 | `SIEVE_BATCH_LIMIT` | `app/api/sieve/route.ts` | Cuántas combinaciones marca+modelo procesa el tamizador por click (default 100). |
-| `SIEVE_CONCURRENCY` | `app/api/sieve/route.ts` | Cuántas de esas combinaciones procesa en paralelo (default 5). |
+| `SIEVE_CONCURRENCY` | `app/api/sieve/route.ts` | Cuántas de esas combinaciones procesa en paralelo (default 10). |
+| `SIEVE_TIME_BUDGET_MS` | `app/api/sieve/route.ts` | Presupuesto de tiempo total del request antes de cortar el lote y devolver un resumen parcial (default 260000 = 260s). |
 
 ## 13. Frontend
 
