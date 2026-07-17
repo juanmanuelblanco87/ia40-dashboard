@@ -6,9 +6,7 @@ export interface ModelPvpEntry {
   modelo: string;
   pvp_usd: number | null;
   confianza: string | null;
-  fuentes_consistentes: number | null;
   razonamiento: string | null;
-  fuente_url: string | null;
   status: string; // 'pending' | 'found' | 'not_found' | 'error'
 }
 
@@ -31,7 +29,7 @@ export async function getOrSearchModelPvp(
   modelo: string
 ): Promise<ModelPvpEntry> {
   const existing = await query<ModelPvpEntry>(
-    `select marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, fuente_url, status
+    `select marca, modelo, pvp_usd, confianza, razonamiento, status
      from model_pvp
      where category_id = $1 and marca = $2 and modelo = $3`,
     [categoryId, marca, modelo]
@@ -45,37 +43,23 @@ export async function getOrSearchModelPvp(
     const result = await findModelPvp(marca, modelo, categoryName);
     const status = result.pvpUsd != null ? "found" : "not_found";
     await query(
-      `insert into model_pvp (category_id, marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, fuente_url, status, fetched_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+      `insert into model_pvp (category_id, marca, modelo, pvp_usd, confianza, razonamiento, status, fetched_at)
+       values ($1, $2, $3, $4, $5, $6, $7, now())
        on conflict (category_id, marca, modelo) do update set
          pvp_usd = excluded.pvp_usd,
          confianza = excluded.confianza,
-         fuentes_consistentes = excluded.fuentes_consistentes,
          razonamiento = excluded.razonamiento,
-         fuente_url = excluded.fuente_url,
          status = excluded.status,
          fetched_at = now(),
          error_message = null`,
-      [
-        categoryId,
-        marca,
-        modelo,
-        result.pvpUsd,
-        result.confianza,
-        result.fuentesConsistentes,
-        result.razonamiento,
-        result.fuenteUrl,
-        status,
-      ]
+      [categoryId, marca, modelo, result.pvpUsd, result.confianza, result.razonamiento, status]
     );
     return {
       marca,
       modelo,
       pvp_usd: result.pvpUsd,
       confianza: result.confianza,
-      fuentes_consistentes: result.fuentesConsistentes,
       razonamiento: result.razonamiento,
-      fuente_url: result.fuenteUrl,
       status,
     };
   } catch (err: any) {
@@ -92,9 +76,7 @@ export async function getOrSearchModelPvp(
       modelo,
       pvp_usd: null,
       confianza: null,
-      fuentes_consistentes: null,
       razonamiento: null,
-      fuente_url: null,
       status: "error",
     };
   }
