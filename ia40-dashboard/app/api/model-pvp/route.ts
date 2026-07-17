@@ -8,9 +8,7 @@ interface ModelPvpRow {
   modelo: string;
   pvp_usd: number | null;
   confianza: string | null;
-  fuentes_consistentes: number | null;
   razonamiento: string | null;
-  fuente_url: string | null;
   status: string;
 }
 
@@ -31,7 +29,7 @@ export async function GET(req: Request) {
   }
 
   const rows = await query<ModelPvpRow>(
-    `select marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, fuente_url, status
+    `select marca, modelo, pvp_usd, confianza, razonamiento, status
      from model_pvp where category_id = $1`,
     [cat[0].id]
   );
