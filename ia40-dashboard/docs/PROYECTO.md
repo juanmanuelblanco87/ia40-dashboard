@@ -559,6 +559,31 @@ intento que no encontró nada).
   `fuentes_consistentes` en la base (no se borraron por prolijidad de no
   tocar el esquema sin necesidad), pero el código ya no las llena ni las
   lee.
+- **ACTUALIZACIÓN 2 (17/07/2026, misma tarde)**: la pregunta directa seguía
+  exigiendo el precio "de este modelo específico", lo que en la práctica
+  devolvía `'not_found'` ("Sin dato" en el dashboard) para la mayoría de los
+  modelos — códigos de importación muy puntuales no suelen tener una ficha
+  de venta propia online (pedido explícito del usuario: *"es una simple
+  pregunta, debería dar datos"*). Ahora, si no encuentra el precio del
+  modelo EXACTO, el prompt le pide que estime usando precios de productos
+  equivalentes/similares de la misma marca y tipo de producto, marcando
+  `confianza: "baja"` — mismo criterio que ya se usa para el segmento
+  (sección 10.1: siempre elegir la mejor estimación disponible en vez de
+  dejarlo sin clasificar). `pvp_usd` solo queda en `null` si de verdad no
+  hay ningún precio relacionado, ni del modelo exacto ni de similares.
+  Como consecuencia, `getOrSearchModelPvp()` (`lib/modelPvp.ts`) cambió de
+  comportamiento: antes cacheaba `'not_found'` para siempre (igual que
+  `'found'`); ahora **`'not_found'` se reintenta en cada click** (el botón ya
+  mostraba un ícono de "reintentar" ↻ para ese estado, así que el
+  comportamiento pasa a coincidir con lo que se ve en pantalla). Solo
+  `'found'` sigue siendo definitivo.
+- **ACTUALIZACIÓN 3 (17/07/2026, misma tarde)**: se agregó *"para el mercado
+  de Argentina"* a la pregunta (pedido explícito del usuario) — el PVP de
+  equipamiento médico/ortopédico varía bastante entre países, así que ahora
+  se le pide puntualmente el precio de venta en Argentina; si no encuentra
+  oferta local ni del modelo exacto ni de un similar, recién ahí puede usar
+  un precio internacional como estimación (aclarándolo en el
+  razonamiento/`pvp_razonamiento`).
 - Es un archivo deliberadamente independiente de `lib/aiClassifier.ts`
   (repite ~40 líneas de boilerplate de la llamada a OpenAI en vez de
   compartir un helper) para no tocar el código del tamizador, que ya está
