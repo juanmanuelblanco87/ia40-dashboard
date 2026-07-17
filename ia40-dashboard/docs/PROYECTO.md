@@ -186,16 +186,47 @@ fresco automáticamente mediante:
   **envía por POST a `VERCEL_TOKEN_ENDPOINT`** (configurado como
   `.../api/token`) con `Authorization: Bearer <TOKEN_UPDATE_SECRET>`.
 
-⚠️ **Hallazgo al documentar (16/07/2026): el endpoint `/api/token` no existe
-en el repo.** Se buscó en `app/api/*` y no hay ninguna carpeta `token/`.
-`refresh_token.py` y todo el mecanismo de `CobusSync_Installer` asumen que
-existe un endpoint Next.js que recibe `{ token }` y lo guarda en
-`app_settings` (`key='ia40_jwt'`), pero ese código no está en el proyecto —
-o se perdió en algún momento, o nunca se llegó a crear. Vale la pena
-confirmar con el usuario si el instalador está corriendo hoy sin error (el
-log de `%LOCALAPPDATA%\CobusSync\log.txt` lo diría: si dice "OK" es que el
-endpoint sí responde en producción aunque no esté en este código fuente; si
-tira error 404, hay que crear `app/api/token/route.ts`).
+✅ **Verificado en producción (17/07/2026):** el mecanismo está funcionando.
+Se confirmó corriendo en la consola de Neon:
+```sql
+select key, value, updated_at, now() - updated_at as antiguedad
+from app_settings where key = 'ia40_jwt';
+```
+y `antiguedad` da unos pocos minutos (se actualiza solo cada 10 min, como se
+espera).
+
+⚠️ **Detalle raro para tener en cuenta:** no se encontró el archivo
+`app/api/token/route.ts` (ni ningún archivo con "token" en el nombre fuera
+de `refresh_token.py`) en esta copia local del repo. Como el mecanismo
+funciona en producción, ese endpoint necesariamente existe en el código que
+está desplegado en Vercel — solo que no está presente en esta carpeta local.
+Probablemente se subió en algún momento directo desde la interfaz web de
+GitHub y nunca se bajó/copió de vuelta a esta carpeta. **Recomendación:**
+antes de editar o resubir cualquier archivo relacionado (`lib/ia40Export.ts`,
+o cualquier cosa que toque `app_settings`), conviene entrar a GitHub y
+confirmar si existe `app/api/token/route.ts` ahí, para no terminar con esta
+carpeta local y el repo real desincronizados en otros archivos también.
+
+### Cómo verificar que el token se está actualizando solo
+
+Correr en la consola SQL de Neon:
+
+```sql
+select key, value, updated_at, now() - updated_at as antiguedad
+from app_settings
+where key = 'ia40_jwt';
+```
+
+- `antiguedad` de pocos minutos (menos de 20) → el mecanismo anda bien:
+  `refresh_token.py` está corriendo en la PC del usuario cada 10 minutos y
+  actualizando la base sin problema.
+- `antiguedad` de varias horas/días, o la consulta no devuelve filas → el
+  token dejó de actualizarse. Primer lugar donde mirar: el archivo
+  `%LOCALAPPDATA%\CobusSync\log.txt` en la PC donde corre el instalador — ahí
+  queda registrado "OK: token actualizado..." en cada corrida exitosa, o el
+  motivo del error si falla (usuario/contraseña de Cobus vencidos, abono de
+  Cobus vencido, usuario deshabilitado, etc. — ver los mensajes de error que
+  arma `refresh_token.py`).
 
 ## 8. Parsers (marca / modelo / color / segmento)
 
@@ -264,7 +295,7 @@ correrlo a mano si se quiere.
 | `/api/model-images` | GET | Estado de búsqueda de imagen por marca/modelo de una categoría. |
 | `/api/model-images/search` | POST | Busca (o cachea) la imagen de un modelo puntual, on-demand. |
 | `/api/model-overrides` | POST | Corrige a mano segmento y/o imagen de una combinación marca+modelo. |
-| `/api/token` | — | **No existe en el repo** (ver sección 7) — debería recibir el JWT que manda `refresh_token.py`. |
+| `/api/token` | POST (asumido) | Recibe el JWT que manda `refresh_token.py` y lo guarda en `app_settings`. Confirmado funcionando en producción, pero su archivo fuente no está en esta carpeta local (ver sección 7). |
 
 ## 12. Variables de entorno
 
@@ -352,9 +383,11 @@ GitHub, sin acción manual extra). `vercel.json` declara un único cron:
   sola categoría piloto, auth solo por variable de entorno) — no reflejan el
   estado actual. Convendría actualizarlos o al menos linkearlos a este
   documento.
-- El endpoint `/api/token` que necesita `refresh_token.py` no existe en el
-  repo (sección 7) — confirmar si está corriendo en producción por otra vía,
-  o si hay que crearlo.
+- El endpoint `/api/token` que necesita `refresh_token.py` está confirmado
+  funcionando en producción (sección 7), pero su archivo fuente no aparece
+  en esta carpeta local — conviene confirmar en GitHub que existe y, si es
+  posible, traer ese archivo de vuelta a esta carpeta para que quede
+  completa y sincronizada con lo que realmente corre en Vercel.
 - `lib/parsers/sillasDeRuedas.ts` podría estar huérfano (reemplazado por la
   lógica generalizada de `lib/parsers/index.ts`) — revisar si se puede
   eliminar.
