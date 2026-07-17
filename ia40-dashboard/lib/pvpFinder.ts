@@ -26,6 +26,8 @@ export interface PvpResult {
   confianza: "alta" | "media" | "baja";
   fuentesConsistentes: number;
   razonamiento: string;
+  /** Link de la publicacion de donde salio el precio elegido, o null. */
+  fuenteUrl: string | null;
 }
 
 export class PvpFinderError extends Error {}
@@ -38,10 +40,10 @@ Necesito el Precio de Venta al Publico (PVP) en dolares estadounidenses (USD) de
 - Modelo/codigo: ${modelo}
 - Tipo de producto: ${categoryName}
 
-Hace busquedas web para encontrar varios precios de venta al publico de este producto (tiendas online, distribuidores medicos, marketplaces, el sitio del fabricante). Si encontras precios en otra moneda, convertilos a USD con un tipo de cambio aproximado y aclaralo en el razonamiento. De todos los precios que encuentres, elegi el valor que MAS SE REPITA entre distintas fuentes; si ningun valor se repite exactamente, elegi el mas consistente/representativo (por ejemplo, descartando 1 o 2 precios que sean claramente outliers respecto al resto). Si no encontras ningun precio confiable para este modelo especifico, dejá "pvp_usd" en null (no inventes un numero).
+Hace busquedas web para encontrar varios precios de venta al publico de este producto (tiendas online, distribuidores medicos, marketplaces, el sitio del fabricante). Si encontras precios en otra moneda, convertilos a USD con un tipo de cambio aproximado y aclaralo en el razonamiento. De todos los precios que encuentres, elegi el valor que MAS SE REPITA entre distintas fuentes; si ningun valor se repite exactamente, elegi el mas consistente/representativo (por ejemplo, descartando 1 o 2 precios que sean claramente outliers respecto al resto). Si no encontras ningun precio confiable para este modelo especifico, dejá "pvp_usd" en null (no inventes un numero). Si encontras un precio, indicá en "fuente_url" el link de la publicacion de donde lo sacaste (para poder verificarlo despues).
 
 Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
-{"pvp_usd": number o null, "confianza": "alta"|"media"|"baja", "fuentes_consistentes": number (cuantas fuentes distintas encontraste con un valor igual o muy similar al elegido; 0 si no encontraste ninguna), "razonamiento": "explicacion breve en 1-2 oraciones: que precios encontraste y por que elegiste ese valor"}`;
+{"pvp_usd": number o null, "confianza": "alta"|"media"|"baja", "fuentes_consistentes": number (cuantas fuentes distintas encontraste con un valor igual o muy similar al elegido; 0 si no encontraste ninguna), "fuente_url": string o null, "razonamiento": "explicacion breve en 1-2 oraciones: que precios encontraste y por que elegiste ese valor"}`;
 }
 
 /**
@@ -154,11 +156,14 @@ export async function findModelPvp(marca: string, modelo: string, categoryName: 
     typeof parsed.fuentes_consistentes === "number" && Number.isFinite(parsed.fuentes_consistentes)
       ? Math.max(0, Math.round(parsed.fuentes_consistentes))
       : 0;
+  const fuenteUrl: string | null =
+    typeof parsed.fuente_url === "string" && parsed.fuente_url.trim() ? parsed.fuente_url.trim() : null;
 
   return {
     pvpUsd,
     confianza,
     fuentesConsistentes,
     razonamiento: String(parsed.razonamiento ?? ""),
+    fuenteUrl,
   };
 }
