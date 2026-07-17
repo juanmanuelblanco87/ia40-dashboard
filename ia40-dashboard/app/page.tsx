@@ -627,6 +627,19 @@ function TopCard({ title, lastMonth, last12, last12Label }: {
   );
 }
 
+// Para categorias cuya NCM trae de fondo mucha data no-medica (ver
+// docs/PROYECTO.md, parser de cada categoria), el filtro de Segmento
+// arranca preseleccionado en el segmento de uso ortopedico/relevante que
+// nos interesa, en vez de mostrar TODO desde el arranque. Los datos de los
+// demas segmentos NO se pierden ni se descartan (siguen sincronizados) --
+// el usuario puede ampliar o cambiar la seleccion de Segmento en cualquier
+// momento para verlos.
+const DEFAULT_SEGMENTO_FILTER: Record<string, string[]> = {
+  sillas_ducha: ["Sillas de Ducha / Sanitarias"],
+  almohadones_ortopedicos: ["Cojín Ortopédico / Antiescaras"],
+  elevadores_inodoro: ["Elevador / Asiento Sanitario Ortopédico"],
+};
+
 export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [slug, setSlug] = useState<string>("");
@@ -653,7 +666,10 @@ export default function Home() {
       .then((r) => r.json())
       .then((d) => {
         setCategories(d.categories ?? []);
-        if (d.categories?.[0]) setSlug(d.categories[0].slug);
+        if (d.categories?.[0]) {
+          setSlug(d.categories[0].slug);
+          setSegmentos(DEFAULT_SEGMENTO_FILTER[d.categories[0].slug] ?? []);
+        }
       });
   }, []);
 
@@ -837,7 +853,7 @@ export default function Home() {
               setMeses([]);
               setImportadores([]);
               setColores([]);
-              setSegmentos([]);
+              setSegmentos(DEFAULT_SEGMENTO_FILTER[e.target.value] ?? []);
             }}
           >
             {categories.map((c) => (
