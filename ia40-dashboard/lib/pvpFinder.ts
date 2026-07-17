@@ -1,12 +1,22 @@
 /**
  * Cliente OpenAI (Responses API + tool nativo `web_search`) para estimar el
- * Precio de Venta al Publico (PVP) en USD de un modelo, ON DEMAND (se llama
- * al hacer click en "Consultar precio" en la tabla "Share por Modelo" del
- * dashboard), reusando el mismo enfoque que lib/aiClassifier.ts (tamizador
- * de segmentos): una sola llamada con el tool `web_search`, sin structured
- * output (json_schema no es compatible de forma confiable con web_search,
- * ver nota completa en aiClassifier.ts), parseado con un extractor de JSON
- * tolerante a texto extra.
+ * precio promedio actual de venta al publico (PVP) en USD de un modelo, ON
+ * DEMAND (se llama al hacer click en "Consultar precio" en la tabla "Share
+ * por Modelo" del dashboard), reusando el mismo enfoque que
+ * lib/aiClassifier.ts (tamizador de segmentos): una sola llamada con el
+ * tool `web_search`, sin structured output (json_schema no es compatible de
+ * forma confiable con web_search, ver nota completa en aiClassifier.ts),
+ * parseado con un extractor de JSON tolerante a texto extra.
+ *
+ * ACTUALIZACION (17/07/2026): la version anterior le pedia al modelo que
+ * comparara precios de varias fuentes y devolviera un link de origen -- en
+ * la practica terminaba agarrando el precio de UNA ficha tecnica encontrada
+ * (a veces de un producto relacionado pero no exacto), en vez del precio de
+ * mercado real. Ahora se le hace una pregunta simple y directa ("cual es el
+ * precio promedio actual de X"), sin pedirle que elija ni justifique una
+ * fuente puntual, y se le pide directamente el promedio si encuentra varios
+ * precios. Ya NO se pide (ni se guarda) el link de origen: no aporta en esta
+ * etapa (pedido explicito del usuario, 17/07/2026).
  *
  * OJO: este archivo repite (en vez de importar) la logica de llamada a la
  * Responses API que ya existe en aiClassifier.ts. Es una decision deliberada:
@@ -24,10 +34,7 @@ const OPENAI_MODEL = "gpt-5.4-mini";
 export interface PvpResult {
   pvpUsd: number | null;
   confianza: "alta" | "media" | "baja";
-  fuentesConsistentes: number;
   razonamiento: string;
-  /** Link de la publicacion de donde salio el precio elegido, o null. */
-  fuenteUrl: string | null;
 }
 
 export class PvpFinderError extends Error {}
@@ -35,15 +42,15 @@ export class PvpFinderError extends Error {}
 function buildPrompt(marca: string, modelo: string, categoryName: string): string {
   return `Sos un investigador de precios de equipamiento medico/ortopedico para un dashboard de comercio exterior.
 
-Necesito el Precio de Venta al Publico (PVP) en dolares estadounidenses (USD) del siguiente producto:
+Pregunta simple: ¿Cual es el precio promedio actual de venta al publico, en dolares estadounidenses (USD), del siguiente producto?
 - Marca: ${marca}
 - Modelo/codigo: ${modelo}
 - Tipo de producto: ${categoryName}
 
-Hace busquedas web para encontrar varios precios de venta al publico de este producto (tiendas online, distribuidores medicos, marketplaces, el sitio del fabricante). Si encontras precios en otra moneda, convertilos a USD con un tipo de cambio aproximado y aclaralo en el razonamiento. De todos los precios que encuentres, elegi el valor que MAS SE REPITA entre distintas fuentes; si ningun valor se repite exactamente, elegi el mas consistente/representativo (por ejemplo, descartando 1 o 2 precios que sean claramente outliers respecto al resto). Si no encontras ningun precio confiable para este modelo especifico, dejá "pvp_usd" en null (no inventes un numero). Si encontras un precio, indicá en "fuente_url" el link de la publicacion de donde lo sacaste (para poder verificarlo despues).
+Buscá en la web precios de venta al publico ACTUALES de este producto especifico (tiendas online, distribuidores medicos, marketplaces, el sitio del fabricante) -- no uses el precio de una ficha tecnica o comparativa que no sea especificamente sobre este modelo. Si encontras varios precios, calculá el PROMEDIO entre ellos (convertilos a USD primero si estan en otra moneda). Si no encontras ningun precio de venta confiable para este modelo especifico, dejá "pvp_usd" en null (no inventes un numero).
 
 Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
-{"pvp_usd": number o null, "confianza": "alta"|"media"|"baja", "fuentes_consistentes": number (cuantas fuentes distintas encontraste con un valor igual o muy similar al elegido; 0 si no encontraste ninguna), "fuente_url": string o null, "razonamiento": "explicacion breve en 1-2 oraciones: que precios encontraste y por que elegiste ese valor"}`;
+{"pvp_usd": number o null (el precio promedio en USD), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones: que precios encontraste y como calculaste el promedio"}`;
 }
 
 /**
@@ -152,18 +159,10 @@ export async function findModelPvp(marca: string, modelo: string, categoryName: 
     parsed.confianza === "alta" || parsed.confianza === "media" || parsed.confianza === "baja"
       ? parsed.confianza
       : "baja";
-  const fuentesConsistentes: number =
-    typeof parsed.fuentes_consistentes === "number" && Number.isFinite(parsed.fuentes_consistentes)
-      ? Math.max(0, Math.round(parsed.fuentes_consistentes))
-      : 0;
-  const fuenteUrl: string | null =
-    typeof parsed.fuente_url === "string" && parsed.fuente_url.trim() ? parsed.fuente_url.trim() : null;
 
   return {
     pvpUsd,
     confianza,
-    fuentesConsistentes,
     razonamiento: String(parsed.razonamiento ?? ""),
-    fuenteUrl,
   };
 }
