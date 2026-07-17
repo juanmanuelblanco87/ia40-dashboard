@@ -44,6 +44,7 @@ create table if not exists trade_records (
   marca text,                         -- calculado por el parser de la categoria (lib/parsers), si tiene uno
   modelo text,                        -- idem
   color text,                         -- idem (paso 10 del parser de sillas de ruedas)
+  segmento text,                      -- idem (paso 11 del parser de sillas de ruedas)
   ingested_at timestamptz not null default now(),
   source_hash text unique             -- hash del registro para evitar duplicados en re-sync
 );
@@ -61,10 +62,12 @@ create table if not exists monthly_brand_model_agg (
   marca text,
   modelo text,
   proveedor text,
+  color text,
+  segmento text,
   total_fob_dolars numeric not null default 0,
   total_unidades numeric not null default 0,
   record_count int not null default 0,
-  unique (category_id, period, marca, modelo, proveedor)
+  unique (category_id, period, marca, modelo, proveedor, color, segmento)
 );
 
 create index if not exists idx_monthly_agg_lookup on monthly_brand_model_agg (category_id, period);
@@ -108,6 +111,59 @@ create table if not exists sync_runs (
   error_message text,
   run_at timestamptz not null default now()
 );
+
+-- Imagen representativa por marca/modelo, conseguida via Google Custom
+-- Search API (busqueda de imagenes). Se completa de a poco en un cron
+-- separado (/api/sync-images, ver vercel.json) para no gastar de una toda
+-- la cuota diaria gratis de la API. "status" evita re-buscar lo mismo en
+-- cada corrida: 'found' y 'not_found' quedan fijos, solo 'error' se
+-- reintenta en la proxima corrida.
+create table if not exists model_images (
+  id serial primary key,
+  category_id int not null references categories(id) on delete cascade,
+  marca text not null,
+  modelo text not null,
+  image_url text,
+  thumbnail_url text,
+  source_url text,
+  status text not null default 'pending', -- 'pending' | 'found' | 'not_found' | 'error'
+  error_message text,
+  fetched_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (category_id, marca, modelo)
+);
+
+create index if not exists idx_model_images_status on model_images (category_id, status);
+
+-- Precio de Venta al Publico (PVP) estimado en USD por marca/modelo,
+-- conseguido via OpenAI (tool web_search): o bien ON DEMAND (click en
+-- "Consultar" en la tabla, ver lib/pvpFinder.ts) o bien aprovechando la
+-- MISMA busqueda que ya hace el tamizador de segmentos para identificar el
+-- producto (ver lib/aiClassifier.ts + app/api/sieve/route.ts) -- en ambos
+-- casos el modelo busca varios precios en la web y elige el valor que mas se
+-- repite (o el mas consistente/representativo). "status" evita re-consultar
+-- lo mismo en cada click: 'found' y 'not_found' quedan cacheados para
+-- siempre, solo 'error' se reintenta. "fuente_url" guarda el link de la
+-- publicacion de donde salio el precio, para poder verificarlo (se muestra
+-- como link clickeable en el dashboard).
+create table if not exists model_pvp (
+  id serial primary key,
+  category_id int not null references categories(id) on delete cascade,
+  marca text not null,
+  modelo text not null,
+  pvp_usd numeric,
+  confianza text, -- 'alta' | 'media' | 'baja'
+  fuentes_consistentes int,
+  razonamiento text,
+  fuente_url text,
+  status text not null default 'pending', -- 'pending' | 'found' | 'not_found' | 'error'
+  error_message text,
+  fetched_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (category_id, marca, modelo)
+);
+
+create index if not exists idx_model_pvp_status on model_pvp (category_id, status);
 
 -- Seed inicial: categoria piloto.
 insert into categories (slug, name) values ('sillas_de_ruedas', 'Sillas de ruedas')
