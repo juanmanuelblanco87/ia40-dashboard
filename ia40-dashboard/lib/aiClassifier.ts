@@ -76,18 +76,14 @@ export interface SieveClassifyResult {
   confianza: "alta" | "media" | "baja";
   razonamiento: string;
   /**
-   * PVP (Precio de Venta al Publico) en USD, aprovechando la MISMA busqueda
-   * web que ya se hace para identificar el producto -- pedido explicito del
-   * usuario (17/07/2026): "aprovechar mas la Api con OpenIA... cuando va a
-   * buscar una info tambien trae la otra". Null si no encontro un precio
-   * confiable en esa busqueda (no se hace una segunda busqueda solo por
-   * esto, para no duplicar costo/latencia).
+   * Precio promedio actual de venta al publico en USD, aprovechando la
+   * MISMA busqueda web que ya se hace para identificar el producto --
+   * pedido explicito del usuario (17/07/2026): "aprovechar mas la Api con
+   * OpenIA... cuando va a buscar una info tambien trae la otra". Null si no
+   * encontro un precio confiable en esa busqueda (no se hace una segunda
+   * busqueda solo por esto, para no duplicar costo/latencia).
    */
   pvpUsd: number | null;
-  /** Link de la publicacion de donde salio el pvpUsd (para poder verificarlo despues), o null. */
-  pvpFuenteUrl: string | null;
-  /** Cuantas fuentes distintas encontro con un valor igual o similar al elegido. */
-  pvpFuentesConsistentes: number;
   pvpRazonamiento: string;
 }
 
@@ -116,10 +112,10 @@ ${opcionesCategoriaTexto}
 
 Basandote en lo que encuentres buscando en la web, elegi SIEMPRE el segmento que mejor se ajuste al producto -- incluso si la evidencia es parcial, indirecta o ambigua (por ejemplo, si no encontras el modelo exacto pero si otros productos de la misma marca, o el nombre/codigo del modelo da una pista razonable del tipo de producto). NUNCA dejes "segmento" en null: usa el campo "confianza" para indicar que tan seguro estas ("baja" si tuviste que inferir con poca evidencia), pero elegi igual la opcion mas probable de la lista. Dejar "categoria_slug" en null (o igual a la categoria actual) si no hay evidencia clara de que el producto sea de otra categoria -- ese cambio si requiere mas certeza porque mueve la fila a otro lugar del sistema.
 
-Ademas, aprovechá esa MISMA busqueda para anotar el Precio de Venta al Publico (PVP) en dolares estadounidenses (USD) de este producto, si lo encontras (no hagas una busqueda adicional solo para esto). Si en los resultados aparecen varios precios, preferi el que mas se repita entre fuentes, o el mas consistente/representativo si ninguno se repite exacto (descartando outliers claramente distintos al resto; convertilo a USD con un tipo de cambio aproximado si esta en otra moneda). Si no encontras ningun precio confiable para este modelo especifico en esa busqueda, dejá "pvp_usd" en null (no inventes un numero). Si encontras un precio, indicá en "pvp_fuente_url" el link de la publicacion de donde lo sacaste.
+Ademas, como parte de esa MISMA busqueda (no hagas una busqueda adicional solo para esto), respondé esta pregunta simple: ¿Cual es el precio promedio actual de venta al publico, en dolares estadounidenses (USD), de este producto especifico? Usá precios de venta reales de ESTE modelo puntual -- no el precio que aparezca en una ficha tecnica o comparativa que no sea especificamente sobre este producto. Si encontras varios precios, calculá el PROMEDIO entre ellos (convertilos a USD primero si estan en otra moneda). Si no encontras ningun precio de venta confiable para este modelo especifico, dejá "pvp_usd" en null (no inventes un numero).
 
 Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
-{"categoria_slug": string o null, "segmento": string (nunca null, elegi el mas probable), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda y si fue una inferencia indirecta", "pvp_usd": number o null, "pvp_fuente_url": string o null, "pvp_fuentes_consistentes": number (cuantas fuentes con un valor similar encontraste; 0 si ninguna), "pvp_razonamiento": "explicacion breve de 1 oracion sobre el precio encontrado"}`;
+{"categoria_slug": string o null, "segmento": string (nunca null, elegi el mas probable), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda y si fue una inferencia indirecta", "pvp_usd": number o null (el precio promedio en USD), "pvp_razonamiento": "explicacion breve de 1 oracion: que precios encontraste y como calculaste el promedio"}`;
 }
 
 /**
@@ -250,12 +246,6 @@ export async function classifyProduct(params: SieveClassifyParams): Promise<Siev
     typeof parsed.pvp_usd === "number" && Number.isFinite(parsed.pvp_usd) && parsed.pvp_usd > 0
       ? parsed.pvp_usd
       : null;
-  const pvpFuenteUrl: string | null =
-    typeof parsed.pvp_fuente_url === "string" && parsed.pvp_fuente_url.trim() ? parsed.pvp_fuente_url.trim() : null;
-  const pvpFuentesConsistentes: number =
-    typeof parsed.pvp_fuentes_consistentes === "number" && Number.isFinite(parsed.pvp_fuentes_consistentes)
-      ? Math.max(0, Math.round(parsed.pvp_fuentes_consistentes))
-      : 0;
 
   return {
     categoriaSlug,
@@ -263,8 +253,6 @@ export async function classifyProduct(params: SieveClassifyParams): Promise<Siev
     confianza,
     razonamiento: String(parsed.razonamiento ?? ""),
     pvpUsd,
-    pvpFuenteUrl,
-    pvpFuentesConsistentes,
     pvpRazonamiento: String(parsed.pvp_razonamiento ?? ""),
   };
 }
