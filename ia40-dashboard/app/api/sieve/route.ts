@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { recomputeMonthlyAgg } from "@/lib/aggregate";
-import { searchProductInfo, QuotaExceededError } from "@/lib/webSearch";
 import { classifyProduct, AiClassifierError, type CategoriaOpcion } from "@/lib/aiClassifier";
 import { segmentosValidos } from "@/lib/segmentos";
 import { ORTOPEDIA_9021_CATEGORY_SLUGS } from "@/lib/parsers";
@@ -34,20 +33,24 @@ interface PendienteRow {
  *
  * "Tamizador de segmentos" (17/07/2026): para cada combinacion marca+modelo
  * de la categoria elegida que TODAVIA no se valido (ver model_sieve_log),
- * busca el producto en la web (lib/webSearch.ts, SerpApi) y le pide a una
- * IA (lib/aiClassifier.ts, Claude Haiku) que decida el segmento real -- y,
- * si la categoria es una de las 3 de NCM compartido (andadores / bastones /
- * calzado_ortopedico), tambien si el producto esta en la categoria correcta
- * (un mismo fabricante puede vender, bajo codigos parecidos, productos que
- * en realidad son de otra de las 3 categorias -- ver docs/PROYECTO.md,
- * caso real: "Double Care Medical HY7300L" clasificado como andador
- * siendo en realidad un baston).
+ * le pide a Gemini (lib/aiClassifier.ts) que busque el producto en la web
+ * POR SU CUENTA (tool nativo "google_search" de Gemini, sin SerpApi) y
+ * decida el segmento real -- y, si la categoria es una de las 3 de NCM
+ * compartido (andadores / bastones / calzado_ortopedico), tambien si el
+ * producto esta en la categoria correcta (un mismo fabricante puede vender,
+ * bajo codigos parecidos, productos que en realidad son de otra de las 3
+ * categorias -- ver docs/PROYECTO.md, caso real: "Double Care Medical
+ * HY7300L" clasificado como andador siendo en realidad un baston).
+ *
+ * SerpApi NO se usa aca (pedido explicito del usuario, 17/07/2026): esa
+ * cuota compartida (250 busquedas/mes gratis) queda reservada solo para
+ * pegar la imagen de un producto al catalogo (lib/imageSearch.ts), un flujo
+ * completamente aparte.
  *
  * Corre en LOTES (parametro `limit`, default 20) porque cada fila gasta una
- * busqueda de SerpApi (cuota compartida con la busqueda de imagenes, 250/mes
- * en el plan gratis) + una llamada a Gemini (gratis, con limite de uso por
- * minuto/dia -- por eso el `sleep(SIEVE_DELAY_MS)` entre items, para no
- * pasarse del limite de requests-por-minuto del plan gratis).
+ * llamada a Gemini (gratis, con limite de uso por minuto/dia -- por eso el
+ * `sleep(SIEVE_DELAY_MS)` entre items, para no pasarse del limite de
+ * requests-por-minuto del plan gratis).
  * Se dispara manualmente desde el boton "Tamizar categoria" del dashboard,
  * NO esta en ningun cron.
  */
@@ -119,7 +122,6 @@ export async function GET(req: Request) {
     movidos: [] as { marca: string; modelo: string; de: string; a: string; segmento: string | null; razonamiento: string }[],
     corregidos: [] as { marca: string; modelo: string; segmento: string; razonamiento: string }[],
     detalle_errores: [] as string[],
-    cuota_agotada: false,
   };
 
   const categoriasTocadas = new Set<number>([categoria.id]);
@@ -137,7 +139,6 @@ export async function GET(req: Request) {
   for (const [idx, { marca, modelo, segmento_actual }] of pendientes.entries()) {
     if (idx > 0) await sleep(SIEVE_DELAY_MS);
     try {
-      const searchResults = await searchProductInfo(`${marca} ${modelo}`);
       const clasif = await classifyProduct({
         marca,
         modelo,
@@ -147,7 +148,6 @@ export async function GET(req: Request) {
         opcionesCategoria: opcionesCategoria?.map(
           (o): CategoriaOpcion => ({ slug: o.slug, nombre: o.name, segmentos: o.segmentos })
         ),
-        searchResults,
       });
 
       resumen.procesados++;
@@ -224,17 +224,12 @@ export async function GET(req: Request) {
         await logSieve(categoria.id, marca, modelo, "sin_cambios", clasif.razonamiento);
       }
     } catch (err: any) {
+      // Cualquier error (falta de API key, 429, respuesta no parseable,
+      // etc.) se registra y se sigue con el resto del lote -- no se corta
+      // todo por una fila puntual.
       resumen.errores++;
       resumen.detalle_errores.push(`${marca} / ${modelo}: ${String(err?.message ?? err)}`);
-      if (err instanceof QuotaExceededError) {
-        resumen.cuota_agotada = true;
-        break; // sin cuota de SerpApi no tiene sentido seguir intentando en este lote
-      }
-      if (err instanceof AiClassifierError) {
-        // Problema puntual con la IA (ej. respuesta no parseable) -- se
-        // sigue con el resto del lote, no se corta todo por una fila.
-        continue;
-      }
+      continue;
     }
   }
 
