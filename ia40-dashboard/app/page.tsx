@@ -238,6 +238,7 @@ export interface ModelPvpEntry {
   confianza: string | null;
   fuentes_consistentes: number | null;
   razonamiento: string | null;
+  fuente_url: string | null;
   status: string; // 'pending' | 'found' | 'not_found' | 'error'
 }
 
@@ -323,11 +324,6 @@ const PVP_BUTTON_LABEL: Record<string, string> = {
   pending: "Consultar precio (OpenAI busca en la web)",
 };
 
-/** Formato USD con 2 decimales, para valores unitarios (FOB unitario, PVP). */
-function fmtUsdUnit(n: number): string {
-  return n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 function ModelShareTable({
   rows,
   last12Label,
@@ -385,15 +381,24 @@ function ModelShareTable({
                   <td style={cellRight}>{r.fobPct.toFixed(1)}%</td>
                   <td style={cellRight}>{fmtNumber(r.unidades)}</td>
                   <td style={cellRight}>{r.unidadesPct.toFixed(1)}%</td>
-                  <td style={cellRight}>{r.unidades > 0 ? `$${fmtUsdUnit(r.fobUnitario)}` : "-"}</td>
+                  <td style={cellRight}>{r.unidades > 0 ? `$${fmtNumber(r.fobUnitario)}` : "-"}</td>
                   <td style={cellRight}>
                     {pvpLoading ? (
                       <span style={{ color: "var(--muted)" }}>Buscando...</span>
                     ) : pvpStatus === "found" && pvp?.pvp_usd != null ? (
-                      <span title={pvp.razonamiento ?? undefined}>
-                        ${fmtUsdUnit(pvp.pvp_usd)}
-                        {pvp.confianza === "baja" && " ⚠︎"}
-                      </span>
+                      pvp.fuente_url ? (
+                        <a
+                          href={pvp.fuente_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={pvp.razonamiento ?? "Ver publicacion de origen"}
+                          style={{ color: "var(--accent)" }}
+                        >
+                          ${fmtNumber(pvp.pvp_usd)}
+                        </a>
+                      ) : (
+                        <span title={pvp.razonamiento ?? undefined}>${fmtNumber(pvp.pvp_usd)}</span>
+                      )
                     ) : (
                       <button
                         onClick={() => onConsultPvp(r.marca, r.modelo, r.segmento)}
@@ -734,6 +739,8 @@ interface SieveSummary {
   categoria_movida?: number;
   sin_evidencia?: number;
   errores?: number;
+  /** Cuantos items trajeron un PVP nuevo en esta corrida (ver sección 10.2). */
+  pvp_actualizado?: number;
   movidos?: { marca: string; modelo: string; de: string; a: string; segmento: string | null; razonamiento: string }[];
   corregidos?: { marca: string; modelo: string; segmento: string; razonamiento: string }[];
   detalle_errores?: string[];
@@ -809,6 +816,7 @@ export default function Home() {
         // Si se corrigieron segmentos o se movieron filas de categoria, la
         // serie actual puede haber cambiado -- se recarga para reflejarlo.
         if ((d.segmento_corregido ?? 0) > 0 || (d.categoria_movida ?? 0) > 0) reloadSeries();
+        if ((d.pvp_actualizado ?? 0) > 0) reloadModelPvp();
         reloadSieveStatus();
       })
       .catch(() => setSieveResult({ error: "No se pudo correr el tamizador. Proba de nuevo." } as any))
@@ -883,7 +891,12 @@ export default function Home() {
       .catch(() => setModelImages(new Map()));
   }, [slug]);
 
-  useEffect(() => {
+  // Extraida en su propia funcion para poder recargarla tanto al cambiar de
+  // categoria como despues de correr el tamizador (que ahora tambien
+  // completa PVP en la misma busqueda, ver guardarPvp() en
+  // app/api/sieve/route.ts) -- asi la columna PVP USD se actualiza sola sin
+  // esperar a un cambio de categoria/refresco de pagina.
+  const reloadModelPvp = () => {
     if (!slug) return;
     fetch(`/api/model-pvp?category=${encodeURIComponent(slug)}`)
       .then((r) => r.json())
@@ -895,7 +908,9 @@ export default function Home() {
         setModelPvp(map);
       })
       .catch(() => setModelPvp(new Map()));
-  }, [slug]);
+  };
+
+  useEffect(reloadModelPvp, [slug]);
 
   // Consulta on-demand del PVP de un modelo puntual (click en "Consultar" en
   // la columna PVP USD de Share por Modelo) -- llama a OpenAI (web_search) y
@@ -929,6 +944,7 @@ export default function Home() {
             confianza: null,
             fuentes_consistentes: null,
             razonamiento: null,
+            fuente_url: null,
             status: "error",
           });
           return next;
@@ -1104,6 +1120,7 @@ export default function Home() {
                 <div style={{ color: "var(--muted)" }}>
                   Sin cambios: {sieveResult.sin_cambios ?? 0} · Segmento corregido: {sieveResult.segmento_corregido ?? 0} ·
                   {" "}Categoría movida: {sieveResult.categoria_movida ?? 0} · Sin evidencia: {sieveResult.sin_evidencia ?? 0}
+                  {" "}· PVP encontrado: {sieveResult.pvp_actualizado ?? 0}
                   {(sieveResult.errores ?? 0) > 0 && (
                     <>
                       {" "}· Errores: {sieveResult.errores}{" "}
