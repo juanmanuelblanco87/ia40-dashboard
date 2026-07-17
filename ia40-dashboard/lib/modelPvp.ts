@@ -14,9 +14,17 @@ export interface ModelPvpEntry {
  * Busca (o devuelve de cache) el PVP estimado en USD de una combinacion
  * marca/modelo. Igual que getOrSearchModelImage (lib/modelImages.ts): pensado
  * para llamarse ON DEMAND desde el front (click en "Consultar precio"), no en
- * un cron masivo. Si ya hay un resultado 'found' o 'not_found' guardado, lo
- * devuelve directo sin gastar una llamada nueva a OpenAI. Solo reintenta si
- * no hay fila todavia o si la ultima vez quedo en 'error'.
+ * un cron masivo. Si ya hay un resultado `'found'` guardado, lo devuelve
+ * directo sin gastar una llamada nueva a OpenAI.
+ *
+ * `'not_found'` SI se reintenta en cada click (a diferencia de `'found'`,
+ * que es definitivo): el prompt de lib/pvpFinder.ts cambio varias veces el
+ * mismo dia (17/07/2026) para dejar de exigir el precio del modelo EXACTO y
+ * aceptar estimaciones de productos similares -- filas que antes quedaron
+ * en `'not_found'` con una version vieja del prompt merecen una oportunidad
+ * nueva, y el boton de la columna PVP ya muestra un icono de "reintentar"
+ * (↻) para ese estado, asi que el comportamiento coincide con lo que se ve
+ * en pantalla.
  *
  * Esta NO es la unica via para completar model_pvp: el tamizador de
  * segmentos (app/api/sieve/route.ts) tambien escribe aca, aprovechando su
@@ -35,7 +43,7 @@ export async function getOrSearchModelPvp(
     [categoryId, marca, modelo]
   );
 
-  if (existing.length > 0 && (existing[0].status === "found" || existing[0].status === "not_found")) {
+  if (existing.length > 0 && existing[0].status === "found") {
     return existing[0]; // ya cacheado, no gastamos una llamada nueva a OpenAI
   }
 
