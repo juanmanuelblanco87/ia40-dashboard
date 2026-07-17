@@ -677,6 +677,9 @@ export default function Home() {
   const [viewingModel, setViewingModel] = useState<{ marca: string; modelo: string; segmento: string } | null>(null);
   const [sieving, setSieving] = useState(false);
   const [sieveResult, setSieveResult] = useState<SieveSummary | null>(null);
+  const [showSieveErrors, setShowSieveErrors] = useState(false);
+  // true/false = ultimo resultado conocido de /api/evolution; null = todavia no se sabe
+  const [syncOk, setSyncOk] = useState<boolean | null>(null);
   const [sieveStatus, setSieveStatus] = useState<{ total: number; tamizado: number; pendientes: number; porcentaje: number } | null>(null);
   // Segundos que tardo, en promedio, cada modelo procesado en la ULTIMA
   // corrida (busqueda + IA por modelo) -- se usa para estimar cuanto falta
@@ -700,6 +703,7 @@ export default function Home() {
     if (!slug || sieving) return;
     setSieving(true);
     setSieveResult(null);
+    setShowSieveErrors(false);
     const startedAt = Date.now();
     fetch(`/api/sieve?category=${encodeURIComponent(slug)}`)
       .then((r) => r.json())
@@ -753,14 +757,19 @@ export default function Home() {
     for (const c of colores) params.append("color", c);
     for (const s2 of segmentos) params.append("segmento", s2);
     fetch(`/api/evolution?${params}`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error("bad_status");
+        return r.json();
+      })
       .then((d) => {
         setSeries(d.series ?? []);
         setOptions(d.options ?? []);
         setImporterOptions(d.importerOptions ?? []);
         setColorOptions(d.colorOptions ?? []);
         setSegmentoOptions(d.segmentoOptions ?? []);
+        setSyncOk(true);
       })
+      .catch(() => setSyncOk(false))
       .finally(() => setLoading(false));
   };
 
@@ -899,8 +908,10 @@ export default function Home() {
       <AppHeader />
       <div className="container">
       <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 14, paddingBottom: 14 }}>
-        <div style={{ fontSize: 13, color: "var(--muted)" }}>
-          🔄 Datos sincronizados desde Cobus Group, agregados por marca / modelo / proveedor.
+        <div style={{ fontSize: 13, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+          <span>Datos sincronizados desde Cobus Group</span>
+          {syncOk === true && <span title="Sincronización OK" style={{ color: "#2fa84f" }}>✓</span>}
+          {syncOk === false && <span title="No se pudo cargar la información" style={{ color: "#d93a3a" }}>⚠️</span>}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -921,11 +932,6 @@ export default function Home() {
             </div>
           )}
         </div>
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>
-          Busca en la web y valida con IA los modelos de esta categoría que todavía no se revisaron (corrige el
-          segmento, o mueve el modelo a la categoría correcta si corresponde). Corre en lotes chicos — puede hacer
-          falta clickear varias veces para cubrir toda la categoría.
-        </div>
 
         {sieveResult && (
           <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
@@ -942,7 +948,17 @@ export default function Home() {
                 <div style={{ color: "var(--muted)" }}>
                   Sin cambios: {sieveResult.sin_cambios ?? 0} · Segmento corregido: {sieveResult.segmento_corregido ?? 0} ·
                   {" "}Categoría movida: {sieveResult.categoria_movida ?? 0} · Sin evidencia: {sieveResult.sin_evidencia ?? 0}
-                  {(sieveResult.errores ?? 0) > 0 && <> · Errores: {sieveResult.errores}</>}
+                  {(sieveResult.errores ?? 0) > 0 && (
+                    <>
+                      {" "}· Errores: {sieveResult.errores}{" "}
+                      <button
+                        onClick={() => setShowSieveErrors((v) => !v)}
+                        style={{ padding: "1px 6px", fontSize: 11, marginLeft: 4 }}
+                      >
+                        {showSieveErrors ? "Ocultar errores" : "Ver errores"}
+                      </button>
+                    </>
+                  )}
                 </div>
                 {sieveResult.cuota_agotada && (
                   <div style={{ color: "#d93a3a", marginTop: 6 }}>
@@ -950,7 +966,7 @@ export default function Home() {
                     ampliando el plan.
                   </div>
                 )}
-                {(sieveResult.detalle_errores?.length ?? 0) > 0 && (
+                {showSieveErrors && (sieveResult.detalle_errores?.length ?? 0) > 0 && (
                   <div style={{ marginTop: 8 }}>
                     <strong style={{ color: "#d93a3a" }}>Detalle de errores:</strong>
                     <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "#d93a3a" }}>
