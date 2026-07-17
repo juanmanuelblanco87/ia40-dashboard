@@ -370,11 +370,9 @@ filtros). Al clickearlo, dispara `GET /api/sieve?category=<slug>`, que:
    todos los meses) — así se revisan primero los modelos con más peso real
    en el negocio, no alfabéticamente.
 2. Para cada una (en lotes de `SIEVE_BATCH_LIMIT`, default 20 por click):
-   le pide a Gemini 3.1 Flash-Lite (`lib/aiClassifier.ts`, API de Google AI
-   Studio — **gratis**, con límite de uso por minuto/día en vez de costo por
-   token) que decida el segmento real. **Gemini busca en la web por su
-   cuenta** (tool nativo `google_search`, ver nota abajo) — no se usa
-   SerpApi para esto.
+   le pide a OpenAI (`lib/aiClassifier.ts`, modelo `gpt-5.4-mini` vía
+   Responses API) que decida el segmento real. **El modelo busca en la web
+   por su cuenta** (tool nativo `web_search`) — no se usa SerpApi para esto.
 3. Para las 3 categorías de NCM compartido (`andadores`/`bastones`/
    `calzado_ortopedico`), además le pregunta a la IA si el producto está en
    la categoría correcta. Si no (como el caso de Double Care Medical), **se
@@ -398,67 +396,66 @@ importador pierde sentido para segmento). Junto al botón se muestra:
 
 - Una barra de progreso + `{tamizado}/{total} tamizado (X%)`, calculado por
   `GET /api/sieve/status?category=<slug>` (nuevo endpoint liviano, **no**
-  gasta cuota de SerpApi ni de Gemini — solo cuenta filas de
+  gasta cuota de OpenAI ni de SerpApi — solo cuenta filas de
   `monthly_brand_model_agg` vs. `model_sieve_log`).
 - Un tiempo estimado restante (`≈Xm restante`), calculado en el cliente
   como `pendientes × segundos-por-item-del-último-lote-corrido` (no hay
   forma de estimarlo sin haber corrido al menos un lote en la sesión).
-- El panel de resultados ahora también lista `detalle_errores` (el texto
-  real de cada error), antes calculado en el backend pero nunca mostrado —
+- El panel de resultados también lista `detalle_errores` (el texto real de
+  cada error), antes calculado en el backend pero nunca mostrado —
   necesario para diagnosticar por qué un lote da errores en vez de solo ver
-  el contador.
+  el contador. Se puede ocultar/mostrar con el botón "Ver errores".
 
-**Variables de entorno nuevas:**
-- `GEMINI_API_KEY` — obligatoria para que funcione el tamizador. Se obtiene
-  gratis en aistudio.google.com (sin tarjeta). Límite: uso por minuto/día
-  (rate limit), no costo por token — si se agota, esperar y reintentar.
+**Variables de entorno:**
+- `OPENAI_API_KEY` — obligatoria para que funcione el tamizador. Key del
+  proyecto "cobus" en platform.openai.com (facturación por uso, pagada por
+  la empresa). **Ojo:** esto es la API de OpenAI, no una suscripción de
+  ChatGPT Plus/Pro — son sistemas de facturación totalmente distintos, hace
+  falta una key generada en platform.openai.com con método de pago propio.
+  Costo aproximado: el tool `web_search` cuesta USD 0.01 por búsqueda (10
+  USD / 1.000 llamadas) + tokens de la respuesta al precio normal del
+  modelo — un lote de 20 productos sale centavos de dólar.
 - `SIEVE_BATCH_LIMIT` — opcional, tamaño del lote por click (default 20).
 - `SIEVE_DELAY_MS` — opcional, pausa entre cada ítem del lote en milisegundos
-  (default 4500). Ver nota de incidente abajo.
+  (default 500 — con un proyecto de OpenAI en tier pago el límite de
+  requests-por-minuto es alto, así que la pausa es solo un margen chico).
 
-**Incidente 17/07/2026 — "Errores: 20" (100% del lote falló):** el primer
-uso real en producción dio error en los 20 ítems. `detalle_errores` mostró
-dos causas:
-1. `Gemini API respondio 404: ... "gemini-2.5-flash-lite is no longer
-   available to new users"` — Google le cortó el acceso a ese modelo a las
-   API keys creadas después de cierta fecha (hubo reportes de otros
-   desarrolladores el 9/jul/2026 sobre el mismo 404, aunque la página de
-   deprecations oficial todavía lo lista con baja recién en octubre 2026).
-   **Fix:** se cambió `GEMINI_MODEL` en `lib/aiClassifier.ts` de
-   `gemini-2.5-flash-lite` a `gemini-3.1-flash-lite` (línea Gemini 3,
-   estable, también gratis en AI Studio).
-2. `Limite de uso gratis de Gemini alcanzado (429)` — sin ese modelo
-   disponible, las 20 llamadas se hacían todas seguidas y superaban el
-   límite de requests-por-minuto del plan gratis. **Fix:** se agregó una
-   pausa (`SIEVE_DELAY_MS`, default 4.5s) entre cada ítem del lote en
-   `app/api/sieve/route.ts`.
+**Historial de proveedores de IA para el tamizador (todo el 17/07/2026):**
+esta feature pasó por 3 proveedores distintos en el mismo día, cada cambio
+motivado por una limitación real encontrada en producción:
 
-Si Google vuelve a cambiar el modelo o los límites gratuitos, revisar
-https://ai.google.dev/gemini-api/docs/models y ajustar `GEMINI_MODEL` /
-`SIEVE_DELAY_MS` según corresponda.
+1. **Anthropic (Claude)** — primera versión. Se descartó por pedido del
+   usuario: quería empezar con una opción gratuita.
+2. **Gemini** (`gemini-2.5-flash-lite`, después `gemini-3.1-flash-lite` tras
+   un 404 de Google a API keys nuevas) — funcionó bien en un primer test
+   pasándole a Gemini snippets de SerpApi como texto (JSON mode clásico).
+   Después, por pedido del usuario de que la IA "buscara de verdad" en vez
+   de depender de SerpApi, se cambió a que Gemini buscara solo con su tool
+   nativo `google_search` (grounding) — pero ese tool devuelve 429 en el
+   100% de los casos si el proyecto de Google AI Studio no tiene
+   **facturación activada** (confirmado en la
+   [página oficial de precios](https://ai.google.dev/gemini-api/docs/pricing):
+   grounding figura como "No disponible" en el tier gratis puro). Activar
+   facturación en Google requería cargar una tarjeta igual, así que en vez
+   de eso la empresa decidió pagar la API de OpenAI.
+3. **OpenAI** (`gpt-5.4-mini` vía Responses API, tool `web_search`) — la
+   versión actual. La empresa ya factura este proveedor (proyecto "cobus"),
+   así que no hace falta activar nada adicional del lado de Google. Mismo
+   patrón que con Gemini: el modelo busca en la web por su cuenta durante
+   la misma llamada, sin SerpApi.
 
-**Cambio de arquitectura — Gemini busca solo, sin SerpApi (17/07/2026,
-pedido explícito del usuario):** el diseño original mandaba `"<marca>
-<modelo>"` a SerpApi (`lib/webSearch.ts`) y le pasaba los snippets a Gemini
-como texto ya buscado. El usuario pidió separar esto: **SerpApi debe usarse
-solo para pegar la imagen del producto al catálogo** (`lib/imageSearch.ts`,
-sin cambios), nunca para alimentar la clasificación del tamizador. Ahora
-`lib/aiClassifier.ts` le da a Gemini el tool nativo `google_search`
-(grounding) en la misma llamada — el modelo busca "`<marca> <modelo>`" por
-su cuenta durante la generación, sin gastar cuota de SerpApi. Se borró
-`lib/webSearch.ts` de este flujo (el archivo queda en el repo sin uso; se
-puede borrar del todo si se quiere, no rompe nada).
+Detalle técnico importante (aplica igual que con Gemini): **no** se combina
+"structured output" (`text.format: json_schema` en la Responses API) con el
+tool `web_search` — hay reportes de la comunidad de OpenAI de que esa
+combinación corta la respuesta a la mitad y rompe el JSON. Por eso se le
+pide al modelo en el prompt que responda solo con JSON en texto plano, y
+`extractJson()` en `lib/aiClassifier.ts` lo extrae con un parser de llaves
+balanceadas (tolerante a texto extra alrededor).
 
-Detalle técnico importante: `gemini-3.1-flash-lite` **no** soporta combinar
-`generationConfig.responseMimeType` (JSON mode) con tools como
-`google_search` — esa combinación solo está en preview para
-`gemini-3.1-pro-preview` y `gemini-3.5-flash` (ver
-[docs de Google](https://ai.google.dev/gemini-api/docs/generate-content/structured-output#structured-outputs-with-tools)).
-Por eso ya no se pide JSON mode: se le pide a Gemini en el prompt que
-responda solo con el JSON (sin backticks ni texto alrededor), y
-`extractJson()` en `lib/aiClassifier.ts` lo extrae del texto con un parser
-de llaves balanceadas (más tolerante que un regex simple, por si el modelo
-agrega algo de texto a pesar de la instrucción).
+`lib/webSearch.ts` (cliente de SerpApi para texto, usado por la versión
+Gemini-con-snippets) quedó sin uso en el repo — se puede borrar si se
+quiere, no rompe nada. SerpApi sigue usándose exclusivamente para imágenes
+del catálogo (`lib/imageSearch.ts`), sin relación con el tamizador.
 
 ## 11. Endpoints API
 
@@ -492,7 +489,7 @@ como único mecanismo de auth). Lista real de variables usadas en el código:
 | `SERPAPI_API_KEY` | `lib/imageSearch.ts` | Búsqueda de imágenes. |
 | `IMAGE_BACKFILL_LIMIT` | `app/api/sync-images/route.ts` | Límite de imágenes a buscar por categoría en el backfill manual (default 80). |
 | `TOKEN_UPDATE_SECRET` | referenciada por `refresh_token.py` | Secreto compartido para el endpoint `/api/token` (que hoy no existe — ver sección 7). |
-| `GEMINI_API_KEY` | `lib/aiClassifier.ts` | Clasificación con IA del tamizador de segmentos (sección 10.1). Gratis (Google AI Studio), con límite de uso por minuto/día. |
+| `OPENAI_API_KEY` | `lib/aiClassifier.ts` | Clasificación con IA del tamizador de segmentos (sección 10.1). Proyecto "cobus" en platform.openai.com, facturación por uso pagada por la empresa (no es lo mismo que ChatGPT Plus). |
 | `SIEVE_BATCH_LIMIT` | `app/api/sieve/route.ts` | Cuántas combinaciones marca+modelo procesa el tamizador por click (default 20). |
 
 ## 13. Frontend
