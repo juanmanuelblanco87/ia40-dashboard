@@ -411,6 +411,29 @@ importador pierde sentido para segmento). Junto al botón se muestra:
   gratis en aistudio.google.com (sin tarjeta). Límite: uso por minuto/día
   (rate limit), no costo por token — si se agota, esperar y reintentar.
 - `SIEVE_BATCH_LIMIT` — opcional, tamaño del lote por click (default 20).
+- `SIEVE_DELAY_MS` — opcional, pausa entre cada ítem del lote en milisegundos
+  (default 4500). Ver nota de incidente abajo.
+
+**Incidente 17/07/2026 — "Errores: 20" (100% del lote falló):** el primer
+uso real en producción dio error en los 20 ítems. `detalle_errores` mostró
+dos causas:
+1. `Gemini API respondio 404: ... "gemini-2.5-flash-lite is no longer
+   available to new users"` — Google le cortó el acceso a ese modelo a las
+   API keys creadas después de cierta fecha (hubo reportes de otros
+   desarrolladores el 9/jul/2026 sobre el mismo 404, aunque la página de
+   deprecations oficial todavía lo lista con baja recién en octubre 2026).
+   **Fix:** se cambió `GEMINI_MODEL` en `lib/aiClassifier.ts` de
+   `gemini-2.5-flash-lite` a `gemini-3.1-flash-lite` (línea Gemini 3,
+   estable, también gratis en AI Studio).
+2. `Limite de uso gratis de Gemini alcanzado (429)` — sin ese modelo
+   disponible, las 20 llamadas se hacían todas seguidas y superaban el
+   límite de requests-por-minuto del plan gratis. **Fix:** se agregó una
+   pausa (`SIEVE_DELAY_MS`, default 4.5s) entre cada ítem del lote en
+   `app/api/sieve/route.ts`.
+
+Si Google vuelve a cambiar el modelo o los límites gratuitos, revisar
+https://ai.google.dev/gemini-api/docs/models y ajustar `GEMINI_MODEL` /
+`SIEVE_DELAY_MS` según corresponda.
 
 ## 11. Endpoints API
 
