@@ -1,21 +1,27 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { recomputeMonthlyAgg } from "@/lib/aggregate";
-import { classifyProduct, AiClassifierError, type CategoriaOpcion } from "@/lib/aiClassifier";
+import { classifyProduct, type CategoriaOpcion } from "@/lib/aiClassifier";
 import { segmentosValidos } from "@/lib/segmentos";
 import { ORTOPEDIA_9021_CATEGORY_SLUGS } from "@/lib/parsers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // requiere plan Pro para superar 60s
 
-const DEFAULT_LIMIT = 20;
+// Antes el lote por default era 20 porque compartia cuota con SerpApi (250
+// busquedas/mes). Con OpenAI (facturacion propia, sin ese limite) no hace
+// falta ser tan conservador -- se sube el default al mismo tope maximo,
+// para que cada click cubra mas terreno y haga falta clickear menos veces.
+const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 100;
-// Pequeña pausa entre items -- con OpenAI en un proyecto con facturacion
-// activa (tier pago) el limite de requests-por-minuto es mucho mas alto que
-// en el plan gratis de Gemini (usado antes), pero se deja un margen chico
-// igual para no disparar todo en paralelo de golpe.
-const SIEVE_DELAY_MS = Number(process.env.SIEVE_DELAY_MS ?? 500);
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// Cuantos items se procesan EN PARALELO por tanda (cada uno hace una
+// llamada a OpenAI con busqueda web, que tarda unos segundos -- procesarlos
+// de a uno solo hacia que un lote de 20 tardara varios minutos). Con un
+// proyecto de OpenAI en tier pago el limite de requests-por-minuto aguanta
+// esto sin problema. El pool de Postgres tiene max 5 conexiones (lib/db.ts),
+// asi que 5 en paralelo es un buen numero -- mas que eso no acelera mucho
+// porque las queries empiezan a hacer cola en el pool igual.
+const SIEVE_CONCURRENCY = Number(process.env.SIEVE_CONCURRENCY ?? 5);
 
 interface CategoryRow {
   id: number;
@@ -51,9 +57,10 @@ interface PendienteRow {
  * docs/PROYECTO.md seccion 10.1). La empresa decidio pagar OpenAI en su
  * lugar (proyecto "cobus" en platform.openai.com).
  *
- * Corre en LOTES (parametro `limit`, default 20) porque cada fila gasta una
- * llamada a OpenAI (con costo: ~USD 0.01 por busqueda web + tokens del
- * modelo, ver lib/aiClassifier.ts).
+ * Corre en LOTES (parametro `limit`, default 100, procesados de a
+ * SIEVE_CONCURRENCY en paralelo) porque cada fila gasta una llamada a
+ * OpenAI (con costo: ~USD 0.01 por busqueda web + tokens del modelo, ver
+ * lib/aiClassifier.ts).
  * Se dispara manualmente desde el boton "Tamizar categoria" del dashboard,
  * NO esta en ningun cron.
  */
@@ -139,13 +146,12 @@ export async function GET(req: Request) {
     );
   }
 
-  for (const [idx, { marca, modelo, segmento_actual }] of pendientes.entries()) {
-    if (idx > 0) await sleep(SIEVE_DELAY_MS);
+  async function procesarItem({ marca, modelo, segmento_actual }: PendienteRow) {
     try {
       const clasif = await classifyProduct({
         marca,
         modelo,
-        categoriaActualSlug: slug,
+        categoriaActualSlug: slug!,
         categoriaActualNombre: categoria.name,
         segmentosValidos: segmentosActuales,
         opcionesCategoria: opcionesCategoria?.map(
@@ -155,9 +161,15 @@ export async function GET(req: Request) {
 
       resumen.procesados++;
 
-      const confiable = clasif.confianza === "alta" || clasif.confianza === "media";
+      // El cambio de CATEGORIA (mover la fila a otro NCM compartido) sigue
+      // siendo conservador -- solo se aplica con confianza alta/media,
+      // porque es un cambio estructural mas grande. El SEGMENTO, en cambio,
+      // se aplica siempre que venga informado (pedido explicito del
+      // usuario, 17/07/2026: que la IA elija el segmento que mejor aplique
+      // en vez de dejar "sin evidencia" sin clasificar).
+      const confiableParaMover = clasif.confianza === "alta" || clasif.confianza === "media";
       const destino =
-        confiable && clasif.categoriaSlug && clasif.categoriaSlug !== slug
+        confiableParaMover && clasif.categoriaSlug && clasif.categoriaSlug !== slug
           ? opcionesCategoria?.find((o) => o.slug === clasif.categoriaSlug)
           : undefined;
 
@@ -205,10 +217,12 @@ export async function GET(req: Request) {
         // Registrar tambien contra la categoria destino, para que un futuro
         // tamizado de ESA categoria no vuelva a procesar esta combinacion.
         await logSieve(destino.id, marca, modelo, `movido_desde_${slug}`, clasif.razonamiento);
-      } else if (confiable && clasif.segmento && clasif.segmento !== segmento_actual) {
+      } else if (clasif.segmento && clasif.segmento !== segmento_actual) {
         // Mismo lugar, pero el segmento calculado por el parser estaba mal
         // (o incompleto, ej. "(revisar)") -- se corrige via override, sin
-        // esperar a que alguien lo haga a mano.
+        // esperar a que alguien lo haga a mano. Se aplica aunque la
+        // confianza sea "baja": el usuario prefiere que la IA elija su
+        // mejor estimacion en vez de dejarlo sin clasificar.
         await query(
           `insert into model_segmento_override (category_id, marca, modelo, segmento)
            values ($1, $2, $3, $4)
@@ -219,7 +233,10 @@ export async function GET(req: Request) {
         resumen.segmento_corregido++;
         resumen.corregidos.push({ marca, modelo, segmento: clasif.segmento, razonamiento: clasif.razonamiento });
         await logSieve(categoria.id, marca, modelo, "segmento_corregido", clasif.razonamiento);
-      } else if (!confiable) {
+      } else if (!clasif.segmento) {
+        // Caso residual: pese a la instruccion de siempre elegir un
+        // segmento, la IA no devolvio ninguno (evidencia nula/bloqueo de
+        // seguridad, etc.) -- no hay nada para aplicar.
         resumen.sin_evidencia++;
         await logSieve(categoria.id, marca, modelo, "sin_evidencia", clasif.razonamiento);
       } else {
@@ -232,8 +249,14 @@ export async function GET(req: Request) {
       // todo por una fila puntual.
       resumen.errores++;
       resumen.detalle_errores.push(`${marca} / ${modelo}: ${String(err?.message ?? err)}`);
-      continue;
     }
+  }
+
+  // Se procesa en tandas paralelas (no una por una) para que un lote de 20
+  // no tarde varios minutos -- ver nota de SIEVE_CONCURRENCY arriba.
+  for (let i = 0; i < pendientes.length; i += SIEVE_CONCURRENCY) {
+    const tanda = pendientes.slice(i, i + SIEVE_CONCURRENCY);
+    await Promise.all(tanda.map(procesarItem));
   }
 
   for (const catId of categoriasTocadas) {
