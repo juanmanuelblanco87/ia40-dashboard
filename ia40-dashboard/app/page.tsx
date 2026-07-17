@@ -645,7 +645,6 @@ interface SieveSummary {
   movidos?: { marca: string; modelo: string; de: string; a: string; segmento: string | null; razonamiento: string }[];
   corregidos?: { marca: string; modelo: string; segmento: string; razonamiento: string }[];
   detalle_errores?: string[];
-  cuota_agotada?: boolean;
   error?: string;
 }
 
@@ -960,12 +959,6 @@ export default function Home() {
                     </>
                   )}
                 </div>
-                {sieveResult.cuota_agotada && (
-                  <div style={{ color: "#d93a3a", marginTop: 6 }}>
-                    ⚠️ Se agotó la cuota mensual de SerpApi a mitad de este lote — probá de nuevo el mes que viene o
-                    ampliando el plan.
-                  </div>
-                )}
                 {showSieveErrors && (sieveResult.detalle_errores?.length ?? 0) > 0 && (
                   <div style={{ marginTop: 8 }}>
                     <strong style={{ color: "#d93a3a" }}>Detalle de errores:</strong>
