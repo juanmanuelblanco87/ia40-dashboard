@@ -800,6 +800,32 @@ export default function Home() {
 
   useEffect(reloadSieveStatus, [slug]);
 
+  const [resetting, setResetting] = useState(false);
+
+  // "Limpiar tamizado": borra model_sieve_log de la categoria para poder
+  // re-tamizarla de cero -- necesario para categorias que ya estaban al
+  // 100% ANTES de que existiera la columna PVP USD (esas combinaciones
+  // nunca vuelven a pasar por procesarItem, asi que sin esto nunca
+  // completarian el PVP). Confirma antes de borrar porque el proximo
+  // tamizado va a volver a gastar una llamada a OpenAI por modelo.
+  const resetSieveLog = () => {
+    if (!slug || resetting || sieving) return;
+    const ok = window.confirm(
+      "Esto borra el registro de tamizado de esta categoria: el proximo click en \"Tamizar categoria\" va a volver a procesar TODOS los modelos (gastando OpenAI de nuevo por cada uno) en vez de solo los pendientes. No borra segmentos, categorias ni PVP ya guardados. ¿Continuar?"
+    );
+    if (!ok) return;
+    setResetting(true);
+    fetch(`/api/sieve?category=${encodeURIComponent(slug)}`, { method: "DELETE" })
+      .then((r) => r.json())
+      .then(() => {
+        setSieveResult(null);
+        setSieveSecondsPerItem(null);
+        reloadSieveStatus();
+      })
+      .catch(() => alert("No se pudo limpiar el tamizado. Proba de nuevo."))
+      .finally(() => setResetting(false));
+  };
+
   const runSieve = () => {
     if (!slug || sieving) return;
     setSieving(true);
@@ -1090,6 +1116,16 @@ export default function Home() {
           <button onClick={runSieve} disabled={sieving || !slug}>
             {sieving ? "🔎 Tamizando..." : "🔎 Tamizar categoría"}
           </button>
+          {sieveStatus && sieveStatus.tamizado > 0 && (
+            <button
+              onClick={resetSieveLog}
+              disabled={sieving || resetting || !slug}
+              title="Borra el registro de tamizado para poder re-tamizar de cero (ej. para completar PVP en modelos ya tamizados antes de que existiera esa columna)"
+              style={{ fontSize: 12, padding: "4px 10px" }}
+            >
+              {resetting ? "Limpiando..." : "🧹 Limpiar tamizado"}
+            </button>
+          )}
           {sieveStatus && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
               <div style={{ width: 120, height: 8, background: "var(--border, #2a2e37)", borderRadius: 4, overflow: "hidden" }}>
