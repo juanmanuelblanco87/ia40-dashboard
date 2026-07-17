@@ -84,7 +84,7 @@ function buildPrompt(p: SieveClassifyParams): string {
 
   return `Sos un clasificador de productos de equipamiento medico/ortopedico para un dashboard de comercio exterior argentino.
 
-Tenes acceso a busqueda web. Usala para buscar "${p.marca} ${p.modelo}" (y variantes razonables de esa marca + modelo/codigo si la primera busqueda no da resultados utiles) y averiguar que tipo de producto es realmente, antes de responder.
+Tenes acceso a busqueda web. Hace UNA sola busqueda de "${p.marca} ${p.modelo}" para averiguar que tipo de producto es realmente, y respondé con lo que encuentres en esa primera busqueda (no repitas la busqueda con variantes -- si no da resultados utiles, inferi lo mejor posible con confianza "baja" en vez de seguir buscando, para mantener la respuesta rapida).
 
 Producto a clasificar:
 - Marca (declarada en aduana): ${p.marca}
@@ -158,18 +158,41 @@ export async function classifyProduct(params: SieveClassifyParams): Promise<Siev
 
   const prompt = buildPrompt(params);
 
-  const resp = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      tools: [{ type: "web_search" }],
-      input: prompt,
-    }),
-  });
+  // Timeout defensivo por request: si una llamada puntual se cuelga, no
+  // debe consumir todo el tiempo del lote (ver app/api/sieve/route.ts,
+  // que tiene su propio presupuesto de tiempo total por el limite de
+  // duracion de la funcion en Vercel).
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45_000);
+
+  let resp: Response;
+  try {
+    resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        tools: [{ type: "web_search" }],
+        // Esfuerzo de razonamiento bajo: no hace falta razonamiento
+        // profundo para elegir un segmento de una lista fija, y bajarlo
+        // reduce bastante la latencia por item (pedido explicito del
+        // usuario, 17/07/2026: el tamizador estaba muy lento).
+        reasoning: { effort: "low" },
+        input: prompt,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new AiClassifierError("OpenAI no respondio a tiempo (timeout de 45s) -- probá de nuevo.");
+    }
+    throw new AiClassifierError(`Error de red llamando a OpenAI: ${String(err?.message ?? err)}`);
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (resp.status === 429) {
     throw new AiClassifierError("Limite de uso de OpenAI alcanzado (429) -- probá de nuevo en un rato.");
