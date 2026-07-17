@@ -564,6 +564,19 @@ intento que no encontró nada).
 - Tanto **FOB Unit.** como **PVP USD** se muestran **redondeados, sin
   decimales** (mismo formato que la columna FOB USD).
 
+**Botón "🧹 Limpiar tamizado"** (17/07/2026): la columna PVP se agregó
+DESPUÉS de que varias categorías ya estuvieran 100% tamizadas, y la query de
+`GET /api/sieve` excluye cualquier combinación marca+modelo que ya tenga fila
+en `model_sieve_log` (para no re-gastar OpenAI en algo ya validado) -- eso
+significa que esas categorías nunca iban a completar la columna PVP por su
+cuenta, porque nunca vuelven a pasar por `procesarItem`. Para destrabarlo se
+agregó `DELETE /api/sieve?category=<slug>` (borra el `model_sieve_log` de esa
+categoría, sin tocar `model_pvp` ni `trade_records`) y un botón al lado de
+"Tamizar categoría" que lo llama (con un `confirm()` antes, porque el
+próximo tamizado va a volver a gastar una llamada a OpenAI por CADA modelo
+de la categoría, no solo por los pendientes). Aparece solo cuando
+`sieveStatus.tamizado > 0` (no tiene sentido si todavía no se tamizó nada).
+
 También se cambió el botón "Ver imagen" por un ícono de lupa (🔍) para
 ocupar menos espacio en la fila; el texto descriptivo ("Ver imagen", "Sin
 imagen", "Reintentar", etc.) ahora vive en el atributo `title` (tooltip al
@@ -586,6 +599,7 @@ pasar el mouse) en vez de en el botón mismo.
 | `/api/model-overrides` | POST | Corrige a mano segmento y/o imagen de una combinación marca+modelo. |
 | `/api/token` | POST (asumido) | Recibe el JWT que manda `refresh_token.py` y lo guarda en `app_settings`. Confirmado funcionando en producción, pero su archivo fuente no está en esta carpeta local (ver sección 7). |
 | `/api/sieve` | GET | Tamizador de segmentos: busca en la web + IA y corrige/mueve modelos no validados de una categoría; de paso, completa el PVP en `model_pvp` con la misma búsqueda (ver secciones 10.1 y 10.2). Bajo demanda, sin cron. |
+| `/api/sieve` | DELETE | "Limpiar tamizado": borra `model_sieve_log` de una categoría para poder re-tamizarla de cero (ver sección 10.2, botón "🧹 Limpiar tamizado"). |
 | `/api/sieve/status` | GET | Progreso del tamizador para una categoría (`{total, tamizado, pendientes, porcentaje}`). Liviano, sin llamadas externas — usado para la barra de progreso. |
 
 ## 12. Variables de entorno
