@@ -15,13 +15,22 @@ export const maxDuration = 300; // requiere plan Pro para superar 60s
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 100;
 // Cuantos items se procesan EN PARALELO por tanda (cada uno hace una
-// llamada a OpenAI con busqueda web, que tarda unos segundos -- procesarlos
-// de a uno solo hacia que un lote de 20 tardara varios minutos). Con un
-// proyecto de OpenAI en tier pago el limite de requests-por-minuto aguanta
-// esto sin problema. El pool de Postgres tiene max 5 conexiones (lib/db.ts),
-// asi que 5 en paralelo es un buen numero -- mas que eso no acelera mucho
-// porque las queries empiezan a hacer cola en el pool igual.
-const SIEVE_CONCURRENCY = Number(process.env.SIEVE_CONCURRENCY ?? 5);
+// llamada a OpenAI con busqueda web, que tarda varios segundos -- procesarlos
+// de a uno solo hacia que un lote de 100 tardara mas de lo que aguanta la
+// funcion). El pool de Postgres tiene max 5 conexiones (lib/db.ts), pero eso
+// solo afecta las queries cortas (insert/update) -- la parte lenta es la
+// llamada a OpenAI en si, que no pasa por el pool, asi que conviene mas
+// concurrencia que conexiones tiene el pool: el exceso de queries simplemente
+// hace cola un instante, no bloquea nada.
+const SIEVE_CONCURRENCY = Number(process.env.SIEVE_CONCURRENCY ?? 10);
+// Presupuesto de tiempo total del request, bien por debajo de `maxDuration`
+// (300s) -- Vercel mata la funcion de golpe si se pasa, y ahi el navegador
+// nunca recibe respuesta (aparece como "no se pudo correr el tamizador" sin
+// detalle, aunque varios items ya se hayan procesado bien). En vez de
+// arriesgarse a eso, se corta el lote a tiempo y se devuelve un resumen
+// PARCIAL -- los items ya procesados quedan guardados en model_sieve_log,
+// asi que el proximo click sigue desde donde quedo, sin reprocesar nada.
+const SIEVE_TIME_BUDGET_MS = Number(process.env.SIEVE_TIME_BUDGET_MS ?? 260_000);
 
 interface CategoryRow {
   id: number;
@@ -132,6 +141,11 @@ export async function GET(req: Request) {
     movidos: [] as { marca: string; modelo: string; de: string; a: string; segmento: string | null; razonamiento: string }[],
     corregidos: [] as { marca: string; modelo: string; segmento: string; razonamiento: string }[],
     detalle_errores: [] as string[],
+    // true si se corto el lote por el presupuesto de tiempo antes de llegar
+    // a `solicitados` -- no es un error, solo indica que quedan items de
+    // ESTE mismo click sin procesar (el resto del lote ya pedido). Con otro
+    // click al boton se sigue justo donde quedo.
+    parcial: false,
   };
 
   const categoriasTocadas = new Set<number>([categoria.id]);
@@ -252,9 +266,17 @@ export async function GET(req: Request) {
     }
   }
 
-  // Se procesa en tandas paralelas (no una por una) para que un lote de 20
-  // no tarde varios minutos -- ver nota de SIEVE_CONCURRENCY arriba.
+  // Se procesa en tandas paralelas (no una por una) para que un lote grande
+  // no tarde varios minutos -- ver nota de SIEVE_CONCURRENCY arriba. Antes
+  // de cada tanda se chequea el presupuesto de tiempo: si ya se gasto
+  // demasiado, se corta aca y se devuelve lo procesado hasta el momento en
+  // vez de arriesgarse a que Vercel mate la funcion sin devolver nada.
+  const startedAt = Date.now();
   for (let i = 0; i < pendientes.length; i += SIEVE_CONCURRENCY) {
+    if (Date.now() - startedAt > SIEVE_TIME_BUDGET_MS) {
+      resumen.parcial = true;
+      break;
+    }
     const tanda = pendientes.slice(i, i + SIEVE_CONCURRENCY);
     await Promise.all(tanda.map(procesarItem));
   }
