@@ -11,6 +11,11 @@ export const maxDuration = 300; // requiere plan Pro para superar 60s
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+// Pausa entre items para no pasarse del limite de requests-por-minuto gratis
+// de Gemini (visto en produccion: sin esta pausa, un lote de 20 disparaba
+// bastantes 429 "Limite de uso gratis de Gemini alcanzado").
+const SIEVE_DELAY_MS = Number(process.env.SIEVE_DELAY_MS ?? 4500);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface CategoryRow {
   id: number;
@@ -40,7 +45,9 @@ interface PendienteRow {
  *
  * Corre en LOTES (parametro `limit`, default 20) porque cada fila gasta una
  * busqueda de SerpApi (cuota compartida con la busqueda de imagenes, 250/mes
- * en el plan gratis) + una llamada a la API de Anthropic (con costo aparte).
+ * en el plan gratis) + una llamada a Gemini (gratis, con limite de uso por
+ * minuto/dia -- por eso el `sleep(SIEVE_DELAY_MS)` entre items, para no
+ * pasarse del limite de requests-por-minuto del plan gratis).
  * Se dispara manualmente desde el boton "Tamizar categoria" del dashboard,
  * NO esta en ningun cron.
  */
@@ -116,7 +123,8 @@ export async function GET(req: Request) {
     );
   }
 
-  for (const { marca, modelo, segmento_actual } of pendientes) {
+  for (const [idx, { marca, modelo, segmento_actual }] of pendientes.entries()) {
+    if (idx > 0) await sleep(SIEVE_DELAY_MS);
     try {
       const searchResults = await searchProductInfo(`${marca} ${modelo}`);
       const clasif = await classifyProduct({
