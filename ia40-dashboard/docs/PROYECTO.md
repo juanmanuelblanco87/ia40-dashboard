@@ -1,6 +1,6 @@
 # Módulo de Importaciones — Icom Salud / Cobus Group
 
-Documentación técnica completa del proyecto. Última actualización: 16/07/2026.
+Documentación técnica completa del proyecto. Última actualización: 17/07/2026.
 
 Este documento describe qué hace la app, cómo está armada, de dónde salen los
 datos, y el historial de bugs importantes ya resueltos (para no repetirlos).
@@ -72,13 +72,20 @@ categoría piloto — ver sección 11 sobre desactualización del schema).
 | Andadores | `andadores` | 9021.10.10 | **NCM compartido** (ver abajo) |
 | Bastones | `bastones` | 9021.10.10 | **NCM compartido** (ver abajo) |
 | Calzado Ortopédico | `calzado_ortopedico` | 9021.10.10 | **NCM compartido**, agregada después del resto |
-| Almohadones Ortopédicos | `almohadones_ortopedicos` | 9404.90.00 | — |
-| Sillas de Ducha | `sillas_ducha` | 9401.79.00 | — |
+| Almohadas y Cojines | `almohadones_ortopedicos` | 9404.90.00 | Renombrada 17/07/2026 (antes "Almohadones Ortopédicos" — ver nota abajo) |
+| Sillas y Asientos | `sillas_ducha` | 9401.79.00 | Renombrada 17/07/2026 (antes "Sillas de Ducha" — ver nota abajo) |
 | Elevadores de Inodoro | `elevadores_inodoro` | 3922.20.00 | — |
 | Camas Hospitalarias | `camas_hospitalarias` | 9402.90.20 | — |
 
 La investigación completa de estos códigos (metodología, confianza,
 alternativas descartadas) está en `docs/ncm_nuevas_categorias.md`.
+
+**Nota sobre los renombres (17/07/2026):** los `slug` internos
+(`almohadones_ortopedicos`, `sillas_ducha`) NO cambiaron — solo la columna
+`name` de `categories` (vía `UPDATE` manual en Neon), porque bajo esas NCM
+en la práctica entra mucha data que no es ortopédica (ver "Patrón A/B y
+segmentación por NCM" en la sección 8). Como los slugs no cambian, no hizo
+falta tocar `category_ncm_codes` ni ningún foreign key.
 
 ### Caso especial: NCM 9021.10.10 compartido
 
@@ -99,7 +106,7 @@ contaminación de datos — ver sección 10.
 
 ## 5. Esquema de base de datos
 
-⚠️ **`sql/schema.sql` en el repo está desactualizado.** Le faltan dos tablas
+⚠️ **`sql/schema.sql` en el repo está desactualizado.** Le faltan tablas
 que sí existen en la base real de Neon (creadas ahí a mano, nunca
 retro-documentadas en este archivo):
 
@@ -111,8 +118,13 @@ retro-documentadas en este archivo):
   corregir a mano el segmento calculado por el parser para una combinación
   marca+modelo puntual, sin esperar al próximo sync. La usa `/api/evolution`
   (con `LEFT JOIN` + `coalesce`) y `/api/model-overrides`.
+- **`model_sieve_log`** (nueva, 17/07/2026; columnas: `category_id`, `marca`,
+  `modelo`, `checked_at`, `result`, `detail`, unique en
+  `category_id+marca+modelo`) — registra qué combinaciones ya validó el
+  "tamizador de segmentos" (sección 10.1), para no re-procesarlas ni re-gastar
+  cuota de búsqueda/IA en corridas futuras.
 
-Si se reconstruye la base desde cero, hay que crear estas dos tablas a mano
+Si se reconstruye la base desde cero, hay que crear estas tres tablas a mano
 además de correr `sql/schema.sql`.
 
 Tablas que **sí** están documentadas en `sql/schema.sql` (141 líneas):
@@ -230,7 +242,7 @@ where key = 'ia40_jwt';
 
 ## 8. Parsers (marca / modelo / color / segmento)
 
-`lib/parsers/index.ts` (1190 líneas) y `lib/parsers/sillasDeRuedas.ts` (269
+`lib/parsers/index.ts` (~1740 líneas) y `lib/parsers/sillasDeRuedas.ts` (269
 líneas, parece ser el parser original/piloto — no está claro si sigue en uso
 o quedó reemplazado por la lógica generalizada en `index.ts`, revisar si se
 puede borrar).
@@ -242,10 +254,66 @@ flujo de exportación: es `true` si tiene parser registrado en
 `CATEGORY_PARSERS` o si es una de las 3 categorías de NCM compartido
 (sección 4).
 
+### Patrón A vs. Patrón B (¡importante, fuente de un bug grande!)
+
+El texto de aduana ("SUB ITEMS - SUFIJOS") viene en dos formatos distintos
+según la categoría, y **no son intercambiables**:
+
+- **Patrón A** — `"<MARCA> <MODELO> SIN CODIGO (CA00)"`: marca y modelo van
+  juntos, hay que separarlos por diccionario (`createCategoryParser`,
+  motor genérico original armado para "Sillas de ruedas"). Lo usan
+  `sillas_de_ruedas` y `sillas_ruedas_electricas`.
+- **Patrón B** — `"<MARCA> SIN MODELO <código> (CA00)"`: `"SIN MODELO"` es
+  un separador explícito, no hace falta diccionario para saber dónde
+  termina la marca. Lo usan `andadores`/`bastones`/`calzado_ortopedico`
+  (vía `parseOrtopedia9021Row`) y las 4 categorías reescritas el
+  17/07/2026: `almohadones_ortopedicos`, `sillas_ducha`,
+  `elevadores_inodoro`, `camas_hospitalarias`.
+
+**Bug corregido (17/07/2026):** esas 4 últimas categorías usaban
+`createCategoryParser` (Patrón A) aunque su texto real es Patrón B — el
+parser viejo intentaba separar marca/modelo de un texto combinado que en
+realidad ya venía separado por `"SIN MODELO"`, con diccionarios de marca
+genéricos (los mismos de sillas de ruedas) que no tenían nada que ver con
+las marcas reales de cada NCM (sanitarios, muebles, colchones, etc.). Se
+reescribieron como funciones standalone (`almohadasCojinesParser`,
+`sillasAsientosParser`, `elevadoresInodoroParser`, `camasHospitalariasParser`),
+cada una con su propio diccionario de marcas y árbol de Segmento, usando el
+helper compartido `splitPatternB()` para la extracción y
+`extractColorGeneric()` para el color (default `"S/D"` en vez de `"Negro"`
+en estas 4 — la mayoría de estos productos no traen color declarado).
+
 El caso especial `parseOrtopedia9021Row()` (descripto en la sección 4) tiene
 su propia lógica de normalización de texto (mayúsculas, corrección de typos
 de marca vía `normalizeOrtopediaMarcaTypo`) y un diccionario de marca →
-categoría/segmento armado a mano sobre el dataset real.
+categoría/segmento armado a mano sobre el dataset real. Desde el 17/07/2026,
+cuando una fila resuelve a la categoría `andadores`, se aplica además
+`subSegmentoAndador()`, que refina el segmento genérico "Andadores y Ayudas
+de Marcha" en 3 subtipos (Andador Fijo / Andador 2 Ruedas / Andador 4 Ruedas
+— Rollator) usando reglas de marca + código de modelo (sufijo `"LH"` =
+señal más confiable de rollator). Filas con `"HIP BRACE"` en el modelo
+(marca Jianwei) se excluyen — no son andadores, son una órtesis de cadera
+mal clasificada por el NCM — y quedan marcadas como
+`"Andador Fijo (revisar - posible ortesis de cadera, no andador)"` para que
+se puedan filtrar y corregir a mano en vez de contarse como un andador real.
+
+**Filtro de Segmento por defecto (frontend):** ya que Almohadas y Cojines,
+Sillas y Asientos y Elevadores de Inodoro traen de fondo mucha data no
+relacionada al uso ortopédico (ver renombres arriba), `app/page.tsx`
+(`DEFAULT_SEGMENTO_FILTER`) preselecciona el segmento relevante apenas se
+elige la categoría (`"Cojín Ortopédico / Antiescaras"`,
+`"Sillas de Ducha / Sanitarias"`, `"Elevador / Asiento Sanitario
+Ortopédico"` respectivamente). Los datos de los demás segmentos igual están
+sincronizados — el usuario puede ampliar el filtro para verlos.
+
+⚠️ **Confianza de las reglas de Segmento de Camas Hospitalarias:** a
+diferencia de las otras categorías (donde el texto trae palabras
+descriptivas), en Camas Hospitalarias el texto de aduana NO indica si es
+eléctrica o manual — se infiere por prefijo de código según catálogo de
+cada fabricante (ej. Medik `YA-D...`=eléctrica / `YA-M...`=manual, Magesa
+`D...`=eléctrica / `V...`=manual). Son heurísticas de mejor esfuerzo;
+conviene revisar los conteos del primer sync real contra lo esperado
+(~21% del dataset original quedaba en "Tipo no especificado").
 
 ## 9. Corrección manual de datos (`/admin`)
 
@@ -282,6 +350,50 @@ para precalentar el catálogo en bloque, pero **no está enganchado a ningún
 cron** (`vercel.json` solo declara el cron de `/api/sync`) — es manual, para
 correrlo a mano si se quiere.
 
+## 10.1 Tamizador de segmentos (validación con IA, 17/07/2026)
+
+**Por qué existe:** la clasificación automática de marca/modelo/segmento
+(sección 8) es un árbol de reglas (marca declarada + palabras clave +, para
+el NCM compartido, descripción de posición arancelaria) — funciona bien en
+general, pero un mismo fabricante puede vender productos de tipos distintos
+bajo códigos parecidos, y ahí la regla se puede equivocar. Caso real que
+motivó esta feature: "Double Care Medical HY7300L" quedó clasificado como
+`andadores` (por su marca + descripción genérica "LOS DEMÁS"), pero una
+búsqueda real en Google muestra que es un **bastón trípode**, no un andador.
+
+**Cómo funciona:** botón "🔎 Tamizar categoría" en el dashboard (junto a los
+filtros). Al clickearlo, dispara `GET /api/sieve?category=<slug>`, que:
+
+1. Busca combinaciones marca+modelo de la categoría actual que **todavía no
+   se validaron** (tabla `model_sieve_log`, nueva — ver sección 5).
+2. Para cada una (en lotes de `SIEVE_BATCH_LIMIT`, default 20 por click):
+   busca `"<marca> <modelo>"` en la web (`lib/webSearch.ts`, SerpApi —
+   **misma cuota compartida** con la búsqueda de imágenes, 250/mes en el
+   plan gratis) y le pasa el resultado a Gemini 2.5 Flash-Lite
+   (`lib/aiClassifier.ts`, API de Google AI Studio — **gratis**, con límite
+   de uso por minuto/día en vez de costo por token) para que decida el
+   segmento real.
+3. Para las 3 categorías de NCM compartido (`andadores`/`bastones`/
+   `calzado_ortopedico`), además le pregunta a la IA si el producto está en
+   la categoría correcta. Si no (como el caso de Double Care Medical), **se
+   mueve automáticamente**: `UPDATE trade_records` cambia el `category_id`
+   (y el segmento) de esa combinación marca+modelo, se recalcula
+   `monthly_brand_model_agg` de ambas categorías (la vieja y la nueva), y se
+   migran (si existían) la imagen cacheada y el override de segmento.
+4. Al terminar el lote, el dashboard muestra un resumen: procesados, sin
+   cambios, segmento corregido, categoría movida, sin evidencia (la IA no
+   tuvo suficiente info y prefirió no adivinar), y errores.
+
+Solo corre bajo demanda (no hay cron) — hace falta clickear el botón una o
+más veces por categoría hasta agotar los pendientes (`model_sieve_log` evita
+reprocesar lo ya validado).
+
+**Variables de entorno nuevas:**
+- `GEMINI_API_KEY` — obligatoria para que funcione el tamizador. Se obtiene
+  gratis en aistudio.google.com (sin tarjeta). Límite: uso por minuto/día
+  (rate limit), no costo por token — si se agota, esperar y reintentar.
+- `SIEVE_BATCH_LIMIT` — opcional, tamaño del lote por click (default 20).
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -296,6 +408,7 @@ correrlo a mano si se quiere.
 | `/api/model-images/search` | POST | Busca (o cachea) la imagen de un modelo puntual, on-demand. |
 | `/api/model-overrides` | POST | Corrige a mano segmento y/o imagen de una combinación marca+modelo. |
 | `/api/token` | POST (asumido) | Recibe el JWT que manda `refresh_token.py` y lo guarda en `app_settings`. Confirmado funcionando en producción, pero su archivo fuente no está en esta carpeta local (ver sección 7). |
+| `/api/sieve` | GET | Tamizador de segmentos: busca en la web + IA y corrige/mueve modelos no validados de una categoría (ver sección 10.1). Bajo demanda, sin cron. |
 
 ## 12. Variables de entorno
 
@@ -312,6 +425,8 @@ como único mecanismo de auth). Lista real de variables usadas en el código:
 | `SERPAPI_API_KEY` | `lib/imageSearch.ts` | Búsqueda de imágenes. |
 | `IMAGE_BACKFILL_LIMIT` | `app/api/sync-images/route.ts` | Límite de imágenes a buscar por categoría en el backfill manual (default 80). |
 | `TOKEN_UPDATE_SECRET` | referenciada por `refresh_token.py` | Secreto compartido para el endpoint `/api/token` (que hoy no existe — ver sección 7). |
+| `GEMINI_API_KEY` | `lib/aiClassifier.ts` | Clasificación con IA del tamizador de segmentos (sección 10.1). Gratis (Google AI Studio), con límite de uso por minuto/día. |
+| `SIEVE_BATCH_LIMIT` | `app/api/sieve/route.ts` | Cuántas combinaciones marca+modelo procesa el tamizador por click (default 20). |
 
 ## 13. Frontend
 
@@ -374,6 +489,18 @@ GitHub, sin acción manual extra). `vercel.json` declara un único cron:
   ser basura de este bug (el sync nunca trae el mes en curso, ver sección 6)
   y es seguro borrarla. **Pendiente de confirmación final del usuario**
   (tarea #59).
+- **4 parsers usando el patrón de aduana equivocado** — `almohadones_ortopedicos`,
+  `sillas_ducha`, `elevadores_inodoro` y `camas_hospitalarias` usaban el
+  motor genérico de Patrón A (pensado para "Sillas de ruedas": marca+modelo
+  juntos en un texto) cuando su texto real es Patrón B (`"SIN MODELO"` como
+  separador explícito) — ver sección 8. Se reescribieron los 4 como
+  funciones standalone con sus propios diccionarios de marca y árboles de
+  Segmento. De paso se renombraron 2 categorías ("Almohadones Ortopédicos"
+  → "Almohadas y Cojines", "Sillas de Ducha" → "Sillas y Asientos") porque
+  sus NCM traen en la práctica mucha data no ortopédica, y se agregó
+  preselección de Segmento por defecto en el frontend para esas 3
+  categorías + Elevadores de Inodoro. **Pendiente de confirmación del
+  usuario tras el primer sync real con el parser nuevo** (tarea #71).
 
 ## 16. Deuda técnica conocida / pendientes
 
@@ -395,6 +522,18 @@ GitHub, sin acción manual extra). `vercel.json` declara un único cron:
   (sección 10) — es 100% manual hoy.
 - Limpiezas de datos pendientes de confirmación final (sección 15, bastones
   y filas fantasma de julio 2026).
+- Reglas de Segmento de Camas Hospitalarias basadas en prefijo de código son
+  heurísticas de mejor esfuerzo (sección 8) — revisar contra el primer sync
+  real.
+- Filas "HIP BRACE" (marca Jianwei, dentro de `andadores`) quedan marcadas
+  como "(revisar)" en vez de reclasificarse automáticamente fuera de la
+  categoría — requiere decisión del usuario sobre dónde deberían ir (el
+  tamizador de segmentos, sección 10.1, debería terminar corrigiendo estas
+  también al pasar por esa categoría).
+- El tamizador de segmentos (sección 10.1) es nuevo y no se validó todavía a
+  gran escala — conviene revisar los primeros resultados reales (sobre todo
+  los "categoria_movida", que tocan datos entre categorías) antes de confiar
+  en él a ciegas para categorías enteras.
 
 ## 17. Cómo agregar una categoría nueva (receta rápida)
 
