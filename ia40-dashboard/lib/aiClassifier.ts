@@ -92,8 +92,10 @@ Producto a clasificar:
 - Categoria actual en el sistema: ${p.categoriaActualNombre} (slug: ${p.categoriaActualSlug})
 ${opcionesCategoriaTexto}
 
-Basandote en lo que encuentres buscando en la web (si la busqueda no da resultados utiles o es ambigua, decilo con confianza "baja" y dejar "segmento" en null en vez de adivinar), respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
-{"categoria_slug": string o null, "segmento": string o null, "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda"}`;
+Basandote en lo que encuentres buscando en la web, elegi SIEMPRE el segmento que mejor se ajuste al producto -- incluso si la evidencia es parcial, indirecta o ambigua (por ejemplo, si no encontras el modelo exacto pero si otros productos de la misma marca, o el nombre/codigo del modelo da una pista razonable del tipo de producto). NUNCA dejes "segmento" en null: usa el campo "confianza" para indicar que tan seguro estas ("baja" si tuviste que inferir con poca evidencia), pero elegi igual la opcion mas probable de la lista. Dejar "categoria_slug" en null (o igual a la categoria actual) si no hay evidencia clara de que el producto sea de otra categoria -- ese cambio si requiere mas certeza porque mueve la fila a otro lugar del sistema.
+
+Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
+{"categoria_slug": string o null, "segmento": string (nunca null, elegi el mas probable), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda y si fue una inferencia indirecta"}`;
 }
 
 /**
