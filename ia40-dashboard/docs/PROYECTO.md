@@ -365,14 +365,16 @@ búsqueda real en Google muestra que es un **bastón trípode**, no un andador.
 filtros). Al clickearlo, dispara `GET /api/sieve?category=<slug>`, que:
 
 1. Busca combinaciones marca+modelo de la categoría actual que **todavía no
-   se validaron** (tabla `model_sieve_log`, nueva — ver sección 5).
+   se validaron** (tabla `model_sieve_log`, nueva — ver sección 5), ordenadas
+   por **FOB total acumulado descendente** (suma de `total_fob_dolars` de
+   todos los meses) — así se revisan primero los modelos con más peso real
+   en el negocio, no alfabéticamente.
 2. Para cada una (en lotes de `SIEVE_BATCH_LIMIT`, default 20 por click):
-   busca `"<marca> <modelo>"` en la web (`lib/webSearch.ts`, SerpApi —
-   **misma cuota compartida** con la búsqueda de imágenes, 250/mes en el
-   plan gratis) y le pasa el resultado a Gemini 2.5 Flash-Lite
-   (`lib/aiClassifier.ts`, API de Google AI Studio — **gratis**, con límite
-   de uso por minuto/día en vez de costo por token) para que decida el
-   segmento real.
+   le pide a Gemini 3.1 Flash-Lite (`lib/aiClassifier.ts`, API de Google AI
+   Studio — **gratis**, con límite de uso por minuto/día en vez de costo por
+   token) que decida el segmento real. **Gemini busca en la web por su
+   cuenta** (tool nativo `google_search`, ver nota abajo) — no se usa
+   SerpApi para esto.
 3. Para las 3 categorías de NCM compartido (`andadores`/`bastones`/
    `calzado_ortopedico`), además le pregunta a la IA si el producto está en
    la categoría correcta. Si no (como el caso de Double Care Medical), **se
@@ -434,6 +436,29 @@ dos causas:
 Si Google vuelve a cambiar el modelo o los límites gratuitos, revisar
 https://ai.google.dev/gemini-api/docs/models y ajustar `GEMINI_MODEL` /
 `SIEVE_DELAY_MS` según corresponda.
+
+**Cambio de arquitectura — Gemini busca solo, sin SerpApi (17/07/2026,
+pedido explícito del usuario):** el diseño original mandaba `"<marca>
+<modelo>"` a SerpApi (`lib/webSearch.ts`) y le pasaba los snippets a Gemini
+como texto ya buscado. El usuario pidió separar esto: **SerpApi debe usarse
+solo para pegar la imagen del producto al catálogo** (`lib/imageSearch.ts`,
+sin cambios), nunca para alimentar la clasificación del tamizador. Ahora
+`lib/aiClassifier.ts` le da a Gemini el tool nativo `google_search`
+(grounding) en la misma llamada — el modelo busca "`<marca> <modelo>`" por
+su cuenta durante la generación, sin gastar cuota de SerpApi. Se borró
+`lib/webSearch.ts` de este flujo (el archivo queda en el repo sin uso; se
+puede borrar del todo si se quiere, no rompe nada).
+
+Detalle técnico importante: `gemini-3.1-flash-lite` **no** soporta combinar
+`generationConfig.responseMimeType` (JSON mode) con tools como
+`google_search` — esa combinación solo está en preview para
+`gemini-3.1-pro-preview` y `gemini-3.5-flash` (ver
+[docs de Google](https://ai.google.dev/gemini-api/docs/generate-content/structured-output#structured-outputs-with-tools)).
+Por eso ya no se pide JSON mode: se le pide a Gemini en el prompt que
+responda solo con el JSON (sin backticks ni texto alrededor), y
+`extractJson()` en `lib/aiClassifier.ts` lo extrae del texto con un parser
+de llaves balanceadas (más tolerante que un regex simple, por si el modelo
+agrega algo de texto a pesar de la instrucción).
 
 ## 11. Endpoints API
 
