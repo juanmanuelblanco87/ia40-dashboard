@@ -1,5 +1,5 @@
 /**
- * Cliente minimo para la API de Gemini (Google AI Studio), usado por el
+ * Cliente minimo para la API de OpenAI (Responses API), usado por el
  * "tamizador de segmentos" (app/api/sieve/route.ts) para determinar el
  * segmento real de un producto -- y, para las categorias de NCM compartido
  * (andadores / bastones / calzado_ortopedico), tambien la categoria real, ya
@@ -9,46 +9,37 @@
  * HY7300L" quedo clasificado como andador por el parser, pero es un
  * baston tripode segun la ficha real del producto).
  *
- * IMPORTANTE (17/07/2026, pedido explicito del usuario): este cliente NO
- * depende de SerpApi para buscar evidencia. Antes se buscaba "<marca>
- * <modelo>" con SerpApi (lib/webSearch.ts) y se le pasaban los snippets a
- * Gemini como texto. Ahora se usa la herramienta nativa de Gemini
- * "google_search" (grounding) -- el propio modelo busca en la web durante
- * la llamada, sin gastar cuota de SerpApi. SerpApi queda reservada
- * exclusivamente para pegar la IMAGEN del producto al catalogo
- * (lib/imageSearch.ts, sin cambios), que es un flujo completamente aparte.
+ * HISTORIA (17/07/2026): se probo primero con Gemini + tool "google_search"
+ * (grounding nativo), pero ese tool devuelve 429 en el 100% de los casos si
+ * el proyecto de Google AI Studio no tiene facturacion activada (Tier 1) --
+ * ver historial completo en docs/PROYECTO.md seccion 10.1. La empresa
+ * decidio pagar la API de OpenAI en su lugar (proyecto "cobus" en
+ * platform.openai.com), asi que este archivo ahora usa OpenAI en vez de
+ * Gemini. IMPORTANTE: esto NO es lo mismo que una suscripcion de ChatGPT
+ * Plus/Pro -- es facturacion de plataforma, por uso, en platform.openai.com.
  *
- * Nota tecnica: gemini-3.1-flash-lite (el modelo usado) todavia NO soporta
- * combinar "structured output" (generationConfig.responseMimeType /
- * responseSchema) con herramientas como google_search -- esa combinacion
- * solo esta disponible (en preview) para gemini-3.1-pro-preview y
- * gemini-3.5-flash (ver
- * https://ai.google.dev/gemini-api/docs/generate-content/structured-output#structured-outputs-with-tools).
- * Por eso NO se pide JSON mode: se le pide a Gemini en el prompt que
- * responda SOLO con el JSON (sin backticks ni texto alrededor), y
- * `extractJson()` lo extrae del texto de forma tolerante (busca el primer
- * bloque `{...}` balanceado, por si el modelo agrega algo de texto antes o
- * despues a pesar de la instruccion).
+ * Usa la Responses API (`https://api.openai.com/v1/responses`, el endpoint
+ * moderno de OpenAI, no la Chat Completions API vieja) con el tool nativo
+ * `web_search` -- el modelo busca en la web por su cuenta durante la misma
+ * llamada, sin depender de SerpApi ni de ningun otro proveedor de busqueda.
+ *
+ * Nota tecnica importante: NO se usa "structured output" (`text.format:
+ * json_schema`) combinado con el tool `web_search`. Hay reportes conocidos
+ * de la comunidad de OpenAI de que esa combinacion corta la respuesta a la
+ * mitad y rompe el JSON (mismo tipo de problema que tuvimos con Gemini al
+ * combinar grounding + JSON mode). Por eso se le pide al modelo en el
+ * prompt que responda SOLO con JSON en texto plano, y `extractJson()`
+ * (parser de llaves balanceadas) lo extrae de forma tolerante.
  *
  * Requiere una variable de entorno en Vercel:
- *   - GEMINI_API_KEY: API key GRATIS de aistudio.google.com (Google AI
- *     Studio) -- no pide tarjeta, solo tiene limite de uso (rate limit),
- *     no de dinero.
- *
- *   Nota (17/07/2026): originalmente se uso "gemini-2.5-flash-lite", pero
- *   Google dejo de darle acceso a ese modelo a API keys nuevas (empezo a
- *   devolver 404 "no longer available to new users" el 9/jul/2026, aunque
- *   la pagina de deprecations todavia lo lista con fecha de baja en
- *   octubre 2026 -- parece un corte solo para cuentas nuevas). Se cambio a
- *   "gemini-3.1-flash-lite" (linea Gemini 3, modelo estable equivalente en
- *   costo/latencia, tambien gratis en Google AI Studio, y con soporte de
- *   "Search grounding"). Si esto vuelve a pasar, revisar el modelo actual
- *   en https://ai.google.dev/gemini-api/docs/models y actualizar
- *   GEMINI_MODEL abajo (verificar que el reemplazo soporte el tool
- *   "google_search").
+ *   - OPENAI_API_KEY: API key de platform.openai.com (proyecto "cobus"),
+ *     facturacion por uso ya configurada por la empresa. Costo aproximado:
+ *     el tool `web_search` cuesta USD 0.01 por busqueda (10 USD / 1000
+ *     llamadas) + tokens de la respuesta al precio normal del modelo -- un
+ *     lote de 20 productos sale centavos de dolar.
  */
 
-const GEMINI_MODEL = "gemini-3.1-flash-lite";
+const OPENAI_MODEL = "gpt-5.4-mini";
 
 export interface CategoriaOpcion {
   slug: string;
@@ -93,7 +84,7 @@ function buildPrompt(p: SieveClassifyParams): string {
 
   return `Sos un clasificador de productos de equipamiento medico/ortopedico para un dashboard de comercio exterior argentino.
 
-Tenes acceso a busqueda de Google (herramienta google_search). Usala para buscar "${p.marca} ${p.modelo}" (y variantes razonables de esa marca + modelo/codigo si la primera busqueda no da resultados utiles) y averiguar que tipo de producto es realmente, antes de responder.
+Tenes acceso a busqueda web. Usala para buscar "${p.marca} ${p.modelo}" (y variantes razonables de esa marca + modelo/codigo si la primera busqueda no da resultados utiles) y averiguar que tipo de producto es realmente, antes de responder.
 
 Producto a clasificar:
 - Marca (declarada en aduana): ${p.marca}
@@ -106,17 +97,14 @@ Basandote en lo que encuentres buscando en la web (si la busqueda no da resultad
 }
 
 /**
- * Extrae el primer objeto JSON balanceado del texto de respuesta. Se usa un
- * conteo de llaves en vez de un regex simple porque, al no poder pedir JSON
- * mode junto con el tool de busqueda (ver nota tecnica arriba), Gemini puede
- * agregar texto o un bloque ```json``` alrededor del objeto a pesar de la
- * instruccion -- esto evita que un regex "greedy" agarre de mas si hay
- * llaves sueltas en el texto circundante.
+ * Extrae el primer objeto JSON balanceado del texto de respuesta (cuenta
+ * llaves en vez de usar un regex "greedy" simple, por si el modelo agrega
+ * algo de texto alrededor a pesar de la instruccion de responder solo JSON).
  */
 function extractJson(text: string): any {
   const start = text.indexOf("{");
   if (start === -1) {
-    throw new AiClassifierError(`No se encontro JSON en la respuesta de Gemini: ${text.slice(0, 300)}`);
+    throw new AiClassifierError(`No se encontro JSON en la respuesta de OpenAI: ${text.slice(0, 300)}`);
   }
   let depth = 0;
   for (let i = start; i < text.length; i++) {
@@ -128,55 +116,75 @@ function extractJson(text: string): any {
         try {
           return JSON.parse(candidate);
         } catch {
-          throw new AiClassifierError(`JSON invalido en la respuesta de Gemini: ${candidate.slice(0, 300)}`);
+          throw new AiClassifierError(`JSON invalido en la respuesta de OpenAI: ${candidate.slice(0, 300)}`);
         }
       }
     }
   }
-  throw new AiClassifierError(`JSON incompleto en la respuesta de Gemini: ${text.slice(0, 300)}`);
+  throw new AiClassifierError(`JSON incompleto en la respuesta de OpenAI: ${text.slice(0, 300)}`);
+}
+
+/**
+ * Extrae el texto final del modelo de una respuesta de la Responses API.
+ * El SDK oficial de OpenAI expone un `response.output_text` de conveniencia,
+ * pero aca se llama a la API cruda con fetch, asi que hay que recorrer
+ * `output` a mano: es un array de "items" (uno por cada paso -- puede haber
+ * un item `web_search_call` antes del item final `message`), y el texto
+ * esta en `content[].text` del item de tipo "message".
+ */
+function extractOutputText(data: any): string {
+  if (typeof data?.output_text === "string" && data.output_text) return data.output_text;
+
+  const output = Array.isArray(data?.output) ? data.output : [];
+  for (const item of output) {
+    if (item?.type === "message" && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (part?.type === "output_text" && typeof part.text === "string") {
+          return part.text;
+        }
+      }
+    }
+  }
+  return "";
 }
 
 export async function classifyProduct(params: SieveClassifyParams): Promise<SieveClassifyResult> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new AiClassifierError("Falta la variable de entorno GEMINI_API_KEY en Vercel.");
+    throw new AiClassifierError("Falta la variable de entorno OPENAI_API_KEY en Vercel.");
   }
 
   const prompt = buildPrompt(params);
 
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        // Grounding con Google Search: el modelo busca en la web por su
-        // cuenta durante la llamada (sin SerpApi). No se puede combinar con
-        // generationConfig.responseMimeType en este modelo -- ver nota
-        // tecnica arriba.
-        tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0.1 },
-      }),
-    }
-  );
+  const resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      tools: [{ type: "web_search" }],
+      input: prompt,
+    }),
+  });
 
   if (resp.status === 429) {
-    throw new AiClassifierError("Limite de uso gratis de Gemini alcanzado (429) -- probá de nuevo en un rato.");
+    throw new AiClassifierError("Limite de uso de OpenAI alcanzado (429) -- probá de nuevo en un rato.");
   }
   if (!resp.ok) {
-    throw new AiClassifierError(`Gemini API respondio ${resp.status}: ${await resp.text()}`);
+    throw new AiClassifierError(`OpenAI API respondio ${resp.status}: ${await resp.text()}`);
   }
 
   const data: any = await resp.json();
 
-  if (data.promptFeedback?.blockReason) {
-    throw new AiClassifierError(`Gemini bloqueo la respuesta: ${data.promptFeedback.blockReason}`);
+  if (data?.status === "failed" || data?.error) {
+    throw new AiClassifierError(`OpenAI devolvio error: ${JSON.stringify(data.error ?? data).slice(0, 300)}`);
   }
 
-  const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const text = extractOutputText(data);
   if (!text) {
-    throw new AiClassifierError(`Gemini no devolvio texto. Respuesta cruda: ${JSON.stringify(data).slice(0, 300)}`);
+    throw new AiClassifierError(`OpenAI no devolvio texto. Respuesta cruda: ${JSON.stringify(data).slice(0, 300)}`);
   }
   const parsed = extractJson(text);
 
