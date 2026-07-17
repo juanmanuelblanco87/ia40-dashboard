@@ -236,9 +236,7 @@ export interface ModelPvpEntry {
   modelo: string;
   pvp_usd: number | null;
   confianza: string | null;
-  fuentes_consistentes: number | null;
   razonamiento: string | null;
-  fuente_url: string | null;
   status: string; // 'pending' | 'found' | 'not_found' | 'error'
 }
 
@@ -386,19 +384,7 @@ function ModelShareTable({
                     {pvpLoading ? (
                       <span style={{ color: "var(--muted)" }}>Buscando...</span>
                     ) : pvpStatus === "found" && pvp?.pvp_usd != null ? (
-                      pvp.fuente_url ? (
-                        <a
-                          href={pvp.fuente_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={pvp.razonamiento ?? "Ver publicacion de origen"}
-                          style={{ color: "var(--accent)" }}
-                        >
-                          ${fmtNumber(pvp.pvp_usd)}
-                        </a>
-                      ) : (
-                        <span title={pvp.razonamiento ?? undefined}>${fmtNumber(pvp.pvp_usd)}</span>
-                      )
+                      <span title={pvp.razonamiento ?? undefined}>${fmtNumber(pvp.pvp_usd)}</span>
                     ) : (
                       <button
                         onClick={() => onConsultPvp(r.marca, r.modelo, r.segmento)}
@@ -968,9 +954,7 @@ export default function Home() {
             modelo,
             pvp_usd: null,
             confianza: null,
-            fuentes_consistentes: null,
             razonamiento: null,
-            fuente_url: null,
             status: "error",
           });
           return next;
