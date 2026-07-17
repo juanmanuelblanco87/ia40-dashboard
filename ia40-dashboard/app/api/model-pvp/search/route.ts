@@ -45,6 +45,7 @@ export async function POST(req: Request) {
             confianza: null,
             fuentes_consistentes: null,
             razonamiento: null,
+            fuente_url: null,
             status: "error",
           },
           error: err.message,
