@@ -240,6 +240,9 @@ const COLOR_DICT: [string, string][] = [
 ];
 
 // ---- codigos de color "YC" (marca Magesa, series YK90xx) ----
+// Especifico de sillas de ruedas: tabla aprendida del dataset de esa
+// categoria, no se reutiliza por defecto en las categorias nuevas (se pasa
+// explicitamente en la config de "sillas_de_ruedas" mas abajo).
 const SILLAS_YC_CODE_MAP: Record<string, string> = {
   YCB007: "Azul",
   YC104: "Gris Carbón",
@@ -254,24 +257,74 @@ function titleCase(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
+/**
+ * Version standalone (reutilizable fuera de createCategoryParser) de la
+ * extraccion de color del Paso 10: busca una palabra de color conocida al
+ * FINAL del texto de Modelo y la separa. Usada por los parsers de Patron B
+ * (NCM 9404.90.00, 9401.79.00, 9402.90.20, 3922.20.00), que no pasan por el
+ * motor generico de Patron A (createCategoryParser).
+ */
+function extractColorGeneric(
+  modelo: string,
+  defaultColor: string,
+  colorDict: [string, string][] = COLOR_DICT
+): { modelo: string; color: string } {
+  if (!modelo) return { modelo, color: defaultColor };
+  const colorSorted = [...colorDict].sort((a, b) => b[0].length - a[0].length);
+  for (const [word, canonical] of colorSorted) {
+    const re = new RegExp(`^(.*?)\\s+${word}$`, "i");
+    const m = re.exec(modelo);
+    if (m && m[1].trim().length >= 2) {
+      return { modelo: m[1].trim(), color: canonical };
+    }
+  }
+  return { modelo, color: defaultColor };
+}
+
 // ============================================================
 // Motor generico de parseo (fabrica de parsers por categoria)
 // ============================================================
 
 interface CategoryParserConfig {
+  /** Diccionario multi-palabra de marca. Por defecto: BRAND_MULTI_WORD_DICT (compartido). */
   multiWordDict?: [string, string][];
+  /** Marca de una sola palabra. Por defecto: BRAND_SINGLE_WORD_OVERRIDE (compartido). */
   singleWordOverride?: Record<string, string>;
+  /** Typos conocidos en la primera palabra. Por defecto: BRAND_TYPO_FIXES (compartido). */
   typoFixes?: Record<string, string>;
+  /** Palabras vacias societarias para el fallback por Razon Social. Por defecto: SOCIETARY_STOPWORDS (compartido). */
   societaryStopwords?: Set<string>;
+  /** Diccionario de colores. Por defecto: COLOR_DICT (compartido). */
   colorDict?: [string, string][];
+  /** Codigos "YC<n>" -> color canonico (especifico de sillas de ruedas / Magesa). Por defecto: ninguno. */
   ycCodeMap?: Record<string, string>;
+  /** Color por defecto cuando no se detecta ninguno. Por defecto: "Negro". */
   defaultColor?: string;
+  /** Paso 11.1: palabra clave en Modelo -> segmento (maxima prioridad). Por defecto: ninguno. */
   segmentoKeywords?: [string, string][];
+  /** Paso 11.2: marca exacta + prefijo de Modelo -> segmento. Por defecto: ninguno. */
   segmentoBrandPrefix?: [string, string, string][];
+  /** Paso 11.3: marca -> segmento por defecto. Por defecto: ninguno. */
   segmentoBrandDefault?: Record<string, string>;
+  /** Paso 11.4: segmento si nada de lo anterior matcheo. Obligatorio: cada categoria define el suyo. */
   segmentoFallback: string;
+  /**
+   * Algunas marcas vienen repetidas al inicio del texto de Modelo (ej.
+   * "ERIVO ERIVO R10" -> el fallback generico del Paso 8 deja Marca="Erivo"
+   * pero Modelo="ERIVO R10", con el token de marca duplicado). Si se activa,
+   * se quita ese token repetido del inicio del Modelo despues de extraerlo
+   * (antes de separar el color). Por defecto: false (no se activa para
+   * categorias donde no se observo este patron).
+   */
+  stripRepeatedMarcaFromModelo?: boolean;
 }
 
+/**
+ * Crea un parser de marca/modelo/color/segmento para una categoria,
+ * reutilizando el mismo algoritmo que se armo originalmente para
+ * "Sillas de ruedas" (ver pasos 1-11 en los comentarios de cada funcion
+ * interna), parametrizado por los diccionarios que pasa `config`.
+ */
 function createCategoryParser(config: CategoryParserConfig): CategoryParser {
   const multiWordSorted = [...(config.multiWordDict ?? BRAND_MULTI_WORD_DICT)].sort(
     (a, b) => b[0].length - a[0].length
@@ -283,6 +336,16 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
   const ycCodeMap = config.ycCodeMap ?? {};
   const defaultColor = config.defaultColor ?? DEFAULT_COLOR;
 
+  // Paso 9: contador "Modelo N" correlativo por Razon Social + Precio
+  // Unitario, con estado propio por instancia de parser (o sea, por
+  // categoria) para no mezclar numeraciones entre categorias distintas.
+  // NOTA: este contador vive en memoria del proceso. Dentro de una misma
+  // corrida de sync es correcto (se reutiliza el mismo numero para la misma
+  // combinacion razonSocial+precio); entre corridas distintas (cada una un
+  // proceso nuevo en Vercel) se reinicia. Segun los datos reales analizados
+  // de sillas de ruedas, este camino casi no se usa (casi todo trae un
+  // codigo de referencia utilizable como Modelo), asi que por ahora no se
+  // persiste en la base.
   const modeloAssigned = new Map<string, number>();
   const modeloCounterPerRazon = new Map<string, number>();
 
@@ -309,6 +372,11 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
     return { marca, modelo: assignModeloN(razonSocial, precioUnitario) };
   }
 
+  /**
+   * @param sufijoTextRaw  Texto crudo de "SUB ITEMS - SUFIJOS" (puede venir vacio/null).
+   * @param razonSocial    Razon social del importador (columna A), tal cual.
+   * @param precioUnitario Precio unitario FOB del sub-item, para el paso 9.
+   */
   function parseCore(
     sufijoTextRaw: string | null | undefined,
     razonSocial: string,
@@ -316,8 +384,10 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
   ): { marca: string; modelo: string } {
     let text = (sufijoTextRaw ?? "").trim();
 
+    // Paso 1: quitar sufijo de aduana "SIN CODIGO (CODIGO)" al final.
     text = text.replace(/\s*SIN\s+CODIGO(\s*\([^)]*\))?\s*$/i, "").trim();
 
+    // Paso 2: comillas, comas y puntos sueltos -> espacio; colapsar espacios.
     text = text
       .replace(/["'.,]/g, " ")
       .replace(/\s{2,}/g, " ")
@@ -327,12 +397,14 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       return finalize(razonSocial, "", razonSocial, precioUnitario);
     }
 
+    // Paso 3: "sin marca" explicito -> Marca = Razon Social completa.
     const sinMarcaMatch = /^(SIN\s+MARCA|S\/MARCA|S\/M)\b\s*(.*)$/i.exec(text);
     if (sinMarcaMatch) {
       const modelo = sinMarcaMatch[2].trim();
       return finalize(razonSocial, modelo, razonSocial, precioUnitario);
     }
 
+    // Paso 4: corregir typo conocido en la primera palabra.
     let words = text.split(" ").filter(Boolean);
     if (words.length > 0) {
       const firstUpper = words[0].toUpperCase();
@@ -343,6 +415,7 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
     }
     const textUpper = text.toUpperCase();
 
+    // Paso 5: diccionario multi-palabra (match mas largo primero).
     for (const [key, canonical] of multiWordSorted) {
       if (textUpper === key || textUpper.startsWith(key + " ")) {
         const modelo = text.slice(key.length).trim();
@@ -350,6 +423,7 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       }
     }
 
+    // Paso 6: marca de una sola palabra ya conocida (tabla OVERRIDE).
     words = text.split(" ").filter(Boolean);
     if (words.length > 0) {
       const firstUpper = words[0].toUpperCase();
@@ -360,6 +434,8 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       }
     }
 
+    // Paso 7: fallback por Razon Social (probar prefijo de 3, 2 o 1 palabras
+    // de la razon social sin las palabras vacias societarias).
     const razonWords = razonSocial
       .toUpperCase()
       .split(/\s+/)
@@ -374,6 +450,8 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       }
     }
 
+    // Paso 8: fallback generico -> primera palabra como marca (Title Case,
+    // o mayusculas si es sigla de <=3 letras), resto como modelo.
     if (words.length === 0) {
       return finalize(razonSocial, "", razonSocial, precioUnitario);
     }
@@ -382,9 +460,18 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
     return finalize(marca, modelo, razonSocial, precioUnitario);
   }
 
+  /**
+   * Paso 10: separa el color del texto de Modelo (ya limpio, pasos 1-9),
+   * para que variantes de color del mismo modelo (ej. "MEWA BLACK" / "MEWA
+   * LIGHT GRAY") no queden como modelos distintos. Devuelve el modelo sin
+   * el color (si se detecto) y el color canonico (o el color por defecto
+   * de la categoria si no hay informacion de color en el texto).
+   */
   function extractColor(modelo: string): { modelo: string; color: string } {
     if (!modelo) return { modelo, color: defaultColor };
 
+    // Paso 10.1: palabra de color conocida al final, con sufijo " YC<codigo>" opcional
+    // (algunos registros traen un espacio entre "YC" y el codigo, ej. "YC B007").
     for (const [word, canonical] of colorSorted) {
       const re = new RegExp(`^(.*?)\\s+${word}(?:\\s+YC\\s*[\\w]+)?$`, "i");
       const m = re.exec(modelo);
@@ -393,6 +480,8 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       }
     }
 
+    // Paso 10.2: sin palabra de color, pero con codigo "YC<codigo>" al final
+    // (tambien tolera espacio entre "YC" y el codigo).
     const ycMatch = /^(.*?)\s+YC\s*([\w]+)$/i.exec(modelo);
     if (ycMatch && ycMatch[1].trim().length >= 2) {
       const code = `YC${ycMatch[2]}`.toUpperCase();
@@ -400,12 +489,24 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
       if (known) {
         return { modelo: ycMatch[1].trim(), color: known };
       }
+      // Codigo no aprendido: igual se quita del modelo (para unificar), pero
+      // el color queda por defecto porque no sabemos cual es realmente.
       return { modelo: ycMatch[1].trim(), color: defaultColor };
     }
 
+    // Paso 10.3: sin color detectado.
     return { modelo, color: defaultColor };
   }
 
+  /**
+   * Paso 11: clasifica cada fila en un segmento a partir de Marca y Modelo
+   * YA limpios (sin color). Orden de evaluacion (el primero que matchea
+   * gana):
+   *   11.1 palabra clave en Modelo (max prioridad, no mira la marca)
+   *   11.2 Marca exacta + Modelo contiene un prefijo de linea de producto
+   *   11.3 Marca por defecto
+   *   11.4 fallback de la categoria si nada matcheo
+   */
   function assignSegmento(marca: string, modelo: string): string {
     const modeloUpper = (modelo || "").toUpperCase();
 
@@ -424,7 +525,17 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
 
   return (raw) => {
     const core = parseCore(raw.sufijos ?? "", raw.nombre ?? "", raw.precio_unitario ?? null);
-    const { modelo, color } = extractColor(core.modelo);
+    let modeloPreColor = core.modelo;
+    if (config.stripRepeatedMarcaFromModelo) {
+      const marcaUpper = core.marca.toUpperCase();
+      const moUpper = modeloPreColor.toUpperCase();
+      if (moUpper === marcaUpper) {
+        modeloPreColor = "";
+      } else if (moUpper.startsWith(marcaUpper + " ")) {
+        modeloPreColor = modeloPreColor.slice(core.marca.length).trim();
+      }
+    }
+    const { modelo, color } = extractColor(modeloPreColor);
     const segmento = assignSegmento(core.marca, modelo);
     return { marca: core.marca, modelo, color, segmento };
   };
@@ -435,6 +546,7 @@ function createCategoryParser(config: CategoryParserConfig): CategoryParser {
 // analizando datos reales de esta categoria especificamente).
 // ============================================================
 
+// ---- Paso 11.1: palabra clave en Modelo (maxima prioridad) ----
 const SEGMENTO_KEYWORDS: [string, string][] = [
   ["KID", "Sillas Infantiles"],
   ["JUNIOR", "Sillas Infantiles"],
@@ -458,6 +570,7 @@ const SEGMENTO_KEYWORDS: [string, string][] = [
   ["INODORO", "Silla de Traslado"],
 ];
 
+// ---- Paso 11.2: marca + prefijo de Modelo (marcas con lineas mixtas) ----
 const SEGMENTO_BRAND_PREFIX: [string, string, string][] = [
   ["Sunrise Medical", "ZIPPIE", "Sillas Infantiles"],
   ["Sunrise Medical", "QUICKIE IRIS", "Sillas Infantiles"],
@@ -502,6 +615,11 @@ const SEGMENTO_BRAND_PREFIX: [string, string, string][] = [
   ["Alu Rehab", "COYOTE", "Silla Postural"],
 ];
 
+// ---- Paso 11.3: marca por defecto (si no matcheo 11.1 ni 11.2) ----
+// Nota: algunas claves son la Razon Social completa (ej. "JEPOINT S. A.",
+// "TENACTA SOCIEDAD ANONIMA", "TRINIDAD INSUMOS S.R.L.") porque para esas
+// filas el resto del parser uso el fallback de Razon Social (paso 7) o el
+// fallback generico (paso 8) como Marca, no una marca del diccionario.
 const SEGMENTO_BRAND_DEFAULT: Record<string, string> = {
   "A&J": "Silla Estándar",
   "Achieve": "Silla Activa y Deportivas",
@@ -607,27 +725,130 @@ const sillasDeRuedasParser = createCategoryParser({
   segmentoFallback: SILLAS_SEGMENTO_FALLBACK,
 });
 
+// ============================================================
+// Config: Sillas de Ruedas Electricas -- Segmento propio. NO reutiliza el
+// esquema de sillas manuales (Sillas Infantiles / Ultra Livianas / etc.):
+// son ejes de clasificacion distintos, pensados especificamente para
+// sillas con motor (interior vs. exterior, plegable, reclinable,
+// bariatrica). Taxonomia validada con el usuario 15/07/2026. Confianza
+// BAJA en las keywords (ver nota de cabecera del archivo).
+// ============================================================
+// Taxonomia actualizada 16/07/2026 (reemplaza la anterior "Reclinable /
+// Todo Terreno / Interior-Compacta", que no coincidia con el criterio real
+// del usuario). 6 segmentos: Estandar, Plegable/Portatil, Scooter de
+// Movilidad, Pediatrica, Bipedestacion, Bariatrica.
 const ELECTRICAS_SEGMENTO_KEYWORDS: [string, string][] = [
-  ["BARIATRIC", "Bariátrica"],
-  ["BARIATRICA", "Bariátrica"],
-  ["RECLIN", "Reclinable"],
-  ["FOLDING", "Plegable"],
-  ["FOLDABLE", "Plegable"],
-  ["PLEGABLE", "Plegable"],
-  ["ALL TERRAIN", "Todo Terreno/Exterior"],
-  ["ALL-TERRAIN", "Todo Terreno/Exterior"],
-  ["OUTDOOR", "Todo Terreno/Exterior"],
-  ["RUGGED", "Todo Terreno/Exterior"],
-  ["TODO TERRENO", "Todo Terreno/Exterior"],
-  ["INDOOR", "Interior/Compacta"],
-  ["COMPACT", "Interior/Compacta"],
-  ["COMPACTA", "Interior/Compacta"],
+  // Tabla 1, fila 1 -> Pediatrica (maxima prioridad)
+  ["EXPLORER MINI", "Silla Eléctrica Pediátrica"],
+  ["LORI", "Silla Eléctrica Pediátrica"],
+  ["BABY", "Silla Eléctrica Pediátrica"],
+  ["JUNIOR", "Silla Eléctrica Pediátrica"],
+  ["TEEN", "Silla Eléctrica Pediátrica"],
+  ["KID", "Silla Eléctrica Pediátrica"],
+  ["PEDIAT", "Silla Eléctrica Pediátrica"],
+  ["INFANT", "Silla Eléctrica Pediátrica"],
+  ["ZIPPIE", "Silla Eléctrica Pediátrica"],
+  ["SKIPPI", "Silla Eléctrica Pediátrica"],
+  ["X340", "Silla Eléctrica Pediátrica"],
+  // Tabla 1, fila 2 -> Bipedestacion
+  ["BAFFIN", "Silla Eléctrica de Bipedestación"],
+  ["ERGO STAND", "Silla Eléctrica de Bipedestación"],
+  ["STAND", "Silla Eléctrica de Bipedestación"],
+  ["Q700 UP", "Silla Eléctrica de Bipedestación"],
+  ["BIPED", "Silla Eléctrica de Bipedestación"],
+  ["VERTIC", "Silla Eléctrica de Bipedestación"],
+  // Tabla 1, fila 3 -> Bariatrica
+  ["EUROCHAIR XXL", "Silla Eléctrica Bariátrica"],
+  ["XXL", "Silla Eléctrica Bariátrica"],
+  ["BARIATRIC", "Silla Eléctrica Bariátrica"],
+  // Tabla 1, fila 4 -> Scooter de Movilidad
+  ["SCOOTER", "Scooter de Movilidad"],
+  ["GO GO", "Scooter de Movilidad"],
+  // Tabla 1, fila 5 -> Plegable / Portatil
+  ["PLEGO", "Silla Eléctrica Plegable / Portátil"],
+  ["FUSION", "Silla Eléctrica Plegable / Portátil"],
+  ["EVO ALTUS", "Silla Eléctrica Plegable / Portátil"],
+  ["ERGO NIMBLE", "Silla Eléctrica Plegable / Portátil"],
+  ["I TRAVEL", "Silla Eléctrica Plegable / Portátil"],
+  ["TRAVEL", "Silla Eléctrica Plegable / Portátil"],
+  ["CARBON FIB", "Silla Eléctrica Plegable / Portátil"],
+  ["Q50R", "Silla Eléctrica Plegable / Portátil"],
 ];
 
+// Marcas nuevas (no compartidas con sillas de ruedas manuales) que necesitan
+// tratamiento multi-palabra para que Marca no se corte a mitad de camino.
+const ELECTRICAS_MULTI_WORD_EXTRA: [string, string][] = [
+  ["QUANTUM REHAB", "Quantum Rehab"],
+  ["TA SERVICE", "TA Service"],
+  ["PRIDE MOBILITY", "Pride Mobility"],
+  ["SKS REHAB", "SKS Rehab"],
+  ["RN LEDESMA", "RN Ledesma"],
+  ["JIANGSU INTCO MEDICAL", "Jiangsu Intco Medical"],
+  ["FOSHAN ECARRE MEDICAL", "Foshan Ecarre Medical"],
+];
+
+// Tabla 2: marca -> segmento por defecto (si no matcheo la Tabla 1). Las
+// marcas no listadas explicitamente (Estandar) llegan aca via fallback
+// generico (Paso 8, Title Case) y coinciden exactamente con estas keys.
+const ELECTRICAS_SEGMENTO_BRAND_DEFAULT: Record<string, string> = {
+  "Permobil": "Silla Eléctrica Estándar",
+  "Quantum Rehab": "Silla Eléctrica Estándar",
+  "Karma": "Silla Eléctrica Estándar",
+  "Foshan Ecarre Medical": "Silla Eléctrica Estándar",
+  "LIW Care Technology": "Silla Eléctrica Pediátrica",
+  "Sunrise Medical": "Silla Eléctrica Estándar",
+  "Yuwell": "Silla Eléctrica Estándar",
+  "Merits": "Silla Eléctrica Estándar",
+  "Meyra": "Silla Eléctrica Estándar",
+  "Vermeiren": "Silla Eléctrica Estándar",
+  "Jiangsu Intco Medical": "Silla Eléctrica Estándar",
+  "TA Service": "Silla Eléctrica Plegable / Portátil",
+  "Double Care Medical": "Silla Eléctrica Estándar",
+  "Pride Mobility": "Scooter de Movilidad",
+  "Theramart": "Silla Eléctrica Estándar",
+  "Intco": "Silla Eléctrica Estándar",
+  "Robooter": "Silla Eléctrica Plegable / Portátil",
+  "Ottobock": "Silla Eléctrica Estándar",
+  "Aspen": "Silla Eléctrica Estándar",
+  "Erivo": "Silla Eléctrica Estándar",
+  "Top Medi": "Silla Eléctrica Estándar",
+  "Ortobras": "Silla Eléctrica Estándar",
+  "Amylior": "Silla Eléctrica Estándar",
+  "A&J": "Silla Eléctrica Estándar",
+  "Magesa": "Silla Eléctrica Estándar",
+  "Xsto": "Silla Eléctrica Plegable / Portátil",
+  "Mugi": "Silla Eléctrica Estándar",
+  "Movicare": "Silla Eléctrica Estándar",
+  "Libercar": "Scooter de Movilidad",
+  "Kaiyang": "Silla Eléctrica Estándar",
+  "Phoenix": "Silla Eléctrica Plegable / Portátil",
+  "Amelife": "Silla Eléctrica Estándar",
+  "SKS Rehab": "Silla Eléctrica Estándar",
+  "Rifton": "Silla Eléctrica Pediátrica",
+  "Houde": "Silla Eléctrica Estándar",
+  "Heartway": "Scooter de Movilidad",
+  "RN Ledesma": "Silla Eléctrica Estándar",
+  "Jianlian": "Silla Eléctrica Estándar",
+};
+
 const sillasRuedasElectricasParser = createCategoryParser({
+  multiWordDict: [...BRAND_MULTI_WORD_DICT, ...ELECTRICAS_MULTI_WORD_EXTRA],
   segmentoKeywords: ELECTRICAS_SEGMENTO_KEYWORDS,
+  segmentoBrandDefault: ELECTRICAS_SEGMENTO_BRAND_DEFAULT,
   segmentoFallback: "Silla Eléctrica Estándar",
+  // "ERIVO ERIVO R10" -> el fallback generico deja Marca "Erivo" pero
+  // Modelo "ERIVO R10" (token de marca repetido); se observo este patron
+  // en esta categoria especificamente.
+  stripRepeatedMarcaFromModelo: true,
 });
+
+// ============================================================
+// Configs: 6 categorias nuevas restantes -- taxonomia de Segmento propia
+// por categoria, validada con el usuario 15/07/2026 (ver
+// docs/ncm_nuevas_categorias.md para el contexto de cada categoria).
+// Confianza BAJA en las keywords (ver nota de cabecera del archivo): se
+// ajustan/completan con el primer sync real de cada categoria.
+// ============================================================
 
 // ---- Andadores y Bastones ----
 // NOTA (16/07/2026): estas dos categorias YA NO usan createCategoryParser
@@ -640,78 +861,396 @@ const sillasRuedasElectricasParser = createCategoryParser({
 // en este archivo) que reemplaza el parser/segmento propio que tenian
 // antes. Ver `parseOrtopedia9021Row` y `ORTOPEDIA_9021_CATEGORY_SLUGS`.
 
-// ---- Almohadones Ortopedicos ----
-const ALMOHADONES_SEGMENTO_KEYWORDS: [string, string][] = [
-  ["VISCO", "Cojín Viscoelástico"],
-  ["MEMORY FOAM", "Cojín Viscoelástico"],
-  ["MEMORIA", "Cojín Viscoelástico"],
-  ["GEL", "Cojín de Gel/Silicona"],
-  ["SILICONE", "Cojín de Gel/Silicona"],
-  ["SILICONA", "Cojín de Gel/Silicona"],
-  ["AIR CELL", "Cojín de Aire"],
-  ["INFLATABLE", "Cojín de Aire"],
-  ["AIRE", "Cojín de Aire"],
-  ["HYBRID", "Cojín Mixto"],
-  ["COMBO", "Cojín Mixto"],
-  ["MIXTO", "Cojín Mixto"],
+// ============================================================
+// PARSER NCM 9404.90.00 -- ALMOHADAS Y COJINES (16/07/2026, reemplaza el
+// parser anterior de "Almohadones Ortopedicos"). Renombrada porque bajo
+// esta NCM entra data MUY heterogenea: almohadas comunes, cojines
+// decorativos, ropa de cama/topper, articulos de mascotas, ademas de los
+// ortopedicos/antiescaras -- NO es un NCM exclusivamente ortopedico.
+// Patron B ("SIN MODELO" como separador, no Patron A como el parser viejo
+// asumia -- ese era el bug: createCategoryParser solo sabe leer Patron A).
+// ~27% de filas sin marca -> Marca = Razon Social. El texto tras "SIN
+// MODELO" suele ser SOLO un codigo de SKU sin descripcion, por eso el
+// segmento se resuelve principalmente por MARCA (Tabla 2) y, cuando hay
+// palabra descriptiva, por keyword (Tabla 1, maxima prioridad).
+// ============================================================
+const ALMOHADAS_SEGMENTO_KEYWORDS: [string, string][] = [
+  ["PET", "Artículos para Mascotas"],
+  ["MASCOTA", "Artículos para Mascotas"],
+  ["PERRO", "Artículos para Mascotas"],
+  ["GATO", "Artículos para Mascotas"],
+  ["DOG", "Artículos para Mascotas"],
+  ["CAT", "Artículos para Mascotas"],
+  ["CUCHA", "Artículos para Mascotas"],
+  ["ANTIESCARA", "Cojín Ortopédico / Antiescaras"],
+  ["ANTIDECUBITO", "Cojín Ortopédico / Antiescaras"],
+  ["ORTOP", "Cojín Ortopédico / Antiescaras"],
+  ["LUMBAR", "Cojín Ortopédico / Antiescaras"],
+  ["ASIENTO", "Cojín Ortopédico / Antiescaras"],
+  ["COCCIX", "Cojín Ortopédico / Antiescaras"],
+  ["DONUT", "Cojín Ortopédico / Antiescaras"],
+  ["POSTURAL", "Cojín Ortopédico / Antiescaras"],
+  ["SILLA DE RUEDA", "Cojín Ortopédico / Antiescaras"],
+  ["CERVICAL", "Almohada Cervical / Viscoelástica"],
+  ["VISCO", "Almohada Cervical / Viscoelástica"],
+  ["MEMORY", "Almohada Cervical / Viscoelástica"],
+  ["CONTOUR", "Almohada Cervical / Viscoelástica"],
+  ["NASA", "Almohada Cervical / Viscoelástica"],
+  ["VIAJE", "Almohada de Viaje / Camping"],
+  ["TRAVEL", "Almohada de Viaje / Camping"],
+  ["CAMPING", "Almohada de Viaje / Camping"],
+  ["INFLABLE", "Almohada de Viaje / Camping"],
+  ["CUELLO", "Almohada de Viaje / Camping"],
+  ["NECK", "Almohada de Viaje / Camping"],
+  ["TOPPER", "Ropa de Cama / Topper"],
+  ["EDREDON", "Ropa de Cama / Topper"],
+  ["DUVET", "Ropa de Cama / Topper"],
+  ["SOBRECOLCHON", "Ropa de Cama / Topper"],
+  ["ACOLCHADO", "Ropa de Cama / Topper"],
+  ["QUILT", "Ropa de Cama / Topper"],
+  ["PROTECTOR", "Ropa de Cama / Topper"],
+  ["COVER", "Ropa de Cama / Topper"],
+  ["FUNDA", "Ropa de Cama / Topper"],
+  ["DECORATIVO", "Cojín Decorativo / Hogar"],
+  ["SOFA", "Cojín Decorativo / Hogar"],
+  ["SILLON", "Cojín Decorativo / Hogar"],
+  ["HOGAR", "Cojín Decorativo / Hogar"],
+  ["THROW", "Cojín Decorativo / Hogar"],
+  ["DECO", "Cojín Decorativo / Hogar"],
+  ["ALMOHADA", "Almohada de Dormir"],
+  ["PILLOW", "Almohada de Dormir"],
+  ["PLUMON", "Almohada de Dormir"],
+  ["PLUMA", "Almohada de Dormir"],
+  ["DORMIR", "Almohada de Dormir"],
+  ["KING", "Almohada de Dormir"],
+  ["QUEEN", "Almohada de Dormir"],
+  ["TWIN", "Almohada de Dormir"],
 ];
-const almohadonesOrtopedicosParser = createCategoryParser({
-  segmentoKeywords: ALMOHADONES_SEGMENTO_KEYWORDS,
-  segmentoFallback: "Almohadón Estándar",
-});
 
-// ---- Sillas de Ducha ----
-const SILLAS_DUCHA_SEGMENTO_KEYWORDS: [string, string][] = [
-  ["SELF PROPEL", "Silla Autopropulsable"],
-  ["AUTOPROPULS", "Silla Autopropulsable"],
-  ["RECLIN", "Silla Reclinable"],
-  ["WHEEL", "Silla con Ruedas (Traslado)"],
-  ["RUEDAS", "Silla con Ruedas (Traslado)"],
-  ["FOLDING", "Silla Fija/Plegable"],
-  ["PLEGABLE", "Silla Fija/Plegable"],
-  ["FIXED", "Silla Fija/Plegable"],
-];
-const sillasDuchaParser = createCategoryParser({
-  segmentoKeywords: SILLAS_DUCHA_SEGMENTO_KEYWORDS,
-  segmentoFallback: "Silla de Ducha Estándar",
-});
+const ALMOHADAS_SEGMENTO_BRAND_DEFAULT: Record<string, string> = {
+  THERAMART: "Cojín Ortopédico / Antiescaras",
+  TRULIFE: "Cojín Ortopédico / Antiescaras",
+  OTTOBOCK: "Cojín Ortopédico / Antiescaras",
+  ALTENBURG: "Almohada de Dormir",
+  CACHAREL: "Almohada de Dormir",
+  ROSEN: "Almohada de Dormir",
+  SUPERSPUMA: "Almohada de Dormir",
+  ARREDO: "Almohada de Dormir",
+  PRAVIA: "Almohada de Dormir",
+  CITYBLANCO: "Almohada de Dormir",
+  POTIERS: "Almohada de Dormir",
+  "PIERRE CARDIN": "Almohada de Dormir",
+  OUTZEN: "Almohada de Dormir",
+  RENNER: "Almohada de Dormir",
+  ESPALMA: "Almohada de Dormir",
+  SPRINGWALL: "Almohada de Dormir",
+  SELENIO: "Almohada de Dormir",
+  CALMA: "Almohada de Dormir",
+  DUOFLEX: "Almohada de Dormir",
+  TAMPA: "Almohada de Dormir",
+  DREAM: "Almohada de Dormir",
+  CAMESA: "Almohada de Dormir",
+  KARSTEN: "Almohada de Dormir",
+  POSTO: "Almohada de Dormir",
+  LANDMARK: "Almohada de Dormir",
+  CLAUDIA: "Almohada de Dormir",
+  MORPH: "Almohada de Dormir",
+  DUVET: "Ropa de Cama / Topper",
+  NASA: "Almohada Cervical / Viscoelástica",
+  KREA: "Cojín Decorativo / Hogar",
+  MINISO: "Cojín Decorativo / Hogar",
+  "M+DESIGN": "Cojín Decorativo / Hogar",
+  DECOTOTALE: "Cojín Decorativo / Hogar",
+  BOCONCEPT: "Cojín Decorativo / Hogar",
+  ASHLEY: "Cojín Decorativo / Hogar",
+  BADECO: "Cojín Decorativo / Hogar",
+  LUXOPHIE: "Cojín Decorativo / Hogar",
+  "H&G": "Cojín Decorativo / Hogar",
+  ROUGE: "Cojín Decorativo / Hogar",
+  CHAMING: "Cojín Decorativo / Hogar",
+  ALPHAKOKO: "Cojín Decorativo / Hogar",
+  NATUREHIKE: "Almohada de Viaje / Camping",
+  QUECHUA: "Almohada de Viaje / Camping",
+  KIMJALY: "Almohada de Viaje / Camping",
+  PUPPIS: "Artículos para Mascotas",
+  BEEPAW: "Artículos para Mascotas (tentativo)",
+};
 
-// ---- Elevadores de Inodoro ----
-const ELEVADORES_SEGMENTO_KEYWORDS: [string, string][] = [
-  ["ARMREST", "Elevador con Apoyabrazos"],
-  ["APOYABRAZOS", "Elevador con Apoyabrazos"],
-  ["REPOSABRAZOS", "Elevador con Apoyabrazos"],
-  ["BACKREST", "Elevador con Respaldo"],
-  ["RESPALDO", "Elevador con Respaldo"],
-];
-const elevadoresInodoroParser = createCategoryParser({
-  segmentoKeywords: ELEVADORES_SEGMENTO_KEYWORDS,
-  segmentoFallback: "Elevador Simple",
-});
+const ALMOHADAS_SEGMENTO_FALLBACK = "Almohadón / Cojín Estándar";
 
-// ---- Camas Hospitalarias ----
-const CAMAS_SEGMENTO_KEYWORDS: [string, string][] = [
-  ["BARIATRIC", "Cama Bariátrica"],
-  ["BARIATRICA", "Cama Bariátrica"],
-  ["PEDIATRIC", "Cama Pediátrica"],
-  ["PEDIATRICA", "Cama Pediátrica"],
-  ["SEMI ELECTRIC", "Cama Semi-Eléctrica"],
-  ["SEMI-ELECTRIC", "Cama Semi-Eléctrica"],
-  ["SEMIELECTRICA", "Cama Semi-Eléctrica"],
-  ["ELECTRIC", "Cama Eléctrica"],
-  ["ELECTRICA", "Cama Eléctrica"],
-  ["MANUAL", "Cama Manual"],
-];
-const camasHospitalariasParser = createCategoryParser({
-  segmentoKeywords: CAMAS_SEGMENTO_KEYWORDS,
-  segmentoFallback: "Cama Estándar",
-});
+/** Limpia la cola de sufijos aduaneros tipicos de esta NCM del texto de Modelo. */
+function cleanAlmohadasModeloTail(modelo: string): string {
+  return modelo
+    .replace(/\(N[ABCD]\d*\)/gi, " ")
+    .replace(/\(CA0*\)/gi, " ")
+    .replace(/SIN\s+SUFIJOS/gi, " ")
+    .replace(/DE\s+CAUCHO\s+O\s+PLASTICO\s+CELULARES/gi, " ")
+    .replace(/DE\s+\d+\s*CM\s+DE\s+LARGO/gi, " ")
+    .replace(/["'.,]/g, " ")
+    .replace(/-+$/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function assignAlmohadasSegmento(marcaNorm: string, modeloUpper: string): string {
+  for (const [kw, seg] of ALMOHADAS_SEGMENTO_KEYWORDS) {
+    if (modeloUpper.includes(kw)) return seg;
+  }
+  if (ALMOHADAS_SEGMENTO_BRAND_DEFAULT[marcaNorm]) return ALMOHADAS_SEGMENTO_BRAND_DEFAULT[marcaNorm];
+  return ALMOHADAS_SEGMENTO_FALLBACK;
+}
+
+/** Separa marca/modelo por el patron "<MARCA> SIN MODELO <codigo> (...)" compartido por varias NCM nuevas. */
+function splitPatternB(sufijoRaw: string): { marcaRaw: string; modeloRaw: string; textoCompleto: string } {
+  const textoSinParentesis = (sufijoRaw ?? "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const sinModeloMatch = /\sSIN\s+MODELO\b/i.exec(textoSinParentesis);
+  if (sinModeloMatch) {
+    return {
+      marcaRaw: textoSinParentesis.slice(0, sinModeloMatch.index).trim(),
+      modeloRaw: textoSinParentesis.slice(sinModeloMatch.index + sinModeloMatch[0].length).trim(),
+      textoCompleto: textoSinParentesis,
+    };
+  }
+  return { marcaRaw: textoSinParentesis, modeloRaw: "", textoCompleto: textoSinParentesis };
+}
+
+const almohadasCojinesParser: CategoryParser = (raw) => {
+  const razonSocial: string = raw.nombre ?? "";
+  const { marcaRaw, modeloRaw, textoCompleto } = splitPatternB(raw.sufijos ?? "");
+
+  const marcaVacia = marcaRaw.trim() === "" || /^(SIN\s+MARCA|S\/MARCA|S\/M|SM|S)\b/i.test(marcaRaw.trim());
+  const marcaFinal = marcaVacia ? razonSocial || "Sin Identificar" : marcaRaw;
+  const marcaNorm = marcaFinal.toUpperCase().replace(/[.,]/g, "").trim();
+
+  const modeloLimpio = cleanAlmohadasModeloTail(modeloRaw || textoCompleto);
+  const { modelo, color } = extractColorGeneric(modeloLimpio, "S/D");
+  const segmento = assignAlmohadasSegmento(marcaNorm, modelo.toUpperCase());
+
+  return { marca: marcaFinal, modelo: modelo || modeloLimpio, color, segmento };
+};
+
+// ============================================================
+// PARSER NCM 9401.79.00 -- SILLAS Y ASIENTOS (16/07/2026, reemplaza el
+// parser anterior de "Sillas de Ducha"). Renombrada: 9401.79.00 =
+// "asientos con armazon de metal, los demas" -> en la practica son SILLAS
+// Y ASIENTOS en general (living, exterior, playa, oficina, comedor, baño),
+// no solo de ducha. Patron B. ~26% sin marca -> Marca = Razon Social.
+// Señal fuerte de segmento: DESCRIPCION DE POSICION (col R) = "REPOSERAS".
+// ============================================================
+const SILLAS_ASIENTOS_SEGMENTO_FALLBACK = "Silla / Asiento Estándar";
+const SILLAS_ASIENTOS_DUCHA_KEYWORDS = ["DUCHA", "BAÑO", "BANO", "SANITARIA", "INODORO", "COMMODE"];
+const SILLAS_ASIENTOS_DUCHA_MARCAS = ["DRIVE", "FOSHAN"];
+const SILLAS_ASIENTOS_OFICINA_KEYWORDS = ["OFICINA", "OFFICE", "ERGON", "GIRATORIA", "GERENCIAL"];
+const SILLAS_ASIENTOS_OFICINA_MARCAS = ["SUNON", "CAVALETTI", "PROLINE"];
+const SILLAS_ASIENTOS_BANQUETA_KEYWORDS = ["BANQUETA", "TABURETE", "STOOL", "TOLIX"];
+const SILLAS_ASIENTOS_SILLON_KEYWORDS = ["SILLON", "BUTACA", "POLTRONA", "PUFF"];
+const SILLAS_ASIENTOS_REPOSERA_KEYWORDS = ["REPOSERA", "PLAYA", "BEACH", "CAMPING", "PLEGABLE", "GRAVITY", "PESCA", "DIRECTOR"];
+const SILLAS_ASIENTOS_REPOSERA_MARCAS = ["MOR", "QUECHUA", "NATUREHIKE", "BOTAFOGO", "BROKSOL", "LUSQTOFF", "GADNIC", "ALPINA", "KOA"];
+const SILLAS_ASIENTOS_COMEDOR_KEYWORDS = ["COMEDOR", "COCINA", "DINING"];
+const SILLAS_ASIENTOS_COMEDOR_MARCAS = ["TRAMONTINA"];
+const SILLAS_ASIENTOS_DISENO_MARCAS = ["FERMOB", "FLEXFORM", "TIDELLI", "BOCONCEPT", "INCANTO", "M+DESIGN", "DECOTOTALE", "TRIBECA", "SITCOM", "EMUEBLES", "BRANX"];
+
+function assignSillasAsientosSegmento(marcaNorm: string, textoUpper: string, descripcionUpper: string): string {
+  const hasAny = (kws: string[]) => kws.some((k) => textoUpper.includes(k));
+  const marcaIn = (marcas: string[]) => marcas.includes(marcaNorm);
+
+  if (hasAny(SILLAS_ASIENTOS_DUCHA_KEYWORDS) || marcaIn(SILLAS_ASIENTOS_DUCHA_MARCAS)) return "Sillas de Ducha / Sanitarias";
+  if (descripcionUpper.includes("REPOSERAS")) return "Reposeras / Playa y Camping";
+  if (hasAny(SILLAS_ASIENTOS_OFICINA_KEYWORDS) || marcaIn(SILLAS_ASIENTOS_OFICINA_MARCAS)) return "Sillas de Oficina / Ergonómicas";
+  if (hasAny(SILLAS_ASIENTOS_BANQUETA_KEYWORDS)) return "Banquetas y Taburetes";
+  if (hasAny(SILLAS_ASIENTOS_SILLON_KEYWORDS)) return "Sillones y Butacas";
+  if (hasAny(SILLAS_ASIENTOS_REPOSERA_KEYWORDS) || marcaIn(SILLAS_ASIENTOS_REPOSERA_MARCAS)) return "Reposeras / Playa y Camping";
+  if (hasAny(SILLAS_ASIENTOS_COMEDOR_KEYWORDS) || marcaIn(SILLAS_ASIENTOS_COMEDOR_MARCAS)) return "Sillas de Comedor / Cocina";
+  if (marcaIn(SILLAS_ASIENTOS_DISENO_MARCAS)) return "Sillas de Diseño / Decorativas";
+  return SILLAS_ASIENTOS_SEGMENTO_FALLBACK;
+}
+
+/** Limpia descriptores aduaneros tipicos de esta NCM de la cola del Modelo. */
+function cleanSillasAsientosModeloTail(modelo: string): string {
+  return modelo
+    .replace(/\(N[ABCD]\d*\)/gi, " ")
+    .replace(/\(CA0*\)/gi, " ")
+    .replace(/SIN\s+SUFIJOS/gi, " ")
+    .replace(/CON\s+ASIENTO\s+DE\s+(PLASTICO|METAL)/gi, " ")
+    .replace(/CON\s+RESPALDO\s+RECLINABLE/gi, " ")
+    .replace(/CON\s+ARMAZON\s+DE\s+ALUMINIO/gi, " ")
+    .replace(/["'.,]/g, " ")
+    .replace(/-+$/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+const sillasAsientosParser: CategoryParser = (raw) => {
+  const razonSocial: string = raw.nombre ?? "";
+  const descripcionPosicion: string = raw.posicion_descripcion ?? "";
+  const { marcaRaw, modeloRaw, textoCompleto } = splitPatternB(raw.sufijos ?? "");
+
+  const marcaVacia = marcaRaw.trim() === "" || /^(SIN\s+MARCA|S\/MARCA|S\/M|SM|S)\b/i.test(marcaRaw.trim());
+  const marcaFinal = marcaVacia ? razonSocial || "Sin Identificar" : marcaRaw;
+  const marcaNorm = marcaFinal.toUpperCase().replace(/[.,]/g, "").trim();
+
+  const modeloLimpio = cleanSillasAsientosModeloTail(modeloRaw || textoCompleto);
+  const { modelo, color } = extractColorGeneric(modeloLimpio, "S/D");
+  const textoUpperCompleto = (raw.sufijos ?? "").toUpperCase();
+  const segmento = assignSillasAsientosSegmento(marcaNorm, textoUpperCompleto, descripcionPosicion.toUpperCase());
+
+  return { marca: marcaFinal, modelo: modelo || modeloLimpio, color, segmento };
+};
+
+// ============================================================
+// PARSER NCM 3922.20.00 -- ELEVADORES DE INODORO (16/07/2026). La etiqueta
+// NCM dice "Elevadores de Inodoro" pero 3922.20.00 = articulos sanitarios
+// de plastico en general: en la practica dominan TAPAS/ASIENTOS de inodoro
+// de marcas sanitarias comunes (Piazza, Roca, Deca Hydra, Duravit, Ferrum,
+// Tigre, etc.); el elevador ortopedico real es minoria. Patron B.
+// DESCRIPCION DE POSICION uniforme = "LOS DEMAS" (sin señal de tipo) -- el
+// segmento se resuelve por MARCA + palabras clave del codigo.
+// ============================================================
+const ELEVADORES_SOFTCLOSE_KEYWORDS = ["SOFT CLOSE", "DESCENSO LENTO"];
+const ELEVADORES_ORTOPEDICO_MARCAS = ["ASPEN", "JIANLIAN"];
+const ELEVADORES_ORTOPEDICO_CODES = ["JL668B", "JL669B", "JL670B"];
+const ELEVADORES_NAUTICA_MARCAS = ["SEAFLO", "EVAC"];
+const ELEVADORES_INFANTIL_MARCAS = ["LOVE", "DUCK", "MEGABABY", "MEGA BABY", "OK BABY", "P&F BABY", "BELLUNO BABY", "FARMACITY BEBE", "CALMA DRAGON"];
+const ELEVADORES_INFANTIL_KEYWORDS = ["BABY", "BEBE", "INFANTIL", "REDUCTOR"];
+const ELEVADORES_REPUESTO_MARCAS = ["IMPERO", "OLYMPIA"];
+const ELEVADORES_REPUESTO_CODES = ["C8IMP01"];
+const ELEVADORES_SEGMENTO_FALLBACK = "Tapa / Asiento de Inodoro Estándar";
+
+function assignElevadoresSegmento(marcaNorm: string, modeloUpper: string): string {
+  if (ELEVADORES_SOFTCLOSE_KEYWORDS.some((k) => modeloUpper.includes(k))) return "Tapa Soft-Close / Descenso Lento";
+  if (ELEVADORES_ORTOPEDICO_MARCAS.includes(marcaNorm) || ELEVADORES_ORTOPEDICO_CODES.some((c) => modeloUpper.includes(c))) {
+    return "Elevador / Asiento Sanitario Ortopédico";
+  }
+  if (ELEVADORES_NAUTICA_MARCAS.includes(marcaNorm)) return "Tapa Náutica / Portátil";
+  if (ELEVADORES_INFANTIL_MARCAS.includes(marcaNorm) || ELEVADORES_INFANTIL_KEYWORDS.some((k) => modeloUpper.includes(k))) {
+    return "Adaptador / Reductor Infantil";
+  }
+  if (ELEVADORES_REPUESTO_MARCAS.includes(marcaNorm) || ELEVADORES_REPUESTO_CODES.some((c) => modeloUpper.includes(c))) {
+    return "Repuestos / Accesorios";
+  }
+  return ELEVADORES_SEGMENTO_FALLBACK;
+}
+
+/** Modelo = codigo entre "SIN MODELO" y "SIN SUFIJOS" (si aparece esta segunda etiqueta). */
+function cleanElevadoresModeloTail(modelo: string): string {
+  const sinSufijosMatch = /\sSIN\s+SUFIJOS\b/i.exec(modelo);
+  const cortado = sinSufijosMatch ? modelo.slice(0, sinSufijosMatch.index) : modelo;
+  return cortado
+    .replace(/\(N[ABCD]\d*\)/gi, " ")
+    .replace(/\(CA0*\)/gi, " ")
+    .replace(/["'.,]/g, " ")
+    .replace(/-+$/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+const elevadoresInodoroParser: CategoryParser = (raw) => {
+  const razonSocial: string = raw.nombre ?? "";
+  const { marcaRaw, modeloRaw, textoCompleto } = splitPatternB(raw.sufijos ?? "");
+
+  const marcaVacia = marcaRaw.trim() === "" || /^(SIN\s+MARCA|S\/MARCA|S\/M|SM|S)\b/i.test(marcaRaw.trim());
+  const marcaFinal = marcaVacia ? razonSocial || "Sin Identificar" : marcaRaw;
+  const marcaNorm = marcaFinal.toUpperCase().replace(/[.,]/g, "").trim();
+
+  const modeloLimpio = cleanElevadoresModeloTail(modeloRaw || textoCompleto);
+  const { modelo, color } = extractColorGeneric(modeloLimpio, "S/D");
+  const segmento = assignElevadoresSegmento(marcaNorm, modelo.toUpperCase());
+
+  return { marca: marcaFinal, modelo: modelo || modeloLimpio, color, segmento };
+};
+
+// ============================================================
+// PARSER NCM 9402.90.20 -- CAMAS HOSPITALARIAS (16/07/2026). Patron B
+// (split "SIN MODELO", sin-marca->razon social, Modelo N por P.U. -- igual
+// que el resto). El texto aduanero NO trae indicador de tipo; el tipo
+// electrica/manual se deduce de marca+codigo segun catalogo del
+// fabricante (fuentes: leexmedical.com, medik-medical.com,
+// magesastore.com.ar, chinasaikang.com, medicalexpo.com, vermeiren.com).
+// ~21% de las filas quedan en "Tipo no especificado" por falta de
+// catalogo publico -- reclasificar al conseguirlo.
+// ============================================================
+const CAMAS_REPUESTO_KEYWORDS = ["SIDE RAIL", "DRAINAGE HOOK", "CRANK", "LEGREST", "BACKREST", "HEIGHT ADJUSTMENT", "BRACKET", "HOOK", "IV POLE"];
+const CAMAS_REPUESTO_MARCAS = ["DEWERT"];
+const CAMAS_CAMILLA_KEYWORDS = ["STRETCHER", "CAMILLA", "ESTIRADOR"];
+const CAMAS_PEDIATRICA_KEYWORDS = ["BABYCARE", "BABY", "PEDIATR", "CUNA", "NEONATAL", "CRIB"];
+const CAMAS_ELECTRICA_MARCAS = ["LEEX", "HILL ROM", "LINET", "PARAMOUNT", "MERITS", "VERMEIREN", "COMPELLA", "MALVESTIO", "ARJO", "CENTURIS PRO", "ACCELLA"];
+
+function assignCamasSegmento(marcaNorm: string, modeloUpper: string): string {
+  if (CAMAS_REPUESTO_KEYWORDS.some((k) => modeloUpper.includes(k)) || CAMAS_REPUESTO_MARCAS.includes(marcaNorm)) {
+    return "Repuestos / Partes de Cama";
+  }
+  if (CAMAS_CAMILLA_KEYWORDS.some((k) => modeloUpper.includes(k)) || (marcaNorm === "STRYKER" && /(7500|8500|SECURE)/.test(modeloUpper))) {
+    return "Camilla / Estirador";
+  }
+  if (CAMAS_PEDIATRICA_KEYWORDS.some((k) => modeloUpper.includes(k)) || marcaNorm.includes("BABYCARE") || marcaNorm === "PARDO") {
+    return "Cama Pediátrica / Neonatal";
+  }
+  if (CAMAS_ELECTRICA_MARCAS.includes(marcaNorm)) return "Cama Hospitalaria Eléctrica";
+  // Medik: codigo "YA-D..." = electrica; "YA-M..." = manual/manivela.
+  if (marcaNorm === "MEDIK") {
+    if (/YA-?D/.test(modeloUpper)) return "Cama Hospitalaria Eléctrica";
+    if (/YA-?M/.test(modeloUpper)) return "Cama Hospitalaria Manual / Mecánica";
+  }
+  // Magesa: codigo que empieza con "D" (D6W, D8D) = electrica; con "V" (V2K, V3K) = manual.
+  if (marcaNorm === "MAGESA") {
+    if (/^D\w/.test(modeloUpper)) return "Cama Hospitalaria Eléctrica";
+    if (/^V\w/.test(modeloUpper)) return "Cama Hospitalaria Manual / Mecánica";
+  }
+  // Saikang: V6/V8/K/Y8 = electrica; V3 = manual.
+  if (marcaNorm === "SAIKANG") {
+    if (/\bV3\b/.test(modeloUpper)) return "Cama Hospitalaria Manual / Mecánica";
+    if (/(V6|V8|\bK\b|Y8)/.test(modeloUpper)) return "Cama Hospitalaria Eléctrica";
+  }
+  // Mux / Better / Brother, serie "BT": sufijo E/EP/EPZ = electrica; M = manual.
+  if (["MUX", "BETTER", "BROTHER"].includes(marcaNorm) && /\bBT/.test(modeloUpper)) {
+    if (/BT\S*(EPZ|EP|E)\b/.test(modeloUpper)) return "Cama Hospitalaria Eléctrica";
+    if (/BT\S*M\b/.test(modeloUpper)) return "Cama Hospitalaria Manual / Mecánica";
+  }
+  // Suncare: EB = electrica; MB = manual.
+  if (marcaNorm === "SUNCARE") {
+    if (modeloUpper.includes("EB")) return "Cama Hospitalaria Eléctrica";
+    if (modeloUpper.includes("MB")) return "Cama Hospitalaria Manual / Mecánica";
+  }
+  // Coinfycare: codigo "ES...EX" = electrica.
+  if (marcaNorm === "COINFYCARE" && /ES\w*EX/.test(modeloUpper)) return "Cama Hospitalaria Eléctrica";
+  return "Cama Hospitalaria (Tipo no especificado)";
+}
+
+/** Limpia descriptores aduaneros tipicos de esta NCM de la cola del Modelo. */
+function cleanCamasModeloTail(modelo: string): string {
+  return modelo
+    .replace(/\(N[ABCD]\d*\)/gi, " ")
+    .replace(/\(CA0*\)/gi, " ")
+    .replace(/SIN\s+SUFIJOS/gi, " ")
+    .replace(/["'.,]/g, " ")
+    .replace(/-+$/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+const camasHospitalariasParser: CategoryParser = (raw) => {
+  const razonSocial: string = raw.nombre ?? "";
+  const { marcaRaw, modeloRaw, textoCompleto } = splitPatternB(raw.sufijos ?? "");
+
+  const marcaVacia = marcaRaw.trim() === "" || /^(SIN\s+MARCA|S\/MARCA|S\/M|SM|S)\b/i.test(marcaRaw.trim());
+  const marcaFinal = marcaVacia ? razonSocial || "Sin Identificar" : marcaRaw;
+  const marcaNorm = marcaFinal.toUpperCase().replace(/[.,]/g, "").trim();
+
+  const modeloLimpio = cleanCamasModeloTail(modeloRaw || textoCompleto);
+  const { modelo, color } = extractColorGeneric(modeloLimpio, "S/D");
+  const segmento = assignCamasSegmento(marcaNorm, modelo.toUpperCase());
+
+  return { marca: marcaFinal, modelo: modelo || modeloLimpio, color, segmento };
+};
 
 // ============================================================
 // Registro de parsers por categoria
 // ============================================================
 
 export const CATEGORY_PARSERS: Record<string, CategoryParser> = {
+  // Importante: SIEMPRE se llama al parser, incluso si "sufijos" viene vacio.
+  // El parser mismo sabe que hacer en ese caso (usa la Razon Social del
+  // importador como Marca).
   // NOTA: "andadores", "bastones" y "calzado_ortopedico" NO estan aca --
   // usan el parser especial de NCM 9021.10.10 (parseOrtopedia9021Row, mas
   // abajo), que se invoca directo desde app/api/sync/route.ts en vez de a
@@ -719,8 +1258,13 @@ export const CATEGORY_PARSERS: Record<string, CategoryParser> = {
   // segun marca/descripcion, no es 1 categoria = 1 parser).
   sillas_de_ruedas: sillasDeRuedasParser,
   sillas_ruedas_electricas: sillasRuedasElectricasParser,
-  almohadones_ortopedicos: almohadonesOrtopedicosParser,
-  sillas_ducha: sillasDuchaParser,
+  // NOTA: "almohadones_ortopedicos" y "sillas_ducha" son los SLUGS internos
+  // (no cambian, category_ncm_codes/field_mappings siguen apuntando a
+  // estos ids) -- solo el nombre visible en el dashboard (columna `name`
+  // de `categories`) se actualiza a "Almohadas y Cojines" / "Sillas y
+  // Asientos" via SQL (ver docs/PROYECTO.md).
+  almohadones_ortopedicos: almohadasCojinesParser,
+  sillas_ducha: sillasAsientosParser,
   elevadores_inodoro: elevadoresInodoroParser,
   camas_hospitalarias: camasHospitalariasParser,
 };
@@ -733,6 +1277,30 @@ export function categoryUsesExportFlow(categorySlug: string): boolean {
 // ============================================================
 // PARSER NCM 9021.10.10 — ORTOPEDIA / ODONTOLOGIA (16/07/2026)
 // ============================================================
+// Este NCM agrupa 5 sub-posiciones de aduana (cuello, columna vertebral,
+// calzado ortopedico, muletas/bastones, residual "los demas") bajo un
+// mismo codigo base -- y el sufijo residual sigue mezclando productos no
+// relacionados entre si (implantes, ortodoncia, andadores, etc.). En vez
+// de separar por sufijo NCM (no alcanza), se clasifica CADA FILA por
+// marca declarada + fallback de Descripcion de Posicion, siguiendo el
+// criterio armado a mano por el usuario sobre datos reales (Excel).
+//
+// De las 9 categorias que distingue el criterio original, el dashboard
+// solo trackea 3 (decision del usuario 16/07/2026): "andadores",
+// "bastones" y "calzado_ortopedico". El resto (Ortodoncia, Ortopedia y
+// Protesis, Implantes de Columna, Implantes de Trauma y Cirugia,
+// Inmovilizadores y Ferulas, Bipedestacion y Rehab. Pediatrica, Otros) se
+// descarta -- no forman parte de este dashboard de equipamiento/ayudas
+// tecnicas. "Bastones" se mantiene como categoria separada de "andadores"
+// (no se fusionan), aunque el criterio original las agrupa a ambas bajo
+// "Ayudas para la Marcha" con el Segmento como diferenciador.
+//
+// Como UN solo NCM se reparte en 3 categorias, esto NO se procesa como los
+// demas (1 categoria -> upsertRawRecords con CATEGORY_PARSERS[slug]). Se
+// pide el export UNA sola vez desde app/api/sync/route.ts, se categoriza
+// cada fila con `parseOrtopedia9021Row`, y se reparte a upsertPreParsedRecords
+// (lib/aggregate.ts) por categoria.
+
 export const ORTOPEDIA_9021_NCM = "9021.10.10";
 export const ORTOPEDIA_9021_CATEGORY_SLUGS = ["andadores", "bastones", "calzado_ortopedico"] as const;
 
@@ -755,7 +1323,12 @@ type OrtopediaCategoria =
   | "Calzado Ortopedico"
   | "Otros";
 
+// Marca (normalizada: mayusculas, sin puntuacion) -> categoria + segmento
+// por defecto. "(segun descripcion)" significa que esa marca mezcla
+// muletas/bastones Y andadores segun el producto puntual -- se resuelve
+// con la Descripcion de Posicion (ver ortopediaSegmentoMarchaPorDescripcion).
 const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
+  // Ortodoncia
   ["ADITEK", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
   ["MORELLI", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
   ["ASTAR", "Ortodoncia", "Insumos y Aparatologia de Ortodoncia"],
@@ -788,6 +1361,7 @@ const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
   ["ALIGN TECHNOLOGY", "Ortodoncia", "Alineadores Transparentes"],
   ["SPARK (ORMCO)", "Ortodoncia", "Alineadores Transparentes"],
 
+  // Ortopedia y Protesis
   ["OSSUR", "Ortopedia y Protesis", "Protesis de Miembro"],
   ["ÖSSUR", "Ortopedia y Protesis", "Protesis de Miembro"],
   ["OTTOBOCK", "Ortopedia y Protesis", "Protesis de Miembro"],
@@ -815,6 +1389,7 @@ const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
   ["VOE", "Ortopedia y Protesis", "Ortesis de Miembro"],
   ["ANJON", "Ortopedia y Protesis", "Ortesis de Miembro"],
 
+  // Implantes de Columna
   ["ULRICH MEDICAL", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
   ["CANWELL", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
   ["PETER LAZIC", "Implantes de Columna", "Sistemas de Fijacion Vertebral"],
@@ -826,6 +1401,7 @@ const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
   ["SILONY SPINE", "Implantes de Columna", "Dispositivos Intersomaticos"],
   ["TRIADYME", "Implantes de Columna", "Dispositivos Intersomaticos"],
 
+  // Implantes de Trauma y Cirugia
   ["ARTHREX", "Implantes de Trauma y Cirugia", "Artroscopia y Medicina Deportiva"],
   ["JIANGSU SHUANGYANG", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
   ["JIANGSU", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
@@ -835,6 +1411,7 @@ const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
   ["TECRES", "Implantes de Trauma y Cirugia", "Trauma y Osteosintesis"],
   ["KLS MARTIN", "Implantes de Trauma y Cirugia", "Cirugia Maxilofacial"],
 
+  // Inmovilizadores y Ferulas
   ["ASPEN", "Inmovilizadores y Ferulas", "Ortesis de Columna y Lumbar"],
   ["BAXMAX", "Inmovilizadores y Ferulas", "Ortesis de Columna y Lumbar"],
   ["BODY CARE", "Inmovilizadores y Ferulas", "Ortesis de Columna y Lumbar"],
@@ -855,13 +1432,16 @@ const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
   ["TINGEER", "Inmovilizadores y Ferulas", "Collares Cervicales"],
   ["IRON DUCK", "Inmovilizadores y Ferulas", "Collares Cervicales"],
 
+  // Ayudas para la Marcha (segmento FIJO: muletas/bastones)
   ["MAVERICK", "Ayudas para la Marcha", "Muletas y Bastones"],
   ["SUNCARE", "Ayudas para la Marcha", "Muletas y Bastones"],
   ["MAGESA", "Ayudas para la Marcha", "Muletas y Bastones"],
   ["ACHIEVE", "Ayudas para la Marcha", "Muletas y Bastones"],
   ["SAN UP", "Ayudas para la Marcha", "Muletas y Bastones"],
   ["SILFAB", "Ayudas para la Marcha", "Muletas y Bastones"],
+  // Ayudas para la Marcha (segmento FIJO: andadores)
   ["VOLARIS", "Ayudas para la Marcha", "Andadores y Ayudas de Marcha"],
+  // Ayudas para la Marcha (segmento VARIABLE -> se resuelve por descripcion)
   ["JIANLIAN", "Ayudas para la Marcha", "(segun descripcion)"],
   ["DRIVE MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
   ["REBOTEC", "Ayudas para la Marcha", "(segun descripcion)"],
@@ -888,6 +1468,7 @@ const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
   ["FOSHAN ECARRE MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
   ["FOSHAN DONGFANG MEDICAL", "Ayudas para la Marcha", "(segun descripcion)"],
 
+  // Bipedestacion y Rehab. Pediatrica
   ["EASYSTAND", "Bipedestacion y Rehab. Pediatrica", "Bipedestadores"],
   ["R82", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
   ["RIFTON", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
@@ -903,11 +1484,13 @@ const ORTOPEDIA_MARCA_TABLE: [string, OrtopediaCategoria, string][] = [
   ["USL ROBOTICS", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
   ["AUXIVO", "Bipedestacion y Rehab. Pediatrica", "Equipamiento de Rehabilitacion Pediatrica"],
 
+  // Calzado Ortopedico
   ["MEMO", "Calzado Ortopedico", "Calzado Ortopedico"],
   ["MD ORTHOPAEDICS", "Calzado Ortopedico", "Calzado Ortopedico"],
   ["BILLY FOOTWEAR", "Calzado Ortopedico", "Calzado Ortopedico"],
   ["STEP ON", "Calzado Ortopedico", "Calzado Ortopedico"],
 
+  // Otros
   ["TRINIDAD INSUMOS S.R.L.", "Otros", "Otros"],
   ["TRINIDAD INSUMOS", "Otros", "Otros"],
   ["IOWA", "Otros", "Otros"],
@@ -920,6 +1503,8 @@ const ORTOPEDIA_MARCA_DICT: Record<string, { categoria: OrtopediaCategoria; segm
   ORTOPEDIA_MARCA_TABLE.map(([marca, categoria, segmento]) => [marca, { categoria, segmento }])
 );
 
+// Typos conocidos de marca (Paso B). Se evaluan como regex sobre la marca
+// ya normalizada (mayusculas, puntuacion -> espacio, espacios colapsados).
 const ORTOPEDIA_MARCA_TYPOS: [RegExp, string][] = [
   [/^OTTO ?BOCKK?$/, "OTTOBOCK"],
   [/^OTTTOBOCK$/, "OTTOBOCK"],
@@ -941,6 +1526,9 @@ function normalizeOrtopediaMarcaTypo(marca: string): string {
   return marca;
 }
 
+// Fallback A (Paso E): filas SIN marca reconocible (vacia, "SIN MARCA",
+// "S/M", etc.) o con una marca que no esta en el diccionario -- se
+// aproxima la categoria/segmento por el texto de Descripcion de Posicion.
 function ortopediaCategoriaSinMarca(descripcion: string): { categoria: OrtopediaCategoria; segmento: string } {
   const d = (descripcion || "").toUpperCase();
   if (d.includes("CALZADO")) return { categoria: "Calzado Ortopedico", segmento: "Calzado Ortopedico" };
@@ -950,12 +1538,19 @@ function ortopediaCategoriaSinMarca(descripcion: string): { categoria: Ortopedia
   return { categoria: "Otros", segmento: "Otros" };
 }
 
+// Fallback B (Paso E): marca YA identificada como "Ayudas para la Marcha"
+// con segmento variable ("(segun descripcion)") -- ya se sabe que es
+// Ayudas para la Marcha, solo falta si es muleta/baston o andador.
 function ortopediaSegmentoMarchaPorDescripcion(descripcion: string): string {
   const d = (descripcion || "").toUpperCase();
   if (d.includes("MULETA") || d.includes("BASTON")) return "Muletas y Bastones";
   return "Andadores y Ayudas de Marcha";
 }
 
+// Traduce (categoria, segmento) del criterio de 9 categorias al slug
+// interno de las UNICAS 3 categorias que trackea este dashboard (decision
+// del usuario 16/07/2026). Todo lo demas devuelve null (se descarta, no se
+// inserta en trade_records).
 function ortopediaCategoriaSlug(
   categoria: OrtopediaCategoria,
   segmento: string
@@ -981,6 +1576,7 @@ export function parseOrtopedia9021Row(row: any): OrtopediaParsed {
   const razonSocial: string = row.nombre ?? "";
   const descripcionPosicion: string = row.posicion_descripcion ?? "";
 
+  // Paso A: quitar parentesis final, cortar por "SIN MODELO".
   const textoSinParentesis = sufijoRaw.replace(/\s*\([^)]*\)\s*$/, "").trim();
   const sinModeloMatch = /\sSIN\s+MODELO\b/i.exec(textoSinParentesis);
 
@@ -1007,11 +1603,15 @@ export function parseOrtopedia9021Row(row: any): OrtopediaParsed {
     };
   }
 
+  // Paso B: normalizar (mayusculas, puntuacion -> espacio, typos).
   let marcaNorm = marcaRaw.toUpperCase().replace(/[.,/]/g, " ").replace(/\s+/g, " ").trim();
   marcaNorm = normalizeOrtopediaMarcaTypo(marcaNorm);
 
   const dictEntry = ORTOPEDIA_MARCA_DICT[marcaNorm];
   if (!dictEntry) {
+    // Marca no reconocida (no esta en el diccionario armado sobre el
+    // dataset original): se aproxima por descripcion, igual que "sin
+    // marca". Si no matchea nada especifico cae en "Otros" (se descarta).
     const { categoria, segmento } = ortopediaCategoriaSinMarca(descripcionPosicion);
     return {
       marca: marcaRaw,
@@ -1027,11 +1627,110 @@ export function parseOrtopedia9021Row(row: any): OrtopediaParsed {
     segmento = ortopediaSegmentoMarchaPorDescripcion(descripcionPosicion);
   }
 
+  const modeloFinal = modelo || textoSinParentesis;
+  const categoriaSlug = ortopediaCategoriaSlug(categoria, segmento);
+
+  // Sub-segmentacion de andadores (16/07/2026): refina el segmento generico
+  // "Andadores y Ayudas de Marcha" en 3 subtipos (Fijo / 2 Ruedas / 4 Ruedas
+  // Rollator) usando marca+codigo de modelo -- ver subSegmentoAndador.
+  if (categoriaSlug === "andadores") {
+    segmento = subSegmentoAndador(marcaNorm, modeloFinal);
+  }
+
   return {
     marca: marcaRaw,
-    modelo: modelo || textoSinParentesis,
+    modelo: modeloFinal,
     color: "S/D",
     segmento,
-    categoriaSlug: ortopediaCategoriaSlug(categoria, segmento),
+    categoriaSlug,
   };
+}
+
+// ============================================================
+// SUB-SEGMENTACION DE ANDADORES (16/07/2026) -- refina el segmento
+// generico "Andadores y Ayudas de Marcha" en 3 subtipos, usando marca +
+// codigo de modelo (el texto de aduana en este NCM no trae descriptor de
+// tipo, DESCRIPCION DE POSICION uniforme = "LOS DEMAS"). Fuente de las
+// reglas: catalogos oficiales de fabricante (gdjianlian.com,
+// intcowheelchair.com, medicalexpo.com, drivemedical.com, viomedica.com,
+// dayangmedtech.com). La numeracion OEM china NO es uniforme entre
+// fabricas (un mismo numero base aparece fijo o con ruedas segun sufijo);
+// la senal mas confiable es el sufijo "LH" = rollator (4 ruedas + asiento).
+//
+// FLAGS (casos especiales, ver comentarios abajo):
+//  - "GAIT TRAINER" (Dongguan Leyuan): entrenador de marcha
+//    (pediatrico/rehab), clasificado tentativamente como Rollator.
+//  - "HIP BRACE" (Jianwei): NO es un andador (es una ortesis de cadera) --
+//    se excluye de la categoria "andadores" (categoriaSlug null) en vez de
+//    dejarlo mal clasificado como "Andador Fijo".
+// ============================================================
+
+const ANDADOR_ROLLATOR_FAMILIAS = ["963", "965", "966", "969", "9142", "9188", "9181"];
+
+// marca (ya normalizada: mayusculas, sin puntuacion) + patron sobre el
+// modelo -> Rollator, para lineas/marcas especificas que son 100% rollator.
+const ANDADOR_ROLLATOR_MARCA_MODELO: [string, RegExp][] = [
+  ["VERMEIREN", /GOLIAT/],
+  ["REBOTEC", /(PLUTO|FOX|FIXI)/],
+  ["VOLARIS", /.*/], // Volaris = linea rollator completa
+  ["INTCO", /SPIRIT\s*X[34]/],
+  ["SUNRISE MEDICAL", /K6[24]0/],
+  ["DRIVE MEDICAL", /(R800|GT1000|GT2000|GT3000|13023)/],
+];
+
+const ANDADOR_2RUEDAS_CODES = /(912L|914L|915L|917L|YK7210|\b5["”]?\s*$)/;
+const ANDADOR_FIJO_CODES = /(913L|10200|10201|10224|10226|10244|9(18|19|22|26|33|36|39)\d*|\b894\b|\b799\b|\b738\b|\b736\b)/;
+
+/**
+ * @param marcaNorm Marca ya normalizada (mayusculas, sin puntuacion, con
+ *   typos corregidos) -- NO el "marcaRaw" declarado, para que las
+ *   comparaciones de marca sean consistentes.
+ * @param modelo Modelo ya extraido (codigo de articulo, sin color/parentesis).
+ */
+function subSegmentoAndador(marcaNorm: string, modelo: string): string {
+  const modeloUpper = (modelo || "").toUpperCase();
+
+  // Exclusion: "HIP BRACE" no es un andador (ortesis de cadera, Jianwei) --
+  // se marca para revisar en vez de contarlo como Andador Fijo.
+  if (modeloUpper.includes("HIP BRACE")) {
+    return "Andador Fijo (revisar - posible ortesis de cadera, no andador)";
+  }
+
+  // Prioridad 1: sufijo "LH" en el codigo (casters + asiento).
+  if (/\bLH\b/.test(modeloUpper) || modeloUpper.endsWith("LH")) {
+    return "Andador 4 Ruedas (Rollator)";
+  }
+
+  // Prioridad 2: familia de numero de modelo (rollator).
+  if (ANDADOR_ROLLATOR_FAMILIAS.some((fam) => modeloUpper.includes(fam))) {
+    return "Andador 4 Ruedas (Rollator)";
+  }
+
+  // Prioridad 3: marcas/lineas rollator conocidas.
+  for (const [m, re] of ANDADOR_ROLLATOR_MARCA_MODELO) {
+    if (marcaNorm === m && re.test(modeloUpper)) return "Andador 4 Ruedas (Rollator)";
+  }
+
+  // Prioridad 4: Intco YK7010/7030/7050 (4 ruedas) y YK7060 (3 ruedas, rollator).
+  if (marcaNorm === "INTCO" && /YK70(10|30|50|60)/.test(modeloUpper)) {
+    return "Andador 4 Ruedas (Rollator)";
+  }
+
+  // Prioridad 5: 2 ruedas (delanteras).
+  if (ANDADOR_2RUEDAS_CODES.test(modeloUpper)) {
+    return "Andador 2 Ruedas";
+  }
+
+  // Prioridad 6: fijo (reciprocante/plegable, sin ruedas).
+  if (ANDADOR_FIJO_CODES.test(modeloUpper)) {
+    return "Andador Fijo";
+  }
+
+  // Flag especial: "GAIT TRAINER" de Dongguan Leyuan -> tentativo Rollator.
+  if (marcaNorm === "DONGGUAN LEYUAN" && modeloUpper.includes("GAIT TRAINER")) {
+    return "Andador 4 Ruedas (Rollator)";
+  }
+
+  // Sin fuente confiable de tipo (default, marcado para revisar con catalogo).
+  return "Andador Fijo (revisar)";
 }
