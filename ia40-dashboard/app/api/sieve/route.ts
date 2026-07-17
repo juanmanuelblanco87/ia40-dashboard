@@ -138,6 +138,11 @@ export async function GET(req: Request) {
     categoria_movida: 0,
     sin_evidencia: 0,
     errores: 0,
+    // Cuantos items trajeron un PVP nuevo en esta corrida (pedido explicito
+    // del usuario, 17/07/2026: aprovechar la misma busqueda del tamizador
+    // para tambien completar la columna PVP USD, sin gastar una llamada
+    // aparte a OpenAI).
+    pvp_actualizado: 0,
     movidos: [] as { marca: string; modelo: string; de: string; a: string; segmento: string | null; razonamiento: string }[],
     corregidos: [] as { marca: string; modelo: string; segmento: string; razonamiento: string }[],
     detalle_errores: [] as string[],
@@ -160,6 +165,36 @@ export async function GET(req: Request) {
     );
   }
 
+  // Guarda el PVP que haya traido la MISMA busqueda del tamizador (ver nota
+  // en lib/aiClassifier.ts) en la tabla model_pvp -- misma tabla que usa el
+  // boton manual "Consultar" de la columna PVP USD, asi ambos caminos
+  // alimentan el mismo cache. Si esta corrida no encontro un precio nuevo
+  // (pvpUsd null), NO pisa un valor 'found' que ya estuviera guardado de
+  // antes (ej. por una consulta manual anterior) -- solo se sobreescribe
+  // cuando hay un valor nuevo, o cuando todavia no habia ninguna fila.
+  async function guardarPvp(
+    categoryId: number,
+    marca: string,
+    modelo: string,
+    clasif: Awaited<ReturnType<typeof classifyProduct>>
+  ) {
+    const status = clasif.pvpUsd != null ? "found" : "not_found";
+    await query(
+      `insert into model_pvp (category_id, marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, fuente_url, status, fetched_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+       on conflict (category_id, marca, modelo) do update set
+         pvp_usd = case when excluded.pvp_usd is not null then excluded.pvp_usd else model_pvp.pvp_usd end,
+         confianza = case when excluded.pvp_usd is not null then excluded.confianza else model_pvp.confianza end,
+         fuentes_consistentes = case when excluded.pvp_usd is not null then excluded.fuentes_consistentes else model_pvp.fuentes_consistentes end,
+         razonamiento = case when excluded.pvp_usd is not null then excluded.razonamiento else model_pvp.razonamiento end,
+         fuente_url = case when excluded.pvp_usd is not null then excluded.fuente_url else model_pvp.fuente_url end,
+         status = case when excluded.pvp_usd is not null then 'found' when model_pvp.status = 'found' then 'found' else excluded.status end,
+         fetched_at = now(),
+         error_message = null`,
+      [categoryId, marca, modelo, clasif.pvpUsd, clasif.confianza, clasif.pvpFuentesConsistentes, clasif.pvpRazonamiento, clasif.pvpFuenteUrl, status]
+    );
+  }
+
   async function procesarItem({ marca, modelo, segmento_actual }: PendienteRow) {
     try {
       const clasif = await classifyProduct({
@@ -174,6 +209,7 @@ export async function GET(req: Request) {
       });
 
       resumen.procesados++;
+      if (clasif.pvpUsd != null) resumen.pvp_actualizado++;
 
       // El cambio de CATEGORIA (mover la fila a otro NCM compartido) sigue
       // siendo conservador -- solo se aplica con confianza alta/media,
@@ -186,6 +222,11 @@ export async function GET(req: Request) {
         confiableParaMover && clasif.categoriaSlug && clasif.categoriaSlug !== slug
           ? opcionesCategoria?.find((o) => o.slug === clasif.categoriaSlug)
           : undefined;
+
+      // Se guarda contra la categoria FINAL de la fila (la de destino si se
+      // movio, si no la actual), para que la columna PVP USD de "Share por
+      // Modelo" lo encuentre sin importar en que categoria haya terminado.
+      await guardarPvp((destino ?? categoria).id, marca, modelo, clasif);
 
       if (destino) {
         // Re-clasificar: mover la fila de categoria (mismo NCM compartido).
