@@ -8,6 +8,7 @@ export interface ModelPvpEntry {
   confianza: string | null;
   fuentes_consistentes: number | null;
   razonamiento: string | null;
+  fuente_url: string | null;
   status: string; // 'pending' | 'found' | 'not_found' | 'error'
 }
 
@@ -18,6 +19,10 @@ export interface ModelPvpEntry {
  * un cron masivo. Si ya hay un resultado 'found' o 'not_found' guardado, lo
  * devuelve directo sin gastar una llamada nueva a OpenAI. Solo reintenta si
  * no hay fila todavia o si la ultima vez quedo en 'error'.
+ *
+ * Esta NO es la unica via para completar model_pvp: el tamizador de
+ * segmentos (app/api/sieve/route.ts) tambien escribe aca, aprovechando su
+ * propia busqueda -- ver guardarPvp() en ese archivo.
  */
 export async function getOrSearchModelPvp(
   categoryId: number,
@@ -26,7 +31,7 @@ export async function getOrSearchModelPvp(
   modelo: string
 ): Promise<ModelPvpEntry> {
   const existing = await query<ModelPvpEntry>(
-    `select marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, status
+    `select marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, fuente_url, status
      from model_pvp
      where category_id = $1 and marca = $2 and modelo = $3`,
     [categoryId, marca, modelo]
@@ -40,17 +45,28 @@ export async function getOrSearchModelPvp(
     const result = await findModelPvp(marca, modelo, categoryName);
     const status = result.pvpUsd != null ? "found" : "not_found";
     await query(
-      `insert into model_pvp (category_id, marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, status, fetched_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, now())
+      `insert into model_pvp (category_id, marca, modelo, pvp_usd, confianza, fuentes_consistentes, razonamiento, fuente_url, status, fetched_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
        on conflict (category_id, marca, modelo) do update set
          pvp_usd = excluded.pvp_usd,
          confianza = excluded.confianza,
          fuentes_consistentes = excluded.fuentes_consistentes,
          razonamiento = excluded.razonamiento,
+         fuente_url = excluded.fuente_url,
          status = excluded.status,
          fetched_at = now(),
          error_message = null`,
-      [categoryId, marca, modelo, result.pvpUsd, result.confianza, result.fuentesConsistentes, result.razonamiento, status]
+      [
+        categoryId,
+        marca,
+        modelo,
+        result.pvpUsd,
+        result.confianza,
+        result.fuentesConsistentes,
+        result.razonamiento,
+        result.fuenteUrl,
+        status,
+      ]
     );
     return {
       marca,
@@ -59,6 +75,7 @@ export async function getOrSearchModelPvp(
       confianza: result.confianza,
       fuentes_consistentes: result.fuentesConsistentes,
       razonamiento: result.razonamiento,
+      fuente_url: result.fuenteUrl,
       status,
     };
   } catch (err: any) {
@@ -77,6 +94,7 @@ export async function getOrSearchModelPvp(
       confianza: null,
       fuentes_consistentes: null,
       razonamiento: null,
+      fuente_url: null,
       status: "error",
     };
   }
