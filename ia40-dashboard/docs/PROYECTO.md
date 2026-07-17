@@ -513,20 +513,41 @@ móviles), calculado en el front dentro de `computeShareByModel()` —no
 requiere ninguna llamada externa, es aritmética simple sobre los mismos
 datos que ya se traen del `/api/evolution`.
 
-**PVP USD**: precio de venta al público estimado, consultado **on demand**
-a OpenAI (mismo patrón que "Ver imagen": el usuario hace click en
-"Consultar" en la fila y el resultado queda cacheado para siempre en la
-tabla `model_pvp`, salvo que haya dado `'error'`, que se puede reintentar).
+**PVP USD**: precio de venta al público estimado en USD. Se completa de
+**dos formas** (pedido explicito del usuario, 17/07/2026: "aprovechar mas la
+Api con OpenIA... cuando va a buscar una info tambien trae la otra"):
 
-- `lib/pvpFinder.ts` — `findModelPvp(marca, modelo, categoryName)`: llama a
-  la misma Responses API de OpenAI que el tamizador (`gpt-5.4-mini`, tool
+1. **Automática, dentro del tamizador**: la misma búsqueda web que
+   `lib/aiClassifier.ts` ya hace para identificar el segmento/categoría de
+   cada modelo (sección 10.1) también le pide a OpenAI el PVP que haya
+   encontrado en esa búsqueda — sin gastar una segunda llamada. El resultado
+   lo guarda `guardarPvp()` en `app/api/sieve/route.ts`, en la misma tabla
+   `model_pvp`. El resumen del tamizador muestra "PVP encontrado: N" y, si
+   hubo alguno, el front recarga la columna sola al terminar (`reloadModelPvp()`
+   en `app/page.tsx`).
+2. **Manual, on demand**: para un modelo puntual que el tamizador todavía no
+   procesó (o que dio `'not_found'`/`'error'`), el botón "Consultar" de la
+   columna dispara `POST /api/model-pvp/search`, que llama a
+   `lib/pvpFinder.ts` — una llamada de OpenAI independiente, pensada
+   específicamente para este caso.
+
+Ambos caminos escriben en la misma tabla `model_pvp` con la misma regla: si
+la búsqueda encuentra un precio, siempre pisa el valor anterior (dato más
+fresco gana); si NO encuentra nada, solo marca `'not_found'` si todavía no
+había ningún valor `'found'` guardado (no borra un precio bueno con un
+intento que no encontró nada).
+
+- `lib/pvpFinder.ts` — `findModelPvp(marca, modelo, categoryName)`: misma
+  Responses API de OpenAI que el tamizador (`gpt-5.4-mini`, tool
   `web_search`, sin structured output, mismo parser de JSON balanceado),
   pidiéndole que busque varios precios de venta al público en la web y
   elija **el valor que más se repita** entre fuentes (o el más consistente
   si ninguno se repite exacto, descartando outliers). Devuelve
-  `pvpUsd | null`, `confianza`, `fuentesConsistentes` (cuántas fuentes
-  coincidieron) y `razonamiento`. Si no encuentra nada confiable devuelve
-  `pvpUsd: null` en vez de inventar un número.
+  `pvpUsd | null`, `confianza`, `fuentesConsistentes`, `razonamiento` y
+  `fuenteUrl` (link de la publicación de donde salió el precio). Si no
+  encuentra nada confiable devuelve `pvpUsd: null` en vez de inventar un
+  número. `lib/aiClassifier.ts` pide exactamente los mismos campos
+  (`pvp_usd`, `pvp_fuente_url`, etc.) dentro de su propio JSON de respuesta.
 - Es un archivo deliberadamente independiente de `lib/aiClassifier.ts`
   (repite ~40 líneas de boilerplate de la llamada a OpenAI en vez de
   compartir un helper) para no tocar el código del tamizador, que ya está
@@ -536,9 +557,12 @@ tabla `model_pvp`, salvo que haya dado `'error'`, que se puede reintentar).
   `model_pvp`, calcada de `lib/modelImages.ts`/`getOrSearchModelImage()`.
 - No usa ninguna variable de entorno nueva: reutiliza `OPENAI_API_KEY` (la
   misma del tamizador).
-- ⚠️ El símbolo "⚠︎" al lado de un precio indica `confianza: "baja"` (el
-  modelo tuvo que inferir con poca evidencia) — no es un error, es una señal
-  para revisar el dato a ojo antes de confiar en él.
+- El precio se muestra como **link clickeable** hacia `fuente_url` (la
+  publicación de donde salió el dato), para poder verificarlo con un click.
+  Si no hay `fuente_url` guardada (ej. filas viejas de antes de este
+  campo), se muestra como texto plano en vez de link.
+- Tanto **FOB Unit.** como **PVP USD** se muestran **redondeados, sin
+  decimales** (mismo formato que la columna FOB USD).
 
 También se cambió el botón "Ver imagen" por un ícono de lupa (🔍) para
 ocupar menos espacio en la fila; el texto descriptivo ("Ver imagen", "Sin
@@ -561,7 +585,7 @@ pasar el mouse) en vez de en el botón mismo.
 | `/api/model-pvp/search` | POST | Consulta (o cachea) el PVP en USD de un modelo puntual via OpenAI, on-demand. |
 | `/api/model-overrides` | POST | Corrige a mano segmento y/o imagen de una combinación marca+modelo. |
 | `/api/token` | POST (asumido) | Recibe el JWT que manda `refresh_token.py` y lo guarda en `app_settings`. Confirmado funcionando en producción, pero su archivo fuente no está en esta carpeta local (ver sección 7). |
-| `/api/sieve` | GET | Tamizador de segmentos: busca en la web + IA y corrige/mueve modelos no validados de una categoría (ver sección 10.1). Bajo demanda, sin cron. |
+| `/api/sieve` | GET | Tamizador de segmentos: busca en la web + IA y corrige/mueve modelos no validados de una categoría; de paso, completa el PVP en `model_pvp` con la misma búsqueda (ver secciones 10.1 y 10.2). Bajo demanda, sin cron. |
 | `/api/sieve/status` | GET | Progreso del tamizador para una categoría (`{total, tamizado, pendientes, porcentaje}`). Liviano, sin llamadas externas — usado para la barra de progreso. |
 
 ## 12. Variables de entorno
