@@ -1,18 +1,13 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
+import { segmentosValidos } from "@/lib/segmentos";
 
 export const dynamic = "force-dynamic";
 
-// Mismos 6 segmentos que puede asignar el parser automatico (paso 11).
-// Se valida acá para no permitir cargar un valor con typo desde el front.
-const VALID_SEGMENTOS = [
-  "Silla Estándar",
-  "Silla Ultra Livianas",
-  "Sillas Infantiles",
-  "Silla Postural",
-  "Silla Activa y Deportivas",
-  "Silla de Traslado",
-];
+// Segmentos validos POR CATEGORIA (ver lib/segmentos.ts) -- antes esto era
+// una lista fija con solo los 6 segmentos de "Sillas de ruedas", lo que
+// rechazaba con "Segmento invalido" cualquier correccion manual en las
+// otras 8 categorias (bug encontrado el 17/07/2026).
 
 // POST /api/model-overrides
 // body: { category, marca, modelo, segmento?, image_url?, source_url? }
@@ -45,7 +40,8 @@ export async function POST(req: Request) {
   const categoryId = cat[0].id;
 
   if (segmento) {
-    if (!VALID_SEGMENTOS.includes(segmento)) {
+    const validos = segmentosValidos(category);
+    if (validos.length > 0 && !validos.includes(segmento)) {
       return NextResponse.json({ error: "Segmento invalido" }, { status: 400 });
     }
     await query(
