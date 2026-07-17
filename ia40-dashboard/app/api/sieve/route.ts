@@ -10,10 +10,11 @@ export const maxDuration = 300; // requiere plan Pro para superar 60s
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-// Pausa entre items para no pasarse del limite de requests-por-minuto gratis
-// de Gemini (visto en produccion: sin esta pausa, un lote de 20 disparaba
-// bastantes 429 "Limite de uso gratis de Gemini alcanzado").
-const SIEVE_DELAY_MS = Number(process.env.SIEVE_DELAY_MS ?? 4500);
+// Pequeña pausa entre items -- con OpenAI en un proyecto con facturacion
+// activa (tier pago) el limite de requests-por-minuto es mucho mas alto que
+// en el plan gratis de Gemini (usado antes), pero se deja un margen chico
+// igual para no disparar todo en paralelo de golpe.
+const SIEVE_DELAY_MS = Number(process.env.SIEVE_DELAY_MS ?? 500);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface CategoryRow {
@@ -33,24 +34,26 @@ interface PendienteRow {
  *
  * "Tamizador de segmentos" (17/07/2026): para cada combinacion marca+modelo
  * de la categoria elegida que TODAVIA no se valido (ver model_sieve_log),
- * le pide a Gemini (lib/aiClassifier.ts) que busque el producto en la web
- * POR SU CUENTA (tool nativo "google_search" de Gemini, sin SerpApi) y
- * decida el segmento real -- y, si la categoria es una de las 3 de NCM
- * compartido (andadores / bastones / calzado_ortopedico), tambien si el
- * producto esta en la categoria correcta (un mismo fabricante puede vender,
- * bajo codigos parecidos, productos que en realidad son de otra de las 3
- * categorias -- ver docs/PROYECTO.md, caso real: "Double Care Medical
- * HY7300L" clasificado como andador siendo en realidad un baston).
+ * le pide a OpenAI (lib/aiClassifier.ts, Responses API + tool "web_search")
+ * que busque el producto en la web POR SU CUENTA y decida el segmento real
+ * -- y, si la categoria es una de las 3 de NCM compartido (andadores /
+ * bastones / calzado_ortopedico), tambien si el producto esta en la
+ * categoria correcta (un mismo fabricante puede vender, bajo codigos
+ * parecidos, productos que en realidad son de otra de las 3 categorias --
+ * ver docs/PROYECTO.md, caso real: "Double Care Medical HY7300L"
+ * clasificado como andador siendo en realidad un baston).
  *
- * SerpApi NO se usa aca (pedido explicito del usuario, 17/07/2026): esa
- * cuota compartida (250 busquedas/mes gratis) queda reservada solo para
- * pegar la imagen de un producto al catalogo (lib/imageSearch.ts), un flujo
- * completamente aparte.
+ * SerpApi NO se usa aca: esa cuota (250 busquedas/mes gratis) queda
+ * reservada solo para pegar la imagen de un producto al catalogo
+ * (lib/imageSearch.ts), un flujo completamente aparte. Tampoco se usa
+ * Gemini (se probo antes, pero requeria facturacion activada en Google
+ * para que el tool de busqueda funcionara -- ver historial en
+ * docs/PROYECTO.md seccion 10.1). La empresa decidio pagar OpenAI en su
+ * lugar (proyecto "cobus" en platform.openai.com).
  *
  * Corre en LOTES (parametro `limit`, default 20) porque cada fila gasta una
- * llamada a Gemini (gratis, con limite de uso por minuto/dia -- por eso el
- * `sleep(SIEVE_DELAY_MS)` entre items, para no pasarse del limite de
- * requests-por-minuto del plan gratis).
+ * llamada a OpenAI (con costo: ~USD 0.01 por busqueda web + tokens del
+ * modelo, ver lib/aiClassifier.ts).
  * Se dispara manualmente desde el boton "Tamizar categoria" del dashboard,
  * NO esta en ningun cron.
  */
