@@ -13,16 +13,22 @@
  * Requiere una variable de entorno nueva en Vercel:
  *   - GEMINI_API_KEY: API key GRATIS de aistudio.google.com (Google AI
  *     Studio) -- no pide tarjeta, solo tiene limite de uso (rate limit),
- *     no de dinero. Se usa "gemini-2.5-flash-lite" porque es el modelo con
- *     mayor cuota gratis diaria (~1000 requests/dia al momento de escribir
- *     esto) de los disponibles sin costo -- alcanza de sobra para el uso
- *     en lotes chicos de este tamizador. Si en el futuro Google cambia los
- *     nombres/limites de los modelos gratuitos, ajustar GEMINI_MODEL abajo.
+ *     no de dinero.
+ *
+ *   Nota (17/07/2026): originalmente se uso "gemini-2.5-flash-lite", pero
+ *   Google dejo de darle acceso a ese modelo a API keys nuevas (empezo a
+ *   devolver 404 "no longer available to new users" el 9/jul/2026, aunque
+ *   la pagina de deprecations todavia lo lista con fecha de baja en
+ *   octubre 2026 -- parece un corte solo para cuentas nuevas). Se cambio a
+ *   "gemini-3.1-flash-lite" (linea Gemini 3, modelo estable equivalente en
+ *   costo/latencia, tambien gratis en Google AI Studio). Si esto vuelve a
+ *   pasar, revisar el modelo actual en https://ai.google.dev/gemini-api/docs/models
+ *   y actualizar GEMINI_MODEL abajo.
  */
 
 import type { WebSearchSnippet } from "./webSearch";
 
-const GEMINI_MODEL = "gemini-2.5-flash-lite";
+const GEMINI_MODEL = "gemini-3.1-flash-lite";
 
 export interface CategoriaOpcion {
   slug: string;
