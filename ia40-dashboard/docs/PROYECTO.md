@@ -134,7 +134,8 @@ deduplicar en re-syncs), `monthly_brand_model_agg` (agregado mensual
 precalculado que lee el front), `provider_brand_map` y `record_brand_map`
 (correcciones manuales de marca/modelo por importador o por línea individual),
 `sync_runs` (historial de corridas de sync), `model_images` (cache de
-imágenes por marca/modelo).
+imágenes por marca/modelo), `model_pvp` (cache de PVP en USD por
+marca/modelo, ver sección 10.2).
 
 ## 6. Flujo de sincronización (`/api/sync`)
 
@@ -502,6 +503,48 @@ Gemini-con-snippets) quedó sin uso en el repo — se puede borrar si se
 quiere, no rompe nada. SerpApi sigue usándose exclusivamente para imágenes
 del catálogo (`lib/imageSearch.ts`), sin relación con el tamizador.
 
+## 10.2 FOB unitario y PVP estimado (Share por Modelo, 17/07/2026)
+
+En la tabla "Share por Modelo" del dashboard (`ModelShareTable` en
+`app/page.tsx`) se agregaron dos columnas nuevas:
+
+**FOB Unit.**: `fob / unidades` del período elegido (últimos 12 meses
+móviles), calculado en el front dentro de `computeShareByModel()` —no
+requiere ninguna llamada externa, es aritmética simple sobre los mismos
+datos que ya se traen del `/api/evolution`.
+
+**PVP USD**: precio de venta al público estimado, consultado **on demand**
+a OpenAI (mismo patrón que "Ver imagen": el usuario hace click en
+"Consultar" en la fila y el resultado queda cacheado para siempre en la
+tabla `model_pvp`, salvo que haya dado `'error'`, que se puede reintentar).
+
+- `lib/pvpFinder.ts` — `findModelPvp(marca, modelo, categoryName)`: llama a
+  la misma Responses API de OpenAI que el tamizador (`gpt-5.4-mini`, tool
+  `web_search`, sin structured output, mismo parser de JSON balanceado),
+  pidiéndole que busque varios precios de venta al público en la web y
+  elija **el valor que más se repita** entre fuentes (o el más consistente
+  si ninguno se repite exacto, descartando outliers). Devuelve
+  `pvpUsd | null`, `confianza`, `fuentesConsistentes` (cuántas fuentes
+  coincidieron) y `razonamiento`. Si no encuentra nada confiable devuelve
+  `pvpUsd: null` en vez de inventar un número.
+- Es un archivo deliberadamente independiente de `lib/aiClassifier.ts`
+  (repite ~40 líneas de boilerplate de la llamada a OpenAI en vez de
+  compartir un helper) para no tocar el código del tamizador, que ya está
+  probado en producción. Si en el futuro aparece un tercer consumidor de la
+  API de OpenAI, ahí sí conviene extraer un `lib/openai.ts` común.
+- `lib/modelPvp.ts` — `getOrSearchModelPvp()`: capa de cache en la tabla
+  `model_pvp`, calcada de `lib/modelImages.ts`/`getOrSearchModelImage()`.
+- No usa ninguna variable de entorno nueva: reutiliza `OPENAI_API_KEY` (la
+  misma del tamizador).
+- ⚠️ El símbolo "⚠︎" al lado de un precio indica `confianza: "baja"` (el
+  modelo tuvo que inferir con poca evidencia) — no es un error, es una señal
+  para revisar el dato a ojo antes de confiar en él.
+
+También se cambió el botón "Ver imagen" por un ícono de lupa (🔍) para
+ocupar menos espacio en la fila; el texto descriptivo ("Ver imagen", "Sin
+imagen", "Reintentar", etc.) ahora vive en el atributo `title` (tooltip al
+pasar el mouse) en vez de en el botón mismo.
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -514,6 +557,8 @@ del catálogo (`lib/imageSearch.ts`), sin relación con el tamizador.
 | `/api/records` | GET/POST | Lista líneas de detalle de una categoría, opcionalmente por importador (GET) / clasifica una línea puntual (POST). |
 | `/api/model-images` | GET | Estado de búsqueda de imagen por marca/modelo de una categoría. |
 | `/api/model-images/search` | POST | Busca (o cachea) la imagen de un modelo puntual, on-demand. |
+| `/api/model-pvp` | GET | PVP en USD cacheado por marca/modelo de una categoría (ver sección 10.2). |
+| `/api/model-pvp/search` | POST | Consulta (o cachea) el PVP en USD de un modelo puntual via OpenAI, on-demand. |
 | `/api/model-overrides` | POST | Corrige a mano segmento y/o imagen de una combinación marca+modelo. |
 | `/api/token` | POST (asumido) | Recibe el JWT que manda `refresh_token.py` y lo guarda en `app_settings`. Confirmado funcionando en producción, pero su archivo fuente no está en esta carpeta local (ver sección 7). |
 | `/api/sieve` | GET | Tamizador de segmentos: busca en la web + IA y corrige/mueve modelos no validados de una categoría (ver sección 10.1). Bajo demanda, sin cron. |
