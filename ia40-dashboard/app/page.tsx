@@ -677,22 +677,56 @@ export default function Home() {
   const [viewingModel, setViewingModel] = useState<{ marca: string; modelo: string; segmento: string } | null>(null);
   const [sieving, setSieving] = useState(false);
   const [sieveResult, setSieveResult] = useState<SieveSummary | null>(null);
+  const [sieveStatus, setSieveStatus] = useState<{ total: number; tamizado: number; pendientes: number; porcentaje: number } | null>(null);
+  // Segundos que tardo, en promedio, cada modelo procesado en la ULTIMA
+  // corrida (busqueda + IA por modelo) -- se usa para estimar cuanto falta
+  // para terminar toda la categoria (sieveStatus.pendientes * este valor).
+  const [sieveSecondsPerItem, setSieveSecondsPerItem] = useState<number | null>(null);
+
+  const reloadSieveStatus = () => {
+    if (!slug) {
+      setSieveStatus(null);
+      return;
+    }
+    fetch(`/api/sieve/status?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => setSieveStatus(d.error ? null : d))
+      .catch(() => setSieveStatus(null));
+  };
+
+  useEffect(reloadSieveStatus, [slug]);
 
   const runSieve = () => {
     if (!slug || sieving) return;
     setSieving(true);
     setSieveResult(null);
+    const startedAt = Date.now();
     fetch(`/api/sieve?category=${encodeURIComponent(slug)}`)
       .then((r) => r.json())
       .then((d) => {
         setSieveResult(d);
+        const elapsedSec = (Date.now() - startedAt) / 1000;
+        const procesados = d.procesados ?? 0;
+        if (procesados > 0) setSieveSecondsPerItem(elapsedSec / procesados);
         // Si se corrigieron segmentos o se movieron filas de categoria, la
         // serie actual puede haber cambiado -- se recarga para reflejarlo.
         if ((d.segmento_corregido ?? 0) > 0 || (d.categoria_movida ?? 0) > 0) reloadSeries();
+        reloadSieveStatus();
       })
       .catch(() => setSieveResult({ error: "No se pudo correr el tamizador. Proba de nuevo." } as any))
       .finally(() => setSieving(false));
   };
+
+  /** "125" -> "2 min 5 s"; redondea a lo mas util (segundos si es poco, minutos si es mucho). */
+  function fmtDuration(totalSeconds: number): string {
+    const s = Math.max(0, Math.round(totalSeconds));
+    if (s < 60) return `${s} s`;
+    const mins = Math.round(s / 60);
+    if (mins < 60) return `~${mins} min`;
+    const hs = Math.floor(mins / 60);
+    const restMin = mins % 60;
+    return `~${hs} h ${restMin} min`;
+  }
 
   useEffect(() => {
     fetch("/api/categories")
@@ -868,9 +902,92 @@ export default function Home() {
         <div style={{ fontSize: 13, color: "var(--muted)" }}>
           🔄 Datos sincronizados desde Cobus Group, agregados por marca / modelo / proveedor.
         </div>
-        <div style={{ fontSize: 13 }}>
-          <a href="/admin" style={{ color: "var(--accent)", fontWeight: 600 }}>☁️ Cargar/editar marcas por importador →</a>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <button onClick={runSieve} disabled={sieving || !slug}>
+            {sieving ? "🔎 Tamizando..." : "🔎 Tamizar categoría"}
+          </button>
+          {sieveStatus && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+              <div style={{ width: 120, height: 8, background: "var(--border, #2a2e37)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ width: `${sieveStatus.porcentaje}%`, height: "100%", background: "var(--accent)" }} />
+              </div>
+              <span>
+                {sieveStatus.tamizado}/{sieveStatus.total} tamizado ({sieveStatus.porcentaje}%)
+              </span>
+              {sieveSecondsPerItem != null && sieveStatus.pendientes > 0 && (
+                <span>· ≈{fmtDuration(sieveStatus.pendientes * sieveSecondsPerItem)} restante</span>
+              )}
+            </div>
+          )}
         </div>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          Busca en la web y valida con IA los modelos de esta categoría que todavía no se revisaron (corrige el
+          segmento, o mueve el modelo a la categoría correcta si corresponde). Corre en lotes chicos — puede hacer
+          falta clickear varias veces para cubrir toda la categoría.
+        </div>
+
+        {sieveResult && (
+          <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
+            {sieveResult.error ? (
+              <div style={{ color: "#d93a3a" }}>{sieveResult.error}</div>
+            ) : (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <strong>
+                    Procesados {sieveResult.procesados ?? 0} de {sieveResult.solicitados ?? 0} pendientes
+                  </strong>
+                  <button onClick={() => setSieveResult(null)} style={{ padding: "2px 8px", fontSize: 12 }}>Cerrar</button>
+                </div>
+                <div style={{ color: "var(--muted)" }}>
+                  Sin cambios: {sieveResult.sin_cambios ?? 0} · Segmento corregido: {sieveResult.segmento_corregido ?? 0} ·
+                  {" "}Categoría movida: {sieveResult.categoria_movida ?? 0} · Sin evidencia: {sieveResult.sin_evidencia ?? 0}
+                  {(sieveResult.errores ?? 0) > 0 && <> · Errores: {sieveResult.errores}</>}
+                </div>
+                {sieveResult.cuota_agotada && (
+                  <div style={{ color: "#d93a3a", marginTop: 6 }}>
+                    ⚠️ Se agotó la cuota mensual de SerpApi a mitad de este lote — probá de nuevo el mes que viene o
+                    ampliando el plan.
+                  </div>
+                )}
+                {(sieveResult.detalle_errores?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong style={{ color: "#d93a3a" }}>Detalle de errores:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "#d93a3a" }}>
+                      {sieveResult.detalle_errores!.slice(0, 10).map((e, i) => (
+                        <li key={i}>{e}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(sieveResult.movidos?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Movidos de categoría:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                      {sieveResult.movidos!.map((m, i) => (
+                        <li key={i}>
+                          {m.marca} — {m.modelo}: {m.de} → <strong>{m.a}</strong> ({m.segmento ?? "sin segmento"})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(sieveResult.corregidos?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Segmento corregido:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                      {sieveResult.corregidos!.map((c, i) => (
+                        <li key={i}>
+                          {c.marca} — {c.modelo}: {c.segmento}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="panel row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
@@ -971,71 +1088,6 @@ export default function Home() {
             <option value="total_unidades">Unidades</option>
           </select>
         </div>
-      </div>
-
-      <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <button onClick={runSieve} disabled={sieving || !slug}>
-            {sieving ? "🔎 Tamizando..." : "🔎 Tamizar categoría"}
-          </button>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>
-            Busca en la web y valida con IA los modelos de esta categoría que todavía no se revisaron (corrige el
-            segmento, o mueve el modelo a la categoría correcta si corresponde). Corre en lotes chicos — puede hacer
-            falta clickear varias veces para cubrir toda la categoría.
-          </span>
-        </div>
-
-        {sieveResult && (
-          <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
-            {sieveResult.error ? (
-              <div style={{ color: "#d93a3a" }}>{sieveResult.error}</div>
-            ) : (
-              <>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <strong>
-                    Procesados {sieveResult.procesados ?? 0} de {sieveResult.solicitados ?? 0} pendientes
-                  </strong>
-                  <button onClick={() => setSieveResult(null)} style={{ padding: "2px 8px", fontSize: 12 }}>Cerrar</button>
-                </div>
-                <div style={{ color: "var(--muted)" }}>
-                  Sin cambios: {sieveResult.sin_cambios ?? 0} · Segmento corregido: {sieveResult.segmento_corregido ?? 0} ·
-                  {" "}Categoría movida: {sieveResult.categoria_movida ?? 0} · Sin evidencia: {sieveResult.sin_evidencia ?? 0}
-                  {(sieveResult.errores ?? 0) > 0 && <> · Errores: {sieveResult.errores}</>}
-                </div>
-                {sieveResult.cuota_agotada && (
-                  <div style={{ color: "#d93a3a", marginTop: 6 }}>
-                    ⚠️ Se agotó la cuota mensual de SerpApi a mitad de este lote — probá de nuevo el mes que viene o
-                    ampliando el plan.
-                  </div>
-                )}
-                {(sieveResult.movidos?.length ?? 0) > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <strong>Movidos de categoría:</strong>
-                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                      {sieveResult.movidos!.map((m, i) => (
-                        <li key={i}>
-                          {m.marca} — {m.modelo}: {m.de} → <strong>{m.a}</strong> ({m.segmento ?? "sin segmento"})
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {(sieveResult.corregidos?.length ?? 0) > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <strong>Segmento corregido:</strong>
-                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                      {sieveResult.corregidos!.map((c, i) => (
-                        <li key={i}>
-                          {c.marca} — {c.modelo}: {c.segmento}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
       </div>
 
       <div className="kpi-row">
