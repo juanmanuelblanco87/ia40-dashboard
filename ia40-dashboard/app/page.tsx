@@ -6,9 +6,12 @@ import EvolutionChart, { SeriesPoint, PivotResult, formatPeriod, fmtNumber } fro
 import MultiSelectDropdown from "@/components/MultiSelectDropdown";
 import { segmentosValidos } from "@/lib/segmentos";
 
-// Colores fijos por segmento (6 valores posibles, ver SEGMENTO_CHOICES mas
-// abajo), para que el grafico de torta de Share por Segmento sea consistente
-// entre categorias y no dependa del orden en que aparecen los datos.
+// Colores fijos para los 6 segmentos originales de "Sillas de Ruedas" (se
+// mantienen para no cambiar los colores ya conocidos de esa categoria).
+// Para las demas categorias (cada una con sus propios nombres de segmento,
+// ver lib/segmentos.ts) se asigna un color de forma deterministica desde
+// SEGMENTO_PALETTE en base al nombre del segmento -- asi ningun segmento
+// queda sin color asignado (bug anterior: todo caia a un gris de fallback).
 const SEGMENTO_COLORS: Record<string, string> = {
   "Silla Estándar": "#2f6fe0",
   "Silla Ultra Livianas": "#1f9e63",
@@ -17,7 +20,31 @@ const SEGMENTO_COLORS: Record<string, string> = {
   "Silla Activa y Deportivas": "#d93a3a",
   "Silla de Traslado": "#1aa8c9",
 };
-const SEGMENTO_COLOR_FALLBACK = "#8a95a0";
+const SEGMENTO_PALETTE = [
+  "#2f6fe0",
+  "#1f9e63",
+  "#e8722f",
+  "#9b30d9",
+  "#d93a3a",
+  "#1aa8c9",
+  "#c9a227",
+  "#5f6b7a",
+  "#e0507a",
+  "#3ab795",
+  "#f2994a",
+  "#7d5ba6",
+];
+function colorForSegmento(key: string): string {
+  const fijo = SEGMENTO_COLORS[key];
+  if (fijo) return fijo;
+  // Hash simple y estable del nombre -> siempre el mismo color para el
+  // mismo segmento, sin depender del orden en que aparecen las filas.
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return SEGMENTO_PALETTE[hash % SEGMENTO_PALETTE.length];
+}
 
 interface Category {
   id: number;
@@ -163,7 +190,7 @@ function SegmentoPieChart({ rows, last12Label }: { rows: ShareRow[]; last12Label
               label={(entry: any) => `${Number(entry.fobPct ?? 0).toFixed(0)}%`}
             >
               {rows.map((r) => (
-                <Cell key={r.key} fill={SEGMENTO_COLORS[r.key] ?? SEGMENTO_COLOR_FALLBACK} />
+                <Cell key={r.key} fill={colorForSegmento(r.key)} />
               ))}
             </Pie>
             <Tooltip formatter={(value: any) => fmtNumber(Number(value))} />
