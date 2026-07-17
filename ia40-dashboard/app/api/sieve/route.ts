@@ -328,3 +328,43 @@ export async function GET(req: Request) {
 
   return NextResponse.json(resumen);
 }
+
+/**
+ * DELETE /api/sieve?category=<slug>
+ *
+ * "Limpiar tamizado" (17/07/2026): borra el registro de `model_sieve_log`
+ * de una categoria, para que el proximo GET /api/sieve la vuelva a procesar
+ * de cero -- necesario porque la query de arriba excluye cualquier
+ * combinacion marca+modelo que YA tenga fila en `model_sieve_log` (para no
+ * re-gastar OpenAI en algo ya validado). El caso de uso que motivo esto: la
+ * columna PVP USD (seccion 10.2) se agrego DESPUES de que varias categorias
+ * ya estuvieran 100% tamizadas, asi que sin este boton esas categorias
+ * nunca iban a completar el PVP (nunca vuelven a pasar por procesarItem).
+ *
+ * OJO: esto SI vuelve a gastar una llamada a OpenAI por cada modelo de la
+ * categoria en el proximo tamizado (re-clasifica segmento/categoria ademas
+ * de PVP) -- no es gratis, pero el costo por modelo es de centavos de dolar
+ * (ver lib/aiClassifier.ts). No borra nada de `model_pvp` ni de
+ * `trade_records`/`monthly_brand_model_agg`: solo el "ya lo revise" de
+ * `model_sieve_log`, asi que no hay riesgo de perder datos, solo de volver a
+ * pagar por re-procesar.
+ */
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const slug = searchParams.get("category");
+  if (!slug) {
+    return NextResponse.json({ error: "Falta ?category=" }, { status: 400 });
+  }
+
+  const catRows = await query<CategoryRow>(`select id, slug, name from categories where slug = $1`, [slug]);
+  if (catRows.length === 0) {
+    return NextResponse.json({ error: `Categoria "${slug}" no encontrada` }, { status: 404 });
+  }
+
+  const deleted = await query<{ id: number }>(
+    `delete from model_sieve_log where category_id = $1 returning id`,
+    [catRows[0].id]
+  );
+
+  return NextResponse.json({ eliminados: deleted.length });
+}
