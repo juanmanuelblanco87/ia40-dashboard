@@ -212,6 +212,8 @@ interface ModelShareRow {
   fobPct: number;
   unidades: number;
   unidadesPct: number;
+  /** fob / unidades del periodo (0 si no hay unidades). */
+  fobUnitario: number;
 }
 
 export interface ModelImageEntry {
@@ -220,6 +222,22 @@ export interface ModelImageEntry {
   image_url: string | null;
   thumbnail_url: string | null;
   source_url: string | null;
+  status: string; // 'pending' | 'found' | 'not_found' | 'error'
+}
+
+/**
+ * PVP (Precio de Venta al Publico) estimado en USD via OpenAI (busqueda web,
+ * ver lib/pvpFinder.ts), cacheado en la tabla model_pvp. Se consulta ON
+ * DEMAND igual que la imagen: el usuario hace click en "Consultar precio" en
+ * la fila y se guarda para siempre (salvo que haya dado 'error').
+ */
+export interface ModelPvpEntry {
+  marca: string;
+  modelo: string;
+  pvp_usd: number | null;
+  confianza: string | null;
+  fuentes_consistentes: number | null;
+  razonamiento: string | null;
   status: string; // 'pending' | 'found' | 'not_found' | 'error'
 }
 
@@ -281,31 +299,51 @@ function computeShareByModel(series: SeriesPoint[], periodSet: Set<string> | nul
       fobPct: totalFob > 0 ? (v.fob / totalFob) * 100 : 0,
       unidades: v.uni,
       unidadesPct: totalUni > 0 ? (v.uni / totalUni) * 100 : 0,
+      fobUnitario: v.uni > 0 ? v.fob / v.uni : 0,
     };
   });
   rows.sort((a, b) => b.fob - a.fob);
   return rows;
 }
 
+// Titulo (tooltip) del boton de imagen -- el boton en si se ve como un
+// icono de lupa para no ocupar tanto lugar en la tabla (ver ModelShareTable).
 const IMAGE_BUTTON_LABEL: Record<string, string> = {
   found: "Ver imagen",
-  not_found: "Sin imagen",
-  error: "Reintentar",
+  not_found: "Sin imagen (click para reintentar)",
+  error: "Reintentar busqueda de imagen",
   // "pending" = todavia no se busco: el click dispara la busqueda on-demand
   // (ver ModelImageModal), no hace falta un backfill previo.
-  pending: "Ver imagen",
+  pending: "Buscar imagen",
 };
+
+const PVP_BUTTON_LABEL: Record<string, string> = {
+  not_found: "No se encontro un precio confiable (click para reintentar)",
+  error: "Reintentar consulta de precio",
+  pending: "Consultar precio (OpenAI busca en la web)",
+};
+
+/** Formato USD con 2 decimales, para valores unitarios (FOB unitario, PVP). */
+function fmtUsdUnit(n: number): string {
+  return n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 function ModelShareTable({
   rows,
   last12Label,
   imageStatus,
   onViewImage,
+  pvpEntry,
+  pvpLoadingKeys,
+  onConsultPvp,
 }: {
   rows: ModelShareRow[];
   last12Label: string;
   imageStatus: (marca: string, modelo: string) => string;
   onViewImage: (marca: string, modelo: string, segmento: string) => void;
+  pvpEntry: (marca: string, modelo: string) => ModelPvpEntry | undefined;
+  pvpLoadingKeys: Set<string>;
+  onConsultPvp: (marca: string, modelo: string, segmento: string) => void;
 }) {
   const cellStyle: React.CSSProperties = { padding: "5px 6px", fontSize: 12.5 };
   const cellRight: React.CSSProperties = { ...cellStyle, textAlign: "right" };
@@ -325,14 +363,20 @@ function ModelShareTable({
               <th style={cellRight}>FOB %</th>
               <th style={cellRight}>Unidades</th>
               <th style={cellRight}>Uds %</th>
+              <th style={cellRight}>FOB Unit.</th>
+              <th style={cellRight}>PVP USD</th>
               <th style={cellStyle}></th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
               const status = imageStatus(r.marca, r.modelo);
+              const key = modelImageKey(r.marca, r.modelo);
+              const pvp = pvpEntry(r.marca, r.modelo);
+              const pvpStatus = pvp?.status ?? "pending";
+              const pvpLoading = pvpLoadingKeys.has(key);
               return (
-                <tr key={modelImageKey(r.marca, r.modelo)}>
+                <tr key={key}>
                   <td style={cellStyle}>{r.modelo}</td>
                   <td style={cellStyle}>{r.marca}</td>
                   <td style={cellStyle}>{r.segmento}</td>
@@ -341,12 +385,33 @@ function ModelShareTable({
                   <td style={cellRight}>{r.fobPct.toFixed(1)}%</td>
                   <td style={cellRight}>{fmtNumber(r.unidades)}</td>
                   <td style={cellRight}>{r.unidadesPct.toFixed(1)}%</td>
+                  <td style={cellRight}>{r.unidades > 0 ? `$${fmtUsdUnit(r.fobUnitario)}` : "-"}</td>
+                  <td style={cellRight}>
+                    {pvpLoading ? (
+                      <span style={{ color: "var(--muted)" }}>Buscando...</span>
+                    ) : pvpStatus === "found" && pvp?.pvp_usd != null ? (
+                      <span title={pvp.razonamiento ?? undefined}>
+                        ${fmtUsdUnit(pvp.pvp_usd)}
+                        {pvp.confianza === "baja" && " ⚠︎"}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => onConsultPvp(r.marca, r.modelo, r.segmento)}
+                        title={PVP_BUTTON_LABEL[pvpStatus] ?? "Consultar precio"}
+                        style={{ fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap" }}
+                      >
+                        {pvpStatus === "not_found" ? "Sin dato ↻" : pvpStatus === "error" ? "Error ↻" : "Consultar"}
+                      </button>
+                    )}
+                  </td>
                   <td style={cellStyle}>
                     <button
                       onClick={() => onViewImage(r.marca, r.modelo, r.segmento)}
-                      style={{ fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap" }}
+                      title={IMAGE_BUTTON_LABEL[status] ?? "Buscar imagen"}
+                      aria-label={IMAGE_BUTTON_LABEL[status] ?? "Buscar imagen"}
+                      style={{ fontSize: 13, padding: "2px 7px", lineHeight: 1 }}
                     >
-                      {IMAGE_BUTTON_LABEL[status] ?? "Pendiente"}
+                      🔍
                     </button>
                   </td>
                 </tr>
@@ -354,7 +419,7 @@ function ModelShareTable({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ color: "var(--muted)" }}>Sin datos</td>
+                <td colSpan={11} style={{ color: "var(--muted)" }}>Sin datos</td>
               </tr>
             )}
           </tbody>
@@ -701,6 +766,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [pivot, setPivot] = useState<PivotResult | null>(null);
   const [modelImages, setModelImages] = useState<Map<string, ModelImageEntry>>(new Map());
+  const [modelPvp, setModelPvp] = useState<Map<string, ModelPvpEntry>>(new Map());
+  const [pvpLoadingKeys, setPvpLoadingKeys] = useState<Set<string>>(new Set());
   const [viewingModel, setViewingModel] = useState<{ marca: string; modelo: string; segmento: string } | null>(null);
   const [sieving, setSieving] = useState(false);
   const [sieveResult, setSieveResult] = useState<SieveSummary | null>(null);
@@ -816,6 +883,66 @@ export default function Home() {
       .catch(() => setModelImages(new Map()));
   }, [slug]);
 
+  useEffect(() => {
+    if (!slug) return;
+    fetch(`/api/model-pvp?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        const map = new Map<string, ModelPvpEntry>();
+        for (const row of (d.pvps ?? []) as ModelPvpEntry[]) {
+          map.set(modelImageKey(row.marca, row.modelo), row);
+        }
+        setModelPvp(map);
+      })
+      .catch(() => setModelPvp(new Map()));
+  }, [slug]);
+
+  // Consulta on-demand del PVP de un modelo puntual (click en "Consultar" en
+  // la columna PVP USD de Share por Modelo) -- llama a OpenAI (web_search) y
+  // queda cacheado en model_pvp, igual que la busqueda de imagen.
+  const handleConsultPvp = (marca: string, modelo: string, _segmento: string) => {
+    const key = modelImageKey(marca, modelo);
+    if (pvpLoadingKeys.has(key)) return;
+    setPvpLoadingKeys((prev) => new Set(prev).add(key));
+    fetch("/api/model-pvp/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: slug, marca, modelo }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.pvp) {
+          setModelPvp((prev) => {
+            const next = new Map(prev);
+            next.set(key, d.pvp);
+            return next;
+          });
+        }
+      })
+      .catch(() => {
+        setModelPvp((prev) => {
+          const next = new Map(prev);
+          next.set(key, {
+            marca,
+            modelo,
+            pvp_usd: null,
+            confianza: null,
+            fuentes_consistentes: null,
+            razonamiento: null,
+            status: "error",
+          });
+          return next;
+        });
+      })
+      .finally(() => {
+        setPvpLoadingKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      });
+  };
+
   const marcaOptions = Array.from(new Set(options.map((o) => o.marca).filter(Boolean))) as string[];
   const modelos = Array.from(new Set(options.map((o) => o.modelo).filter(Boolean))) as string[];
   const mesOptions = useMemo(
@@ -906,6 +1033,8 @@ export default function Home() {
 
   const imageStatusFor = (marca: string, modelo: string) =>
     modelImages.get(modelImageKey(marca, modelo))?.status ?? "pending";
+
+  const pvpEntryFor = (marca: string, modelo: string) => modelPvp.get(modelImageKey(marca, modelo));
 
   // ---- Descarga CSV de la tabla mes a mes (mismo orden que se ve en pantalla) ----
   const downloadCsv = () => {
@@ -1203,6 +1332,9 @@ export default function Home() {
         last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
         imageStatus={imageStatusFor}
         onViewImage={(marca, modelo, segmento) => setViewingModel({ marca, modelo, segmento })}
+        pvpEntry={pvpEntryFor}
+        pvpLoadingKeys={pvpLoadingKeys}
+        onConsultPvp={handleConsultPvp}
       />
 
       {viewingModel && (
