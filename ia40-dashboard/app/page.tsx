@@ -645,6 +645,7 @@ interface SieveSummary {
   movidos?: { marca: string; modelo: string; de: string; a: string; segmento: string | null; razonamiento: string }[];
   corregidos?: { marca: string; modelo: string; segmento: string; razonamiento: string }[];
   detalle_errores?: string[];
+  parcial?: boolean;
   error?: string;
 }
 
@@ -959,6 +960,12 @@ export default function Home() {
                     </>
                   )}
                 </div>
+                {sieveResult.parcial && (
+                  <div style={{ color: "var(--muted)", marginTop: 6 }}>
+                    ⏱️ Se alcanzó el límite de tiempo de este click antes de terminar el lote completo — lo ya
+                    procesado quedó guardado. Clickeá "Tamizar categoría" de nuevo para seguir con el resto.
+                  </div>
+                )}
                 {showSieveErrors && (sieveResult.detalle_errores?.length ?? 0) > 0 && (
                   <div style={{ marginTop: 8 }}>
                     <strong style={{ color: "#d93a3a" }}>Detalle de errores:</strong>
