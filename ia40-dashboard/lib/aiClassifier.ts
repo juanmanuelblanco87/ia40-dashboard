@@ -37,6 +37,14 @@
  *     el tool `web_search` cuesta USD 0.01 por busqueda (10 USD / 1000
  *     llamadas) + tokens de la respuesta al precio normal del modelo -- un
  *     lote de 20 productos sale centavos de dolar.
+ *
+ * ACTUALIZACION (17/07/2026): la misma busqueda que identifica el producto
+ * ahora TAMBIEN devuelve el PVP (Precio de Venta al Publico) en USD que haya
+ * encontrado, en vez de gastar una segunda llamada a OpenAI aparte (ver
+ * lib/pvpFinder.ts, que sigue existiendo para la consulta manual on-demand
+ * de un modelo puntual desde el boton "Consultar" de la tabla). El resultado
+ * de PVP de esta busqueda lo guarda app/api/sieve/route.ts en la tabla
+ * model_pvp junto con el resto del procesamiento de cada fila.
  */
 
 const OPENAI_MODEL = "gpt-5.4-mini";
@@ -67,6 +75,20 @@ export interface SieveClassifyResult {
   segmento: string | null;
   confianza: "alta" | "media" | "baja";
   razonamiento: string;
+  /**
+   * PVP (Precio de Venta al Publico) en USD, aprovechando la MISMA busqueda
+   * web que ya se hace para identificar el producto -- pedido explicito del
+   * usuario (17/07/2026): "aprovechar mas la Api con OpenIA... cuando va a
+   * buscar una info tambien trae la otra". Null si no encontro un precio
+   * confiable en esa busqueda (no se hace una segunda busqueda solo por
+   * esto, para no duplicar costo/latencia).
+   */
+  pvpUsd: number | null;
+  /** Link de la publicacion de donde salio el pvpUsd (para poder verificarlo despues), o null. */
+  pvpFuenteUrl: string | null;
+  /** Cuantas fuentes distintas encontro con un valor igual o similar al elegido. */
+  pvpFuentesConsistentes: number;
+  pvpRazonamiento: string;
 }
 
 export class AiClassifierError extends Error {}
@@ -94,8 +116,10 @@ ${opcionesCategoriaTexto}
 
 Basandote en lo que encuentres buscando en la web, elegi SIEMPRE el segmento que mejor se ajuste al producto -- incluso si la evidencia es parcial, indirecta o ambigua (por ejemplo, si no encontras el modelo exacto pero si otros productos de la misma marca, o el nombre/codigo del modelo da una pista razonable del tipo de producto). NUNCA dejes "segmento" en null: usa el campo "confianza" para indicar que tan seguro estas ("baja" si tuviste que inferir con poca evidencia), pero elegi igual la opcion mas probable de la lista. Dejar "categoria_slug" en null (o igual a la categoria actual) si no hay evidencia clara de que el producto sea de otra categoria -- ese cambio si requiere mas certeza porque mueve la fila a otro lugar del sistema.
 
+Ademas, aprovechá esa MISMA busqueda para anotar el Precio de Venta al Publico (PVP) en dolares estadounidenses (USD) de este producto, si lo encontras (no hagas una busqueda adicional solo para esto). Si en los resultados aparecen varios precios, preferi el que mas se repita entre fuentes, o el mas consistente/representativo si ninguno se repite exacto (descartando outliers claramente distintos al resto; convertilo a USD con un tipo de cambio aproximado si esta en otra moneda). Si no encontras ningun precio confiable para este modelo especifico en esa busqueda, dejá "pvp_usd" en null (no inventes un numero). Si encontras un precio, indicá en "pvp_fuente_url" el link de la publicacion de donde lo sacaste.
+
 Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
-{"categoria_slug": string o null, "segmento": string (nunca null, elegi el mas probable), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda y si fue una inferencia indirecta"}`;
+{"categoria_slug": string o null, "segmento": string (nunca null, elegi el mas probable), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda y si fue una inferencia indirecta", "pvp_usd": number o null, "pvp_fuente_url": string o null, "pvp_fuentes_consistentes": number (cuantas fuentes con un valor similar encontraste; 0 si ninguna), "pvp_razonamiento": "explicacion breve de 1 oracion sobre el precio encontrado"}`;
 }
 
 /**
@@ -222,10 +246,25 @@ export async function classifyProduct(params: SieveClassifyParams): Promise<Siev
       ? parsed.confianza
       : "baja";
 
+  const pvpUsd: number | null =
+    typeof parsed.pvp_usd === "number" && Number.isFinite(parsed.pvp_usd) && parsed.pvp_usd > 0
+      ? parsed.pvp_usd
+      : null;
+  const pvpFuenteUrl: string | null =
+    typeof parsed.pvp_fuente_url === "string" && parsed.pvp_fuente_url.trim() ? parsed.pvp_fuente_url.trim() : null;
+  const pvpFuentesConsistentes: number =
+    typeof parsed.pvp_fuentes_consistentes === "number" && Number.isFinite(parsed.pvp_fuentes_consistentes)
+      ? Math.max(0, Math.round(parsed.pvp_fuentes_consistentes))
+      : 0;
+
   return {
     categoriaSlug,
     segmento,
     confianza,
     razonamiento: String(parsed.razonamiento ?? ""),
+    pvpUsd,
+    pvpFuenteUrl,
+    pvpFuentesConsistentes,
+    pvpRazonamiento: String(parsed.pvp_razonamiento ?? ""),
   };
 }
