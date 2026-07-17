@@ -1,22 +1,43 @@
 /**
  * Cliente OpenAI (Responses API + tool nativo `web_search`) para estimar el
- * precio promedio actual de venta al publico (PVP) en USD de un modelo, ON
- * DEMAND (se llama al hacer click en "Consultar precio" en la tabla "Share
- * por Modelo" del dashboard), reusando el mismo enfoque que
- * lib/aiClassifier.ts (tamizador de segmentos): una sola llamada con el
- * tool `web_search`, sin structured output (json_schema no es compatible de
- * forma confiable con web_search, ver nota completa en aiClassifier.ts),
- * parseado con un extractor de JSON tolerante a texto extra.
+ * precio promedio actual de venta al publico (PVP) en USD, para el mercado
+ * de Argentina, de un modelo, ON DEMAND (se llama al hacer click en
+ * "Consultar precio" en la tabla "Share por Modelo" del dashboard),
+ * reusando el mismo enfoque que lib/aiClassifier.ts (tamizador de
+ * segmentos): una sola llamada con el tool `web_search`, sin structured
+ * output (json_schema no es compatible de forma confiable con web_search,
+ * ver nota completa en aiClassifier.ts), parseado con un extractor de JSON
+ * tolerante a texto extra.
  *
  * ACTUALIZACION (17/07/2026): la version anterior le pedia al modelo que
  * comparara precios de varias fuentes y devolviera un link de origen -- en
  * la practica terminaba agarrando el precio de UNA ficha tecnica encontrada
  * (a veces de un producto relacionado pero no exacto), en vez del precio de
- * mercado real. Ahora se le hace una pregunta simple y directa ("cual es el
+ * mercado real. Se cambio a una pregunta simple y directa ("cual es el
  * precio promedio actual de X"), sin pedirle que elija ni justifique una
- * fuente puntual, y se le pide directamente el promedio si encuentra varios
- * precios. Ya NO se pide (ni se guarda) el link de origen: no aporta en esta
- * etapa (pedido explicito del usuario, 17/07/2026).
+ * fuente puntual. Ya NO se pide (ni se guarda) el link de origen: no aporta
+ * en esta etapa (pedido explicito del usuario, 17/07/2026).
+ *
+ * ACTUALIZACION 2 (17/07/2026, misma tarde): la version anterior de esta
+ * pregunta simple exigia que el precio fuera "de este modelo especifico",
+ * lo que en la practica hacia que devolviera "sin dato" para la mayoria de
+ * los modelos (codigos de importacion muy puntuales que no tienen ficha de
+ * venta propia online) -- pedido explicito del usuario: "es una simple
+ * pregunta, deberia dar datos". Ahora, si no encuentra el precio del modelo
+ * EXACTO, el prompt le pide que estime usando precios de productos
+ * equivalentes/similares de la misma marca y tipo de producto, marcando
+ * confianza "baja" -- mismo criterio que ya se usa para el segmento en
+ * lib/aiClassifier.ts (siempre elegir la mejor estimacion disponible en vez
+ * de dejarlo sin clasificar). "pvp_usd" solo queda en null si de verdad no
+ * hay NINGUN precio relacionado (ni del modelo exacto ni de similares).
+ *
+ * ACTUALIZACION 3 (17/07/2026, misma tarde): se agrego "para el mercado de
+ * Argentina" a la pregunta (pedido explicito del usuario) -- el precio de
+ * venta al publico de equipamiento medico/ortopedico puede variar bastante
+ * entre paises (importacion, distribucion local, etc.), asi que se le pide
+ * puntualmente el precio de venta en Argentina (o, si no encuentra oferta
+ * local, que convierta a USD un precio internacional como estimacion,
+ * aclarandolo en el razonamiento).
  *
  * OJO: este archivo repite (en vez de importar) la logica de llamada a la
  * Responses API que ya existe en aiClassifier.ts. Es una decision deliberada:
@@ -40,17 +61,17 @@ export interface PvpResult {
 export class PvpFinderError extends Error {}
 
 function buildPrompt(marca: string, modelo: string, categoryName: string): string {
-  return `Sos un investigador de precios de equipamiento medico/ortopedico para un dashboard de comercio exterior.
+  return `Sos un investigador de precios de equipamiento medico/ortopedico para un dashboard de comercio exterior argentino.
 
-Pregunta simple: ¿Cual es el precio promedio actual de venta al publico, en dolares estadounidenses (USD), del siguiente producto?
+Pregunta simple: ¿Cual es el PVP (precio de venta al publico) estimado en dolares estadounidenses (USD) para el mercado de Argentina del siguiente producto?
 - Marca: ${marca}
 - Modelo/codigo: ${modelo}
 - Tipo de producto: ${categoryName}
 
-Buscá en la web precios de venta al publico ACTUALES de este producto especifico (tiendas online, distribuidores medicos, marketplaces, el sitio del fabricante) -- no uses el precio de una ficha tecnica o comparativa que no sea especificamente sobre este modelo. Si encontras varios precios, calculá el PROMEDIO entre ellos (convertilos a USD primero si estan en otra moneda). Si no encontras ningun precio de venta confiable para este modelo especifico, dejá "pvp_usd" en null (no inventes un numero).
+Buscá en la web precios de venta al publico ACTUALES de este producto en Argentina (tiendas online, distribuidores medicos/ortopedicos, marketplaces locales). Si encontras el precio del modelo EXACTO, usalo (si hay varios, promedialos, convirtiendo a USD si estan en pesos argentinos u otra moneda). Si NO encontras precios de este modelo exacto en Argentina, buscá el precio de productos equivalentes o similares -- misma marca y mismo tipo de producto (por ejemplo, otro modelo de ${categoryName} de ${marca}), en Argentina o en el mercado internacional si no hay oferta local -- y usalo como estimacion, indicando confianza "baja" y aclarando en el razonamiento que es una estimacion (no el precio del modelo exacto, y/o no especifico de Argentina). Evitá dejar "pvp_usd" en null salvo que, despues de buscar, realmente no encuentres ningun precio relacionado (ni siquiera de productos similares).
 
 Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
-{"pvp_usd": number o null (el precio promedio en USD), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones: que precios encontraste y como calculaste el promedio"}`;
+{"pvp_usd": number o null (el precio estimado en USD para Argentina), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones: que precios encontraste, si son de Argentina o estimados, y como calculaste el valor"}`;
 }
 
 /**
