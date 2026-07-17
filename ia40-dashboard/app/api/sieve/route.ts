@@ -78,20 +78,31 @@ export async function GET(req: Request) {
 
   const segmentosActuales = segmentosValidos(slug);
 
+  // Se prioriza por FOB total acumulado (todos los meses) de mayor a menor,
+  // para que el tamizador revise primero los modelos con mas peso en el
+  // negocio en vez de ir alfabetico -- pedido explicito del usuario
+  // (17/07/2026): "el tamizador debe comenzar desde modelos con mayor peso
+  // en FOB a menor peso en FOB".
   const pendientes = await query<PendienteRow>(
-    `select distinct on (agg.marca, agg.modelo)
-       agg.marca, agg.modelo,
-       coalesce(mso.segmento, agg.segmento) as segmento_actual
-     from monthly_brand_model_agg agg
-     left join model_segmento_override mso
-       on mso.category_id = agg.category_id and mso.marca = agg.marca and mso.modelo = agg.modelo
-     left join model_sieve_log log
-       on log.category_id = agg.category_id and log.marca = agg.marca and log.modelo = agg.modelo
-     where agg.category_id = $1
-       and log.id is null
-       and agg.marca is not null and agg.marca <> ''
-       and agg.modelo is not null and agg.modelo <> ''
-     order by agg.marca, agg.modelo
+    `select t.marca, t.modelo, t.segmento_actual
+     from (
+       select
+         agg.marca, agg.modelo,
+         coalesce(mso.segmento, agg.segmento) as segmento_actual,
+         sum(agg.total_fob_dolars) over (partition by agg.marca, agg.modelo) as total_fob,
+         row_number() over (partition by agg.marca, agg.modelo order by agg.period desc) as rn
+       from monthly_brand_model_agg agg
+       left join model_segmento_override mso
+         on mso.category_id = agg.category_id and mso.marca = agg.marca and mso.modelo = agg.modelo
+       left join model_sieve_log log
+         on log.category_id = agg.category_id and log.marca = agg.marca and log.modelo = agg.modelo
+       where agg.category_id = $1
+         and log.id is null
+         and agg.marca is not null and agg.marca <> ''
+         and agg.modelo is not null and agg.modelo <> ''
+     ) t
+     where t.rn = 1
+     order by t.total_fob desc
      limit $2`,
     [categoria.id, limit]
   );
