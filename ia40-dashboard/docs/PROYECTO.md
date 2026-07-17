@@ -539,15 +539,26 @@ intento que no encontró nada).
 
 - `lib/pvpFinder.ts` — `findModelPvp(marca, modelo, categoryName)`: misma
   Responses API de OpenAI que el tamizador (`gpt-5.4-mini`, tool
-  `web_search`, sin structured output, mismo parser de JSON balanceado),
-  pidiéndole que busque varios precios de venta al público en la web y
-  elija **el valor que más se repita** entre fuentes (o el más consistente
-  si ninguno se repite exacto, descartando outliers). Devuelve
-  `pvpUsd | null`, `confianza`, `fuentesConsistentes`, `razonamiento` y
-  `fuenteUrl` (link de la publicación de donde salió el precio). Si no
-  encuentra nada confiable devuelve `pvpUsd: null` en vez de inventar un
-  número. `lib/aiClassifier.ts` pide exactamente los mismos campos
-  (`pvp_usd`, `pvp_fuente_url`, etc.) dentro de su propio JSON de respuesta.
+  `web_search`, sin structured output, mismo parser de JSON balanceado).
+  Devuelve `pvpUsd | null`, `confianza` y `razonamiento`. Si no encuentra
+  nada confiable devuelve `pvpUsd: null` en vez de inventar un número.
+  `lib/aiClassifier.ts` pide el mismo campo `pvp_usd` (más
+  `pvp_razonamiento`) dentro de su propio JSON de respuesta.
+- **ACTUALIZACIÓN (17/07/2026, misma tarde)**: la primera versión le pedía
+  al modelo que comparara precios de varias fuentes, eligiera "el que más se
+  repita" y devolviera un `fuente_url` de origen — en la práctica terminaba
+  agarrando el precio de UNA ficha técnica encontrada (a veces de un
+  producto relacionado pero no exacto), dando valores incorrectos. Se
+  simplificó a una pregunta directa: *"¿Cuál es el precio promedio actual de
+  venta al público de MARCA MODELO?"*, pidiéndole que promedie si encuentra
+  varios precios en vez de "elegir una fuente ganadora". Se sacaron por
+  completo `fuente_url` y `fuentes_consistentes` de ambos prompts (y de
+  `SieveClassifyResult`/`PvpResult`/`ModelPvpEntry`) — el precio en el
+  dashboard ya NO es un link, es texto plano (con el razonamiento como
+  tooltip). La tabla `model_pvp` conserva las columnas `fuente_url` y
+  `fuentes_consistentes` en la base (no se borraron por prolijidad de no
+  tocar el esquema sin necesidad), pero el código ya no las llena ni las
+  lee.
 - Es un archivo deliberadamente independiente de `lib/aiClassifier.ts`
   (repite ~40 líneas de boilerplate de la llamada a OpenAI en vez de
   compartir un helper) para no tocar el código del tamizador, que ya está
@@ -557,10 +568,6 @@ intento que no encontró nada).
   `model_pvp`, calcada de `lib/modelImages.ts`/`getOrSearchModelImage()`.
 - No usa ninguna variable de entorno nueva: reutiliza `OPENAI_API_KEY` (la
   misma del tamizador).
-- El precio se muestra como **link clickeable** hacia `fuente_url` (la
-  publicación de donde salió el dato), para poder verificarlo con un click.
-  Si no hay `fuente_url` guardada (ej. filas viejas de antes de este
-  campo), se muestra como texto plano en vez de link.
 - Tanto **FOB Unit.** como **PVP USD** se muestran **redondeados, sin
   decimales** (mismo formato que la columna FOB USD).
 
