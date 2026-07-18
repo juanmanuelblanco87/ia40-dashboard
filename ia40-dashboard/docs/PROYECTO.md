@@ -635,6 +635,40 @@ ocupar menos espacio en la fila; el texto descriptivo ("Ver imagen", "Sin
 imagen", "Reintentar", etc.) ahora vive en el atributo `title` (tooltip al
 pasar el mouse) en vez de en el botón mismo.
 
+**Botón "💲 Completar PVP"** (17/07/2026): consecuencia directa de la
+ACTUALIZACIÓN 2 de más arriba — al volver el PVP del tamizador puramente
+oportunista (para no revivir el problema de lentitud), la mayoría de los
+modelos queda sin PVP después de tamizar (ej. reporte real del usuario: 10
+de 100). Clickear "Consultar" fila por fila para completar el resto no
+escala, así que se agregó un batch dedicado:
+
+- `GET /api/pvp-sieve?category=<slug>&limit=<n>` (`app/api/pvp-sieve/route.ts`):
+  busca, priorizado por FOB total (mismo criterio que `/api/sieve`), todos
+  los modelos de una categoría cuyo `model_pvp.status` todavía no sea
+  `'found'`, y corre sobre cada uno la búsqueda EXHAUSTIVA de
+  `getOrSearchModelPvp()` (`lib/modelPvp.ts` → `lib/pvpFinder.ts` — la misma
+  que usa el botón manual "Consultar precio": foco en Argentina, con
+  fallback a productos similares). Mismo patrón de lote que `/api/sieve`:
+  `limit` default 60 / máximo 100, `PVP_SIEVE_CONCURRENCY` (default 8) items
+  en paralelo por tanda, `PVP_SIEVE_TIME_BUDGET_MS` (default 260000) para
+  cortar antes de que Vercel mate la función y devolver `parcial: true` en
+  vez de perder la respuesta completa (mismo mecanismo que el incidente de
+  lentitud del tamizador, sección 15).
+- `GET /api/pvp-sieve/status?category=<slug>` (`app/api/pvp-sieve/status/route.ts`):
+  cuenta cuántas combinaciones marca+modelo tiene la categoría vs. cuántas
+  ya tienen `model_pvp.status = 'found'`, para la barra de progreso — no
+  gasta OpenAI, es liviano, igual que `/api/sieve/status`.
+- El botón "💲 Completar PVP" en `app/page.tsx` corre este batch y muestra un
+  resumen (`Procesados X de Y · PVP encontrado: N · Sin evidencia: N ·
+  Errores: N`), con el mismo aviso de `parcial` que el tamizador de
+  segmentos. Al terminar, si encontró algo nuevo, recarga la columna PVP USD
+  de la tabla (`reloadModelPvp()`) sin que el usuario tenga que refrescar la
+  página.
+- Como reusa `getOrSearchModelPvp()` tal cual, correr este batch varias
+  veces sobre la misma categoría es seguro: los `'found'` no se vuelven a
+  consultar (no se duplica gasto de OpenAI), solo se reintentan los
+  `'not_found'`/`'error'`/sin fila todavía.
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -654,6 +688,8 @@ pasar el mouse) en vez de en el botón mismo.
 | `/api/sieve` | GET | Tamizador de segmentos: busca en la web + IA y corrige/mueve modelos no validados de una categoría; de paso, completa el PVP en `model_pvp` con la misma búsqueda (ver secciones 10.1 y 10.2). Bajo demanda, sin cron. |
 | `/api/sieve` | DELETE | "Limpiar tamizado": borra `model_sieve_log` de una categoría para poder re-tamizarla de cero (ver sección 10.2, botón "🧹 Limpiar tamizado"). |
 | `/api/sieve/status` | GET | Progreso del tamizador para una categoría (`{total, tamizado, pendientes, porcentaje}`). Liviano, sin llamadas externas — usado para la barra de progreso. |
+| `/api/pvp-sieve` | GET | "Completar PVP": corre en lote la búsqueda exhaustiva de precio (`lib/pvpFinder.ts`) sobre los modelos sin PVP `'found'` de una categoría (ver sección 10.2, botón "💲 Completar PVP"). |
+| `/api/pvp-sieve/status` | GET | Progreso de PVP para una categoría (`{total, encontrados, pendientes, porcentaje}`). Liviano — usado para la barra de progreso del botón "Completar PVP". |
 
 ## 12. Variables de entorno
 
