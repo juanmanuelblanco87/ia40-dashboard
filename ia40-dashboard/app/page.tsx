@@ -734,6 +734,19 @@ interface SieveSummary {
   error?: string;
 }
 
+/** Resumen del boton "Completar PVP" (ver /api/pvp-sieve). */
+interface PvpSieveSummary {
+  categoria?: string;
+  solicitados?: number;
+  procesados?: number;
+  encontrados?: number;
+  sin_evidencia?: number;
+  errores?: number;
+  detalle_errores?: string[];
+  parcial?: boolean;
+  error?: string;
+}
+
 const DEFAULT_SEGMENTO_FILTER: Record<string, string[]> = {
   sillas_ducha: ["Sillas de Ducha / Sanitarias"],
   almohadones_ortopedicos: ["Cojín Ortopédico / Antiescaras"],
@@ -845,6 +858,50 @@ export default function Home() {
     const restMin = mins % 60;
     return `~${hs} h ${restMin} min`;
   }
+
+  // ---- "Completar PVP": batch exhaustivo (lib/pvpFinder.ts) para los
+  // modelos que el tamizador de segmentos dejo sin PVP (el PVP del
+  // tamizador es solo oportunista, ver ACTUALIZACION 2 en
+  // lib/aiClassifier.ts) -- corre /api/pvp-sieve, que reusa la misma
+  // getOrSearchModelPvp() del boton manual "Consultar precio" pero en lote.
+  const [pvpSieving, setPvpSieving] = useState(false);
+  const [pvpSieveResult, setPvpSieveResult] = useState<PvpSieveSummary | null>(null);
+  const [showPvpSieveErrors, setShowPvpSieveErrors] = useState(false);
+  const [pvpSieveStatus, setPvpSieveStatus] = useState<{ total: number; encontrados: number; pendientes: number; porcentaje: number } | null>(null);
+  const [pvpSieveSecondsPerItem, setPvpSieveSecondsPerItem] = useState<number | null>(null);
+
+  const reloadPvpSieveStatus = () => {
+    if (!slug) {
+      setPvpSieveStatus(null);
+      return;
+    }
+    fetch(`/api/pvp-sieve/status?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => setPvpSieveStatus(d.error ? null : d))
+      .catch(() => setPvpSieveStatus(null));
+  };
+
+  useEffect(reloadPvpSieveStatus, [slug]);
+
+  const runPvpSieve = () => {
+    if (!slug || pvpSieving) return;
+    setPvpSieving(true);
+    setPvpSieveResult(null);
+    setShowPvpSieveErrors(false);
+    const startedAt = Date.now();
+    fetch(`/api/pvp-sieve?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setPvpSieveResult(d);
+        const elapsedSec = (Date.now() - startedAt) / 1000;
+        const procesados = d.procesados ?? 0;
+        if (procesados > 0) setPvpSieveSecondsPerItem(elapsedSec / procesados);
+        if ((d.encontrados ?? 0) > 0) reloadModelPvp();
+        reloadPvpSieveStatus();
+      })
+      .catch(() => setPvpSieveResult({ error: "No se pudo completar el PVP. Proba de nuevo." } as any))
+      .finally(() => setPvpSieving(false));
+  };
 
   useEffect(() => {
     fetch("/api/categories")
@@ -1124,6 +1181,72 @@ export default function Home() {
             </div>
           )}
         </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <button onClick={runPvpSieve} disabled={pvpSieving || !slug} title="Completa el PVP de los modelos que el tamizador dejó sin precio, usando la búsqueda exhaustiva (misma que 'Consultar precio', pero en lote)">
+            {pvpSieving ? "💲 Completando PVP..." : "💲 Completar PVP"}
+          </button>
+          {pvpSieveStatus && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+              <div style={{ width: 120, height: 8, background: "var(--border, #2a2e37)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ width: `${pvpSieveStatus.porcentaje}%`, height: "100%", background: "var(--accent)" }} />
+              </div>
+              <span>
+                {pvpSieveStatus.encontrados}/{pvpSieveStatus.total} con PVP ({pvpSieveStatus.porcentaje}%)
+              </span>
+              {pvpSieveSecondsPerItem != null && pvpSieveStatus.pendientes > 0 && (
+                <span>· ≈{fmtDuration(pvpSieveStatus.pendientes * pvpSieveSecondsPerItem)} restante</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {pvpSieveResult && (
+          <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
+            {pvpSieveResult.error ? (
+              <div style={{ color: "#d93a3a" }}>{pvpSieveResult.error}</div>
+            ) : (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <strong>
+                    Procesados {pvpSieveResult.procesados ?? 0} de {pvpSieveResult.solicitados ?? 0} pendientes de PVP
+                  </strong>
+                  <button onClick={() => setPvpSieveResult(null)} style={{ padding: "2px 8px", fontSize: 12 }}>Cerrar</button>
+                </div>
+                <div style={{ color: "var(--muted)" }}>
+                  PVP encontrado: {pvpSieveResult.encontrados ?? 0} · Sin evidencia: {pvpSieveResult.sin_evidencia ?? 0}
+                  {(pvpSieveResult.errores ?? 0) > 0 && (
+                    <>
+                      {" "}· Errores: {pvpSieveResult.errores}{" "}
+                      <button
+                        onClick={() => setShowPvpSieveErrors((v) => !v)}
+                        style={{ padding: "1px 6px", fontSize: 11, marginLeft: 4 }}
+                      >
+                        {showPvpSieveErrors ? "Ocultar errores" : "Ver errores"}
+                      </button>
+                    </>
+                  )}
+                </div>
+                {pvpSieveResult.parcial && (
+                  <div style={{ color: "var(--muted)", marginTop: 6 }}>
+                    ⏱️ Se alcanzó el límite de tiempo de este click antes de terminar el lote completo — lo ya
+                    procesado quedó guardado. Clickeá "Completar PVP" de nuevo para seguir con el resto.
+                  </div>
+                )}
+                {showPvpSieveErrors && (pvpSieveResult.detalle_errores?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong style={{ color: "#d93a3a" }}>Detalle de errores:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "#d93a3a" }}>
+                      {pvpSieveResult.detalle_errores!.slice(0, 10).map((e, i) => (
+                        <li key={i}>{e}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         {sieveResult && (
           <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
