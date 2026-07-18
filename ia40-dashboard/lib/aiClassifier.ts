@@ -45,6 +45,27 @@
  * de un modelo puntual desde el boton "Consultar" de la tabla). El resultado
  * de PVP de esta busqueda lo guarda app/api/sieve/route.ts en la tabla
  * model_pvp junto con el resto del procesamiento de cada fila.
+ *
+ * ACTUALIZACION 2 (17/07/2026, mas tarde -- FIX DE LENTITUD): una version
+ * intermedia de la instruccion de PVP le pedia al modelo "si no encontras el
+ * precio del modelo exacto, buscá el de productos similares" -- esto
+ * contradice la regla de "UNA sola busqueda" de mas arriba y en la practica
+ * el modelo terminaba disparando 2 o 3 llamadas al tool web_search por item
+ * (una para identificar el producto, otra para el precio, a veces otra mas
+ * para el fallback a productos similares), multiplicando la latencia por
+ * item y volviendo un lote de 100 mucho mas lento (reporte del usuario:
+ * "queda muy lento el tamizador"). La instruccion de PVP ahora es
+ * PURAMENTE OPORTUNISTA: solo aprovecha lo que ya aparecio en la UNICA
+ * busqueda hecha para identificar el producto, sin pedir ni permitir una
+ * busqueda adicional -- por lo tanto va a devolver pvp_usd en null con mas
+ * frecuencia que antes (esto es intencional, es el trade-off elegido para
+ * mantener el tamizador rapido). El comportamiento mas exhaustivo (forzar
+ * una busqueda dedicada de precio, con fallback a productos similares y foco
+ * en Argentina) se mantiene SOLO en lib/pvpFinder.ts, usado por el boton
+ * manual "Consultar precio" -- ese camino procesa un modelo a la vez
+ * (activado por click del usuario), asi que un par de segundos extra de
+ * busqueda no se sienten como "lento" de la misma forma que en un lote de
+ * 100 items.
  */
 
 const OPENAI_MODEL = "gpt-5.4-mini";
@@ -112,7 +133,7 @@ ${opcionesCategoriaTexto}
 
 Basandote en lo que encuentres buscando en la web, elegi SIEMPRE el segmento que mejor se ajuste al producto -- incluso si la evidencia es parcial, indirecta o ambigua (por ejemplo, si no encontras el modelo exacto pero si otros productos de la misma marca, o el nombre/codigo del modelo da una pista razonable del tipo de producto). NUNCA dejes "segmento" en null: usa el campo "confianza" para indicar que tan seguro estas ("baja" si tuviste que inferir con poca evidencia), pero elegi igual la opcion mas probable de la lista. Dejar "categoria_slug" en null (o igual a la categoria actual) si no hay evidencia clara de que el producto sea de otra categoria -- ese cambio si requiere mas certeza porque mueve la fila a otro lugar del sistema.
 
-Ademas, como parte de esa MISMA busqueda (no hagas una busqueda adicional solo para esto), respondé esta pregunta simple: ¿Cual es el PVP (precio de venta al publico) estimado en dolares estadounidenses (USD), para el mercado de Argentina, de este producto? Si encontras el precio del modelo EXACTO en Argentina, usalo (si hay varios, promedialos, convirtiendo a USD si estan en pesos argentinos u otra moneda). Si NO encontras precios de este modelo exacto en Argentina, buscá el precio de productos equivalentes o similares -- misma marca y mismo tipo de producto -- en Argentina o en el mercado internacional si no hay oferta local, y usalo como estimacion (indicá confianza "baja" y aclaralo en "pvp_razonamiento"). Evitá dejar "pvp_usd" en null salvo que, despues de buscar, realmente no encuentres ningun precio relacionado (ni siquiera de productos similares).
+Ademas, de forma puramente OPORTUNISTA: si en los MISMOS resultados de esa unica busqueda que ya hiciste llegaste a ver algun precio de venta al publico de este producto (o de un producto muy similar de la misma marca), anotalo como PVP estimado en dolares estadounidenses (USD) para el mercado de Argentina (convertilo a USD si esta en otra moneda, e indicá confianza "baja" si es de un producto similar y no del modelo exacto). NO hagas ninguna busqueda adicional para esto bajo ningun motivo -- es informacion de paso, no el objetivo principal de esta llamada. Si en esos resultados no viste ningun precio, dejá "pvp_usd" en null (el usuario puede completarlo despues con el boton "Consultar precio" de la columna PVP USD, que si hace una busqueda dedicada a esto).
 
 Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
 {"categoria_slug": string o null, "segmento": string (nunca null, elegi el mas probable), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda y si fue una inferencia indirecta", "pvp_usd": number o null (el precio estimado en USD para Argentina), "pvp_razonamiento": "explicacion breve de 1 oracion: que precios encontraste, si son de Argentina o estimados, y como calculaste el valor"}`;
