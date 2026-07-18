@@ -466,6 +466,27 @@ específico. Tres cambios para esto:
    `model_sieve_log` al momento (no al final), no se pierde ni se reprocesa
    nada — el próximo click retoma justo donde quedó.
 
+**Incidente 17/07/2026 (tercera vuelta) — el tamizador volvió a ponerse
+lento después de agregar PVP:** al fusionar la pregunta de PVP (sección
+10.2) en la misma búsqueda del tamizador, una versión intermedia del prompt
+le decía al modelo "si no encontrás el precio del modelo exacto, buscá el de
+productos similares" — esa instrucción contradice la regla de "UNA sola
+búsqueda" de arriba, y en la práctica el modelo terminaba disparando 2 o 3
+llamadas al tool `web_search` por ítem (identificación del producto + precio
++ a veces un fallback a productos similares) en vez de 1, multiplicando la
+latencia por ítem sobre un lote de 100 (reporte del usuario: "queda muy
+lento el tamizador"). Fix: la instrucción de PVP dentro de `lib/aiClassifier.ts`
+ahora es **puramente oportunista** — solo aprovecha lo que ya apareció en la
+ÚNICA búsqueda hecha para identificar el producto, sin pedir ni permitir una
+búsqueda adicional. Esto significa que `pvp_usd` va a quedar en `null` con
+más frecuencia que en la versión "agresiva" (trade-off intencional para
+mantener el tamizador rápido); el comportamiento exhaustivo (búsqueda
+dedicada de precio, con fallback a productos similares y foco en Argentina)
+se mantiene **solo** en `lib/pvpFinder.ts`, usado por el botón manual
+"Consultar precio" — como ese camino procesa un modelo a la vez por click
+del usuario, un par de segundos extra de búsqueda ahí no se sienten como
+lentitud de la misma forma que en un lote de 100.
+
 **Historial de proveedores de IA para el tamizador (todo el 17/07/2026):**
 esta feature pasó por 3 proveedores distintos en el mismo día, cada cambio
 motivado por una limitación real encontrada en producción:
