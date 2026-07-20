@@ -32,6 +32,8 @@ function fmtPctInput(n: number | null): string {
   return n == null ? "" : (n * 100).toFixed(2);
 }
 
+type TamanoEnvio = "chico" | "mediano" | "grande";
+
 interface ProductType {
   id: number;
   nombre: string;
@@ -45,7 +47,7 @@ interface ProductType {
   iva_razonamiento: string | null;
   iva_status: string;
   trader_pct: number;
-  envio_ars_con_iva: number;
+  tamano_envio: TamanoEnvio;
   cbm_m3: number | null;
   cbm_confianza: string | null;
   cbm_razonamiento: string | null;
@@ -65,7 +67,7 @@ interface Supuestos {
   ley25413Pct: number;
   seguroUsdUnidad: number;
   feeBajoTicketArs: number;
-  umbralEnvioGratisArs: number;
+  umbralBajoValorArs: number;
   descuentoDistribucionPct: number;
   fleteMaritimoUsd: number;
   fleteConfianza: string | null;
@@ -77,6 +79,9 @@ interface Supuestos {
   fleteLocalUsd: number;
   manipuleoUsd: number;
   capacidadCbmContenedor: number;
+  envioChicoArs: number;
+  envioMedianoArs: number;
+  envioGrandeArs: number;
 }
 
 interface CalcCostoNacionalizado {
@@ -100,7 +105,7 @@ interface CalcCanal {
   iibbArs: number;
   padsArs: number;
   feeBajoTicketArs: number;
-  envioGratisAplica: boolean;
+  envioPorTamanoAplica: boolean;
   margenArs: number;
   margenPctSobreNeto: number;
   margenPctSobreConIva: number;
@@ -123,6 +128,15 @@ const CONFIANZA_COLOR: Record<string, string> = {
   media: "#e0a52f",
   baja: "#d93a3a",
 };
+
+/** Spinner de carga (20/07/2026): se muestra mientras se espera una
+ * respuesta de IA (arancel/IVA/CBM/PVP/flete) o el calculo del FOB, para
+ * que quede claro que la app esta "pensando" -- pedido explicito del
+ * usuario. `light` = variante para fondos oscuros (ej. dentro de un boton
+ * ya resaltado). */
+function Spinner({ light }: { light?: boolean }) {
+  return <span className={`spinner${light ? " spinner-light" : ""}`} />;
+}
 
 function ConfianzaDot({ confianza, razonamiento }: { confianza: string | null; razonamiento: string | null }) {
   if (!confianza) return null;
@@ -159,7 +173,7 @@ export default function CalculoImportacionPage() {
     arancelPct: string;
     ivaPct: string;
     traderPct: string;
-    envioArsConIva: string;
+    tamanoEnvio: TamanoEnvio;
     cbmM3: string;
   } | null>(null);
 
@@ -233,7 +247,7 @@ export default function CalculoImportacionPage() {
       arancelPct: fmtPctInput(selected.arancel_pct),
       ivaPct: fmtPctInput(selected.iva_pct),
       traderPct: fmtPctInput(selected.trader_pct),
-      envioArsConIva: String(selected.envio_ars_con_iva ?? 0),
+      tamanoEnvio: selected.tamano_envio ?? "mediano",
       cbmM3: selected.cbm_m3 != null ? String(selected.cbm_m3) : "",
     });
     setShowEditar(true);
@@ -253,7 +267,7 @@ export default function CalculoImportacionPage() {
               arancelPct: fmtPctInput(updated.arancel_pct),
               ivaPct: fmtPctInput(updated.iva_pct),
               traderPct: fmtPctInput(updated.trader_pct),
-              envioArsConIva: String(updated.envio_ars_con_iva ?? 0),
+              tamanoEnvio: updated.tamano_envio ?? "mediano",
               cbmM3: updated.cbm_m3 != null ? String(updated.cbm_m3) : "",
             });
           }
@@ -275,7 +289,7 @@ export default function CalculoImportacionPage() {
         arancelPct: Number(editForm.arancelPct) / 100,
         ivaPct: Number(editForm.ivaPct) / 100,
         traderPct: Number(editForm.traderPct) / 100,
-        envioArsConIva: Number(editForm.envioArsConIva),
+        tamanoEnvio: editForm.tamanoEnvio,
         cbmM3: Number(editForm.cbmM3),
       }),
     })
@@ -348,7 +362,7 @@ export default function CalculoImportacionPage() {
       ley25413Pct: fmtPctInput(supuestos.ley25413Pct),
       seguroUsdUnidad: String(supuestos.seguroUsdUnidad),
       feeBajoTicketArs: String(supuestos.feeBajoTicketArs),
-      umbralEnvioGratisArs: String(supuestos.umbralEnvioGratisArs),
+      umbralBajoValorArs: String(supuestos.umbralBajoValorArs),
       descuentoDistribucionPct: fmtPctInput(supuestos.descuentoDistribucionPct),
       fleteMaritimoUsd: String(supuestos.fleteMaritimoUsd),
       forwarderUsd: String(supuestos.forwarderUsd),
@@ -357,6 +371,9 @@ export default function CalculoImportacionPage() {
       fleteLocalUsd: String(supuestos.fleteLocalUsd),
       manipuleoUsd: String(supuestos.manipuleoUsd),
       capacidadCbmContenedor: String(supuestos.capacidadCbmContenedor),
+      envioChicoArs: String(supuestos.envioChicoArs),
+      envioMedianoArs: String(supuestos.envioMedianoArs),
+      envioGrandeArs: String(supuestos.envioGrandeArs),
     });
     setShowSupuestos(true);
   };
@@ -376,7 +393,7 @@ export default function CalculoImportacionPage() {
         ley25413Pct: Number(supuestosForm.ley25413Pct) / 100,
         seguroUsdUnidad: Number(supuestosForm.seguroUsdUnidad),
         feeBajoTicketArs: Number(supuestosForm.feeBajoTicketArs),
-        umbralEnvioGratisArs: Number(supuestosForm.umbralEnvioGratisArs),
+        umbralBajoValorArs: Number(supuestosForm.umbralBajoValorArs),
         descuentoDistribucionPct: Number(supuestosForm.descuentoDistribucionPct) / 100,
         fleteMaritimoUsd: Number(supuestosForm.fleteMaritimoUsd),
         forwarderUsd: Number(supuestosForm.forwarderUsd),
@@ -385,6 +402,9 @@ export default function CalculoImportacionPage() {
         fleteLocalUsd: Number(supuestosForm.fleteLocalUsd),
         manipuleoUsd: Number(supuestosForm.manipuleoUsd),
         capacidadCbmContenedor: Number(supuestosForm.capacidadCbmContenedor),
+        envioChicoArs: Number(supuestosForm.envioChicoArs),
+        envioMedianoArs: Number(supuestosForm.envioMedianoArs),
+        envioGrandeArs: Number(supuestosForm.envioGrandeArs),
       }),
     })
       .then((r) => r.json())
@@ -502,8 +522,13 @@ export default function CalculoImportacionPage() {
               </div>
               {creandoError && <div style={{ color: "#d93a3a", fontSize: 12, marginTop: 6 }}>{creandoError}</div>}
               <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                <button onClick={crearTipoProducto} disabled={creando || !nuevoNombre.trim()}>
-                  {creando ? "Creando y estimando arancel/IVA/CBM con IA..." : "Crear"}
+                <button
+                  onClick={crearTipoProducto}
+                  disabled={creando || !nuevoNombre.trim()}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
+                >
+                  {creando && <Spinner />}
+                  {creando ? "Estimando arancel/IVA/CBM con IA..." : "Crear"}
                 </button>
                 <button onClick={() => setShowNuevo(false)} disabled={creando}>
                   Cancelar
@@ -534,8 +559,10 @@ export default function CalculoImportacionPage() {
                 <strong>{fmtPct(selected.trader_pct)}</strong>
               </div>
               <div>
-                <span style={{ color: "var(--muted)" }}>Envío al cliente: </span>
-                <strong>${fmtNumber(selected.envio_ars_con_iva)}</strong>
+                <span style={{ color: "var(--muted)" }}>Tamaño envío: </span>
+                <strong>
+                  {selected.tamano_envio === "chico" ? "Chico" : selected.tamano_envio === "grande" ? "Grande" : "Mediano"}
+                </strong>
               </div>
               <div>
                 <span style={{ color: "var(--muted)" }}>PVP mercado (IA): </span>
@@ -569,7 +596,12 @@ export default function CalculoImportacionPage() {
                 />
               </div>
               <div style={{ display: "flex", alignItems: "flex-end" }}>
-                <button onClick={calcular} disabled={calculando || !fobUsd}>
+                <button
+                  onClick={calcular}
+                  disabled={calculando || !fobUsd}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
+                >
+                  {calculando && <Spinner />}
                   {calculando ? "Calculando..." : "Calcular"}
                 </button>
               </div>
@@ -696,7 +728,7 @@ export default function CalculoImportacionPage() {
                     style={inputStyle}
                   />
                   <button onClick={() => recalcularCampo("arancel")} disabled={refrescando === "arancel"} title="Recalcular con IA">
-                    {refrescando === "arancel" ? "…" : "🔄"}
+                    {refrescando === "arancel" ? <Spinner /> : "🔄"}
                   </button>
                 </div>
               </div>
@@ -710,7 +742,7 @@ export default function CalculoImportacionPage() {
                     style={inputStyle}
                   />
                   <button onClick={() => recalcularCampo("iva")} disabled={refrescando === "iva"} title="Recalcular con IA">
-                    {refrescando === "iva" ? "…" : "🔄"}
+                    {refrescando === "iva" ? <Spinner /> : "🔄"}
                   </button>
                 </div>
               </div>
@@ -726,7 +758,7 @@ export default function CalculoImportacionPage() {
                     style={inputStyle}
                   />
                   <button onClick={() => recalcularCampo("cbm")} disabled={refrescando === "cbm"} title="Recalcular con IA">
-                    {refrescando === "cbm" ? "…" : "🔄"}
+                    {refrescando === "cbm" ? <Spinner /> : "🔄"}
                   </button>
                 </div>
               </div>
@@ -742,13 +774,16 @@ export default function CalculoImportacionPage() {
             </div>
             <div className="row" style={{ marginTop: 10 }}>
               <div style={{ flex: 1, minWidth: 140 }}>
-                <label>Envío al cliente (ARS con IVA, manual)</label>
-                <input
-                  type="number"
-                  value={editForm.envioArsConIva}
-                  onChange={(e) => setEditForm({ ...editForm, envioArsConIva: e.target.value })}
+                <label>Tamaño de envío (Mercado Envíos)</label>
+                <select
+                  value={editForm.tamanoEnvio}
+                  onChange={(e) => setEditForm({ ...editForm, tamanoEnvio: e.target.value as TamanoEnvio })}
                   style={inputStyle}
-                />
+                >
+                  <option value="chico">Chico</option>
+                  <option value="mediano">Mediano</option>
+                  <option value="grande">Grande (ej. silla de ruedas)</option>
+                </select>
               </div>
               <div style={{ flex: 1, minWidth: 140 }}>
                 <label>PVP mercado (IA)</label>
@@ -757,7 +792,7 @@ export default function CalculoImportacionPage() {
                     {selected.pvp_ars_estimado != null ? `$${fmtNumber(selected.pvp_ars_estimado)}` : "sin dato"}
                   </span>
                   <button onClick={() => recalcularCampo("pvp")} disabled={refrescando === "pvp"} title="Recalcular con IA">
-                    {refrescando === "pvp" ? "…" : "🔄"}
+                    {refrescando === "pvp" ? <Spinner /> : "🔄"}
                   </button>
                 </div>
               </div>
@@ -809,8 +844,17 @@ export default function CalculoImportacionPage() {
             </div>
             <div className="row" style={{ marginTop: 10 }}>
               <Campo label="Seguro por unidad (USD)" value={supuestosForm.seguroUsdUnidad} onChange={(v) => setSupuestosForm({ ...supuestosForm, seguroUsdUnidad: v })} />
-              <Campo label="Fee bajo ticket (ARS)" value={supuestosForm.feeBajoTicketArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, feeBajoTicketArs: v })} />
-              <Campo label="Umbral envío gratis (ARS)" value={supuestosForm.umbralEnvioGratisArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, umbralEnvioGratisArs: v })} />
+              <Campo label="Fee producto de bajo valor (ARS)" value={supuestosForm.feeBajoTicketArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, feeBajoTicketArs: v })} />
+              <Campo label="Umbral de bajo valor (ARS)" value={supuestosForm.umbralBajoValorArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, umbralBajoValorArs: v })} />
+            </div>
+            <div style={{ color: "var(--muted)", fontSize: 11.5, marginTop: 6 }}>
+              Si el PVP con IVA de MeLi es menor al umbral de arriba, se cobra solo el Fee de bajo valor. Si es mayor o
+              igual, se cobra el costo de envío de Mercado Envíos según el tamaño del producto (abajo).
+            </div>
+            <div className="row" style={{ marginTop: 10 }}>
+              <Campo label="Envío chico (ARS)" value={supuestosForm.envioChicoArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, envioChicoArs: v })} />
+              <Campo label="Envío mediano (ARS)" value={supuestosForm.envioMedianoArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, envioMedianoArs: v })} />
+              <Campo label="Envío grande (ARS, ej. silla de ruedas)" value={supuestosForm.envioGrandeArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, envioGrandeArs: v })} />
             </div>
             <div className="row" style={{ marginTop: 10 }}>
               <Campo label="Descuento Distribución %" value={supuestosForm.descuentoDistribucionPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, descuentoDistribucionPct: v })} />
@@ -824,7 +868,7 @@ export default function CalculoImportacionPage() {
                     style={inputStyle}
                   />
                   <button onClick={recalcularFlete} disabled={refrescandoFlete} title="Recalcular con IA">
-                    {refrescandoFlete ? "…" : "🔄"}
+                    {refrescandoFlete ? <Spinner /> : "🔄"}
                   </button>
                 </div>
                 {supuestos?.fleteRazonamiento && (
@@ -885,7 +929,7 @@ function CanalTable({ canal, showMeliDetalle }: { canal: CalcCanal; showMeliDeta
               <td style={{ textAlign: "right" }}>${fmtNumber(canal.comisionMlArs)}</td>
             </tr>
             <tr>
-              <td>(−) Envío al cliente {canal.envioGratisAplica ? "" : "(no aplica, bajo umbral)"}</td>
+              <td>(−) Envío (Mercado Envíos, {canal.envioPorTamanoAplica ? "según tamaño" : "no aplica, bajo umbral"})</td>
               <td style={{ textAlign: "right" }}>${fmtNumber(canal.envioNetoArs)}</td>
             </tr>
             <tr>
@@ -894,7 +938,7 @@ function CanalTable({ canal, showMeliDetalle }: { canal: CalcCanal; showMeliDeta
             </tr>
             {canal.feeBajoTicketArs > 0 && (
               <tr>
-                <td>(−) Fee bajo ticket</td>
+                <td>(−) Fee producto de bajo valor</td>
                 <td style={{ textAlign: "right" }}>${fmtNumber(canal.feeBajoTicketArs)}</td>
               </tr>
             )}
