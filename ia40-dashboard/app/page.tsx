@@ -881,18 +881,32 @@ export default function Home() {
   const [pvpSieveStatus, setPvpSieveStatus] = useState<{ total: number; encontrados: number; pendientes: number; porcentaje: number } | null>(null);
   const [pvpSieveSecondsPerItem, setPvpSieveSecondsPerItem] = useState<number | null>(null);
 
+  // El % de avance y el batch en si ahora respetan el filtro de Segmento
+  // activo (mismo `segmentos` que usa reloadSeries) -- si no, "Completar
+  // PVP" podia gastar su cupo en modelos de OTRO segmento oculto por el
+  // filtro por defecto de la categoria (ver DEFAULT_SEGMENTO_FILTER), sin
+  // tocar nunca los que el usuario tiene realmente a la vista (reporte
+  // real: "no pega los PVP de mayor a menor peso del SOM%" con "PVP
+  // encontrado: 59" pero ninguno de los visibles en pantalla). Ver tambien
+  // ACTUALIZACION en app/api/pvp-sieve/route.ts.
+  const pvpSieveParams = () => {
+    const params = new URLSearchParams({ category: slug });
+    for (const s2 of segmentos) params.append("segmento", s2);
+    return params;
+  };
+
   const reloadPvpSieveStatus = () => {
     if (!slug) {
       setPvpSieveStatus(null);
       return;
     }
-    fetch(`/api/pvp-sieve/status?category=${encodeURIComponent(slug)}`)
+    fetch(`/api/pvp-sieve/status?${pvpSieveParams()}`)
       .then((r) => r.json())
       .then((d) => setPvpSieveStatus(d.error ? null : d))
       .catch(() => setPvpSieveStatus(null));
   };
 
-  useEffect(reloadPvpSieveStatus, [slug]);
+  useEffect(reloadPvpSieveStatus, [slug, segmentos]);
 
   const runPvpSieve = () => {
     if (!slug || pvpSieving) return;
@@ -900,7 +914,7 @@ export default function Home() {
     setPvpSieveResult(null);
     setShowPvpSieveErrors(false);
     const startedAt = Date.now();
-    fetch(`/api/pvp-sieve?category=${encodeURIComponent(slug)}`)
+    fetch(`/api/pvp-sieve?${pvpSieveParams()}`)
       .then((r) => r.json())
       .then((d) => {
         setPvpSieveResult(d);
