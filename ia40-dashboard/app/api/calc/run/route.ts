@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { calcularImportacion, type CalcSupuestos, type CalcProducto } from "@/lib/importCalc";
+import { calcularImportacion, type CalcSupuestos, type CalcProducto, type TamanoEnvio } from "@/lib/importCalc";
 import { estimarArancel, estimarIva, estimarCbm, estimarPvpMercado, CalcAiError } from "@/lib/calcAi";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +16,7 @@ function supuestosToCalc(row: any): CalcSupuestos {
     ley25413Pct: Number(row.ley_25413_pct),
     seguroUsdUnidad: Number(row.seguro_usd_unidad),
     feeBajoTicketArs: Number(row.fee_bajo_ticket_ars),
-    umbralEnvioGratisArs: Number(row.umbral_envio_gratis_ars),
+    umbralBajoValorArs: Number(row.umbral_bajo_valor_ars),
     descuentoDistribucionPct: Number(row.descuento_distribucion_pct),
     fleteMaritimoUsd: Number(row.flete_maritimo_usd),
     forwarderUsd: Number(row.forwarder_usd),
@@ -25,7 +25,14 @@ function supuestosToCalc(row: any): CalcSupuestos {
     fleteLocalUsd: Number(row.flete_local_usd),
     manipuleoUsd: Number(row.manipuleo_usd),
     capacidadCbmContenedor: Number(row.capacidad_cbm_contenedor),
+    envioChicoArs: Number(row.envio_chico_ars),
+    envioMedianoArs: Number(row.envio_mediano_ars),
+    envioGrandeArs: Number(row.envio_grande_ars),
   };
+}
+
+function esTamanoEnvioValido(v: any): v is TamanoEnvio {
+  return v === "chico" || v === "mediano" || v === "grande";
 }
 
 function productoRowToNumbers(row: any) {
@@ -34,7 +41,7 @@ function productoRowToNumbers(row: any) {
     arancel_pct: row.arancel_pct != null ? Number(row.arancel_pct) : null,
     iva_pct: row.iva_pct != null ? Number(row.iva_pct) : null,
     trader_pct: Number(row.trader_pct ?? 0),
-    envio_ars_con_iva: Number(row.envio_ars_con_iva ?? 0),
+    tamano_envio: esTamanoEnvioValido(row.tamano_envio) ? row.tamano_envio : "mediano",
     cbm_m3: row.cbm_m3 != null ? Number(row.cbm_m3) : null,
     pvp_ars_estimado: row.pvp_ars_estimado != null ? Number(row.pvp_ars_estimado) : null,
   };
@@ -171,7 +178,7 @@ export async function POST(req: Request) {
     ivaPct: producto.iva_pct ?? 0.21,
     traderPct: producto.trader_pct,
     cbmM3: producto.cbm_m3 ?? 0,
-    envioArsConIva: producto.envio_ars_con_iva,
+    tamanoEnvio: producto.tamano_envio,
   };
 
   const resultado = calcularImportacion({
