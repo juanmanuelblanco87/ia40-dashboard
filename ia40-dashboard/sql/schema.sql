@@ -168,3 +168,127 @@ create index if not exists idx_model_pvp_status on model_pvp (category_id, statu
 -- Seed inicial: categoria piloto.
 insert into categories (slug, name) values ('sillas_de_ruedas', 'Sillas de ruedas')
   on conflict (slug) do nothing;
+
+-- ===================== Calculador de Importacion (20/07/2026) =====================
+-- Modulo nuevo e independiente del catalogo de categorias de IA40 de arriba
+-- (esas 9 categorias sirven para clasificar datos de importacion YA
+-- OCURRIDOS). El calculador evalua productos HIPOTETICOS/nuevos a partir de
+-- un FOB, con su propio catalogo abierto de "tipos de producto" -- pedido
+-- explicito del usuario: "hay que dejar la logica abierta a cualquier
+-- categoria, si mañana quisiera traer televisores con una consulta a IA
+-- deberiamos cambiar los supuestos que aplican en esa NCM". Ver racional
+-- completo y formulas en docs/PROYECTO.md.
+
+-- Supuestos generales: fila unica (id=1), editable desde la UI de la
+-- calculadora. El "costo fijo por CBM utilizable" (USD/CBM) NO se guarda:
+-- se calcula en el momento como
+--   (flete_maritimo_usd + forwarder_usd + despachante_usd + thc_usd +
+--    flete_local_usd + manipuleo_usd) / capacidad_cbm_contenedor
+-- para que cualquier edicion de un componente se refleje al instante.
+create table if not exists calc_supuestos (
+  id int primary key default 1,
+  tipo_cambio_ars numeric not null default 1450,
+  comision_ml_pct numeric not null default 0.15,
+  iibb_pct numeric not null default 0.045,
+  pads_pct numeric not null default 0.01,
+  tasa_estadistica_pct numeric not null default 0.03,
+  ley_25413_pct numeric not null default 0.01,
+  seguro_usd_unidad numeric not null default 1.00,
+  -- Costo de envio de Mercado Envios (20/07/2026, pedido explicito del
+  -- usuario con los numeros reales de la tabla de MeLi): si el PVP con IVA
+  -- es MENOR a umbral_bajo_valor_ars, el vendedor paga solo este Fee fijo
+  -- de "producto de bajo valor" (no el costo de envio real).
+  fee_bajo_ticket_ars numeric not null default 2000,
+  -- Si el PVP con IVA es MAYOR O IGUAL a este umbral, en vez del Fee de
+  -- bajo valor se paga el costo de envio real segun el tamaño del producto
+  -- (envio_chico_ars / envio_mediano_ars / envio_grande_ars, mas abajo).
+  umbral_bajo_valor_ars numeric not null default 33000,
+  -- PVP a Distribucion = PVP MeLi x (1 - este %). Pedido explicito del
+  -- usuario: "sobre el PVP de MeLi colocar un 35% de descuento (35% GM
+  -- para el minorista)".
+  descuento_distribucion_pct numeric not null default 0.35,
+  -- Flete maritimo internacional (China -> Buenos Aires, contenedor 40HQ):
+  -- estimado por IA (ver lib/calcAi.ts), editable a mano si se consigue una
+  -- cotizacion mejor -- pedido explicito del usuario, 20/07/2026.
+  flete_maritimo_usd numeric not null default 3300,
+  flete_confianza text,      -- 'alta' | 'media' | 'baja'
+  flete_razonamiento text,
+  flete_status text not null default 'pending', -- 'pending' | 'found' | 'error'
+  flete_fetched_at timestamptz,
+  -- Resto de costos fijos por contenedor (no se piden por IA, se cargan a
+  -- mano igual que en la planilla original del cliente):
+  forwarder_usd numeric not null default 800,
+  despachante_usd numeric not null default 750,
+  thc_usd numeric not null default 1300,
+  flete_local_usd numeric not null default 380,
+  manipuleo_usd numeric not null default 250,
+  capacidad_cbm_contenedor numeric not null default 64.6,
+  -- Costo de envio de Mercado Envios (ARS con IVA) segun el tamaño del
+  -- producto -- pedido explicito del usuario (20/07/2026): "productos
+  -- chicos (8000 ar$) productos medianos 12000 productos grandes (silla
+  -- de ruedas) 32000". Solo aplica si PVP con IVA >= umbral_bajo_valor_ars.
+  envio_chico_ars numeric not null default 8000,
+  envio_mediano_ars numeric not null default 12000,
+  envio_grande_ars numeric not null default 32000,
+  updated_at timestamptz not null default now(),
+  check (id = 1)
+);
+insert into calc_supuestos (id) values (1) on conflict (id) do nothing;
+
+-- Catalogo abierto de "tipos de producto" del calculador (no confundir con
+-- la tabla `categories`: esta es exclusiva del calculador y se crea sobre
+-- la marcha, sin lista fija). Arancel, IVA y CBM se estiman por IA (OpenAI
+-- + tool web_search, ver lib/calcAi.ts) la primera vez que se calcula ese
+-- tipo de producto, y quedan cacheados aca -- editables a mano y con boton
+-- de "recalcular" (mismo patron que model_pvp/model_images). El PVP de
+-- mercado tambien se estima por IA, pero SOLO si el usuario no carga un
+-- PVP manual al correr un calculo -- pedido explicito del usuario: "el PVP
+-- es algo que tambien quiero colocar yo manualmente, pero si no se coloca
+-- que lo calcule por IA".
+create table if not exists calc_product_types (
+  id serial primary key,
+  nombre text not null unique,
+  ncm_code text, -- opcional, solo informativo/referencia
+
+  arancel_pct numeric,
+  arancel_confianza text,
+  arancel_razonamiento text,
+  arancel_status text not null default 'pending', -- 'pending' | 'found' | 'error'
+  arancel_fetched_at timestamptz,
+
+  iva_pct numeric,
+  iva_confianza text,
+  iva_razonamiento text,
+  iva_status text not null default 'pending',
+  iva_fetched_at timestamptz,
+
+  -- Trader NO es por IA: default 0%, se edita a mano solo para el caso
+  -- puntual donde SI se paga comision de agente de compra -- pedido
+  -- explicito del usuario: "el trader dejalo 0% y dejalo editable en el
+  -- caso que tengamos que abonarlo".
+  trader_pct numeric not null default 0,
+
+  -- Categoria de tamaño para el costo de envio de Mercado Envios (ver
+  -- calc_supuestos.envio_chico_ars/envio_mediano_ars/envio_grande_ars) --
+  -- reemplaza al viejo campo manual "envio_ars_con_iva" (20/07/2026): el
+  -- usuario aclaro que MeLi cobra segun una tabla de tamaño, no un monto
+  -- libre por producto. NO aplica al canal Distribucion (el distribuidor
+  -- arregla su propia logistica).
+  tamano_envio text not null default 'mediano'
+    check (tamano_envio in ('chico', 'mediano', 'grande')),
+
+  cbm_m3 numeric,
+  cbm_confianza text,
+  cbm_razonamiento text,
+  cbm_status text not null default 'pending',
+  cbm_fetched_at timestamptz,
+
+  pvp_ars_estimado numeric, -- con IVA
+  pvp_confianza text,
+  pvp_razonamiento text,
+  pvp_status text not null default 'pending',
+  pvp_fetched_at timestamptz,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
