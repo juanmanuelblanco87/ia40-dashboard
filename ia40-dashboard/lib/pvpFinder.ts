@@ -39,6 +39,25 @@
  * local, que convierta a USD un precio internacional como estimacion,
  * aclarandolo en el razonamiento).
  *
+ * ACTUALIZACION 4 (20/07/2026) -- BUG DE FORMATO DE NUMEROS ARGENTINO: caso
+ * real detectado por el usuario (comparando contra una busqueda manual en
+ * Gemini): para "ASIENTO ESPUMA INTEL" (MELEJ S.R.L) el sistema devolvio
+ * "pvp_usd": 498, cuando el precio real rondaba los $27.000-$32.000 PESOS
+ * ARGENTINOS (unos USD 21-27, no USD 498). Hipotesis mas probable: el
+ * modelo encontro un precio en pesos escrito con el formato argentino
+ * (punto = separador de miles, coma = separador decimal, ej. "$498.000"
+ * significa CUATROCIENTOS NOVENTA Y OCHO MIL pesos) y lo interpreto como
+ * si "498" ya fuera el valor en dolares, sin dividir por el tipo de cambio
+ * -- un error de parseo de formato numerico, no de busqueda. Se agregan al
+ * prompt: (a) una explicacion explicita del formato numerico argentino
+ * para que no lo confunda con el formato "punto=decimal" de USD/ingles,
+ * (b) el pedido de mostrar el monto en pesos ENCONTRADO (antes de
+ * convertir) y el tipo de cambio usado en el razonamiento, para poder
+ * auditar el calculo desde la tabla, y (c) un chequeo de sensatez: si el
+ * resultado en USD le da sospechosamente alto o bajo para el tipo de
+ * producto, que revise si confundio el separador de miles antes de
+ * responder.
+ *
  * OJO: este archivo repite (en vez de importar) la logica de llamada a la
  * Responses API que ya existe en aiClassifier.ts. Es una decision deliberada:
  * el tamizador ya esta probado en produccion y no queremos arriesgar esa
@@ -70,8 +89,10 @@ Pregunta simple: ¿Cual es el PVP (precio de venta al publico) estimado en dolar
 
 Buscá en la web precios de venta al publico ACTUALES de este producto en Argentina (tiendas online, distribuidores medicos/ortopedicos, marketplaces locales). Si encontras el precio del modelo EXACTO, usalo (si hay varios, promedialos, convirtiendo a USD si estan en pesos argentinos u otra moneda). Si NO encontras precios de este modelo exacto en Argentina, buscá el precio de productos equivalentes o similares -- misma marca y mismo tipo de producto (por ejemplo, otro modelo de ${categoryName} de ${marca}), en Argentina o en el mercado internacional si no hay oferta local -- y usalo como estimacion, indicando confianza "baja" y aclarando en el razonamiento que es una estimacion (no el precio del modelo exacto, y/o no especifico de Argentina). Evitá dejar "pvp_usd" en null salvo que, despues de buscar, realmente no encuentres ningun precio relacionado (ni siquiera de productos similares).
 
+ATENCION al formato de numeros: en Argentina el PUNTO separa miles y la COMA separa decimales (al reves que en ingles/USD) -- por ejemplo "$498.000" significa CUATROCIENTOS NOVENTA Y OCHO MIL pesos (498000), NO cuatrocientos noventa y ocho. Si encontras un precio en pesos argentinos, primero anotá el monto EXACTO en pesos (sin confundir el separador), despues convertilo a USD con el tipo de cambio aproximado actual, y recien ahi devolvé el resultado en USD. Antes de responder, chequeá que el numero en USD sea razonable para el tipo de producto (equipamiento ortopedico/medico chico o mediano: normalmente entre unos pocos dolares y unos pocos miles de dolares, no cientos de miles) -- si te da un numero sospechoso, es probable que hayas confundido el separador de miles: revisá el calculo antes de responder.
+
 Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
-{"pvp_usd": number o null (el precio estimado en USD para Argentina), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones: que precios encontraste, si son de Argentina o estimados, y como calculaste el valor"}`;
+{"pvp_usd": number o null (el precio estimado en USD para Argentina), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones: el monto en pesos argentinos que encontraste (si aplica), el tipo de cambio usado para convertir, y si es del modelo exacto o una estimacion"}`;
 }
 
 /**
