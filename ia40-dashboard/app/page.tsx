@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import EvolutionChart, { SeriesPoint, PivotResult, formatPeriod, fmtNumber } from "@/components/EvolutionChart";
 import MultiSelectDropdown from "@/components/MultiSelectDropdown";
@@ -384,7 +384,32 @@ function ModelShareTable({
                     {pvpLoading ? (
                       <span style={{ color: "var(--muted)" }}>Buscando...</span>
                     ) : pvpStatus === "found" && pvp?.pvp_usd != null ? (
-                      <span title={pvp.razonamiento ?? undefined}>${fmtNumber(pvp.pvp_usd)}</span>
+                      // El puntito de color es la "confianza" que devolvio la IA
+                      // (verde=alta, amarillo=media, rojo=baja) -- pedido implicito
+                      // del usuario tras detectar un PVP incorrecto (20/07/2026,
+                      // ver ACTUALIZACION 4 en lib/pvpFinder.ts): antes la
+                      // confianza solo se veia en el tooltip, ahora es visible de
+                      // un vistazo para saber cuales precios conviene chequear a
+                      // mano. El tooltip (razonamiento) ahora tambien incluye el
+                      // monto en pesos y el tipo de cambio usado, para auditar.
+                      <span
+                        title={pvp.razonamiento ?? undefined}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+                      >
+                        ${fmtNumber(pvp.pvp_usd)}
+                        <span
+                          title={`Confianza de la IA: ${pvp.confianza ?? "baja"}`}
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: "50%",
+                            display: "inline-block",
+                            flexShrink: 0,
+                            background:
+                              pvp.confianza === "alta" ? "#2fa84f" : pvp.confianza === "media" ? "#e0a52f" : "#d93a3a",
+                          }}
+                        />
+                      </span>
                     ) : (
                       <button
                         onClick={() => onConsultPvp(r.marca, r.modelo, r.segmento)}
@@ -908,24 +933,97 @@ export default function Home() {
 
   useEffect(reloadPvpSieveStatus, [slug, segmentos]);
 
-  const runPvpSieve = () => {
+  // Antes "Completar PVP" hacia UN solo click = UN solo lote (hasta 60
+  // modelos, cortado a los ~4-5 min de presupuesto de tiempo) -- para
+  // categorias con muchos modelos pendientes, terminar la categoria entera
+  // significaba clickear el boton una y otra vez cada pocos minutos.
+  // Reporte real del usuario (20/07/2026): "corrida general" de Completar
+  // PVP sentida como "casi 10 minutos", justamente por tener que quedarse
+  // reclickeando. Ahora el boton encadena lotes automaticamente (sin que el
+  // usuario tenga que volver a clickear) hasta que ya no queden modelos
+  // pendientes de esa categoria/segmento, mostrando el resumen ACUMULADO de
+  // todas las vueltas y actualizando la barra de progreso en cada una. Se
+  // puede interrumpir en cualquier momento con el boton "Detener" (lo ya
+  // encontrado en vueltas anteriores queda guardado igual, no se pierde).
+  const pvpSieveStopRef = useRef(false);
+
+  const stopPvpSieve = () => {
+    pvpSieveStopRef.current = true;
+  };
+
+  const runPvpSieve = async () => {
     if (!slug || pvpSieving) return;
     setPvpSieving(true);
     setPvpSieveResult(null);
     setShowPvpSieveErrors(false);
-    const startedAt = Date.now();
-    fetch(`/api/pvp-sieve?${pvpSieveParams()}`)
-      .then((r) => r.json())
-      .then((d) => {
-        setPvpSieveResult(d);
+    pvpSieveStopRef.current = false;
+
+    let acumulado: PvpSieveSummary = {
+      categoria: slug,
+      solicitados: 0,
+      procesados: 0,
+      encontrados: 0,
+      sin_evidencia: 0,
+      errores: 0,
+      detalle_errores: [],
+      parcial: false,
+    };
+
+    const MAX_VUELTAS = 30;
+    let terminoTodo = false;
+
+    try {
+      // Tope de seguridad de vueltas (30 lotes de hasta 60 = 1800 modelos)
+      // para no quedar en un loop infinito ante algun bug de backend que
+      // siempre devuelva `solicitados > 0` sin avanzar nunca.
+      for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {
+        if (pvpSieveStopRef.current) break;
+        const startedAt = Date.now();
+        const res = await fetch(`/api/pvp-sieve?${pvpSieveParams()}`);
+        const d: PvpSieveSummary = await res.json();
+
+        if (d.error) {
+          setPvpSieveResult({ ...acumulado, error: d.error });
+          return;
+        }
+
         const elapsedSec = (Date.now() - startedAt) / 1000;
-        const procesados = d.procesados ?? 0;
-        if (procesados > 0) setPvpSieveSecondsPerItem(elapsedSec / procesados);
+        const procesadosVuelta = d.procesados ?? 0;
+        if (procesadosVuelta > 0) setPvpSieveSecondsPerItem(elapsedSec / procesadosVuelta);
+
+        acumulado = {
+          categoria: slug,
+          solicitados: (acumulado.solicitados ?? 0) + (d.solicitados ?? 0),
+          procesados: (acumulado.procesados ?? 0) + (d.procesados ?? 0),
+          encontrados: (acumulado.encontrados ?? 0) + (d.encontrados ?? 0),
+          sin_evidencia: (acumulado.sin_evidencia ?? 0) + (d.sin_evidencia ?? 0),
+          errores: (acumulado.errores ?? 0) + (d.errores ?? 0),
+          detalle_errores: [...(acumulado.detalle_errores ?? []), ...(d.detalle_errores ?? [])],
+          parcial: false,
+        };
+        setPvpSieveResult(acumulado);
         if ((d.encontrados ?? 0) > 0) reloadModelPvp();
         reloadPvpSieveStatus();
-      })
-      .catch(() => setPvpSieveResult({ error: "No se pudo completar el PVP. Proba de nuevo." } as any))
-      .finally(() => setPvpSieving(false));
+
+        // Esta vuelta no encontro NADA pendiente -> ya no queda nada por
+        // hacer en esta categoria/segmento, se termina el loop.
+        if ((d.solicitados ?? 0) === 0) {
+          terminoTodo = true;
+          break;
+        }
+      }
+      // Si salimos del for sin terminar todo (por Detener o por llegar al
+      // tope de vueltas), lo marcamos como parcial para que el usuario sepa
+      // que puede clickear "Completar PVP" de nuevo para seguir.
+      if (!terminoTodo) {
+        acumulado = { ...acumulado, parcial: true };
+        setPvpSieveResult(acumulado);
+      }
+    } catch {
+      setPvpSieveResult({ ...acumulado, error: "No se pudo completar el PVP. Proba de nuevo." } as any);
+    } finally {
+      setPvpSieving(false);
+    }
   };
 
   useEffect(() => {
@@ -1213,9 +1311,18 @@ export default function Home() {
             </div>
           )}
 
-          <button onClick={runPvpSieve} disabled={pvpSieving || !slug} title="Completa el PVP de los modelos que el tamizador dejó sin precio, usando la búsqueda exhaustiva (misma que 'Consultar precio', pero en lote)">
+          <button onClick={runPvpSieve} disabled={pvpSieving || !slug} title="Completa el PVP de todos los modelos pendientes de la categoría/segmento actual, encadenando lotes automáticamente hasta terminar (o hasta que apretés Detener)">
             {pvpSieving ? "💲 Completando PVP..." : "💲 Completar PVP"}
           </button>
+          {pvpSieving && (
+            <button
+              onClick={stopPvpSieve}
+              title="Detener: lo ya encontrado en este proceso queda guardado, no se pierde"
+              style={{ fontSize: 12, padding: "5px 9px" }}
+            >
+              ⏹ Detener
+            </button>
+          )}
           {pvpSieveStatus && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
               <div style={{ width: 120, height: 8, background: "var(--border, #2a2e37)", borderRadius: 4, overflow: "hidden" }}>
@@ -1259,8 +1366,9 @@ export default function Home() {
                 </div>
                 {pvpSieveResult.parcial && (
                   <div style={{ color: "var(--muted)", marginTop: 6 }}>
-                    ⏱️ Se alcanzó el límite de tiempo de este click antes de terminar el lote completo — lo ya
-                    procesado quedó guardado. Clickeá "Completar PVP" de nuevo para seguir con el resto.
+                    ⏱️ Se detuvo antes de terminar todos los pendientes (manualmente, o por el tope de seguridad de
+                    30 lotes seguidos) — lo ya procesado quedó guardado. Clickeá "Completar PVP" de nuevo para
+                    seguir con el resto.
                   </div>
                 )}
                 {showPvpSieveErrors && (pvpSieveResult.detalle_errores?.length ?? 0) > 0 && (
