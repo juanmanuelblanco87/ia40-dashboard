@@ -876,7 +876,18 @@ export default function Home() {
         if (procesados > 0) setSieveSecondsPerItem(elapsedSec / procesados);
         // Si se corrigieron segmentos o se movieron filas de categoria, la
         // serie actual puede haber cambiado -- se recarga para reflejarlo.
-        if ((d.segmento_corregido ?? 0) > 0 || (d.categoria_movida ?? 0) > 0) reloadSeries();
+        if ((d.segmento_corregido ?? 0) > 0 || (d.categoria_movida ?? 0) > 0) {
+          reloadSeries();
+          // El tamizador puede reclasificar el segmento de un modelo (via
+          // model_segmento_override) haciendolo entrar o salir del filtro
+          // de Segmento activo -- y "Completar PVP" cuenta su total/% sobre
+          // ESE mismo filtro (ver ACTUALIZACION en app/api/pvp-sieve/status
+          // /route.ts). Sin este reload, la barra de Completar PVP quedaba
+          // "estatica", mostrando siempre el total de ANTES de tamizar --
+          // reporte real del usuario (20/07/2026): "se van sumando
+          // productos y el completar PVP sigue estatico".
+          reloadPvpSieveStatus();
+        }
         if ((d.pvp_actualizado ?? 0) > 0) reloadModelPvp();
         reloadSieveStatus();
       })
