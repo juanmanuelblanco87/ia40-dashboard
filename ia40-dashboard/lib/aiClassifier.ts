@@ -66,6 +66,15 @@
  * (activado por click del usuario), asi que un par de segundos extra de
  * busqueda no se sienten como "lento" de la misma forma que en un lote de
  * 100 items.
+ *
+ * ACTUALIZACION 3 (20/07/2026) -- BUG DE FORMATO DE NUMEROS ARGENTINO: ver
+ * la nota completa en lib/pvpFinder.ts (mismo bug, mismo fix). Caso real:
+ * el modelo devolvio "pvp_usd": 498 para un producto cuyo precio real
+ * rondaba los USD 21-27 -- la hipotesis es que encontro un precio en pesos
+ * argentinos escrito como "$498.000" (498 mil pesos, formato punto=miles)
+ * y lo trato como si "498" ya fuera el valor en USD, sin convertir. Se
+ * agrego al prompt la aclaracion del formato numerico argentino y un
+ * chequeo de sensatez antes de responder.
  */
 
 const OPENAI_MODEL = "gpt-5.4-mini";
@@ -135,8 +144,10 @@ Basandote en lo que encuentres buscando en la web, elegi SIEMPRE el segmento que
 
 Ademas, de forma puramente OPORTUNISTA: si en los MISMOS resultados de esa unica busqueda que ya hiciste llegaste a ver algun precio de venta al publico de este producto (o de un producto muy similar de la misma marca), anotalo como PVP estimado en dolares estadounidenses (USD) para el mercado de Argentina (convertilo a USD si esta en otra moneda, e indicá confianza "baja" si es de un producto similar y no del modelo exacto). NO hagas ninguna busqueda adicional para esto bajo ningun motivo -- es informacion de paso, no el objetivo principal de esta llamada. Si en esos resultados no viste ningun precio, dejá "pvp_usd" en null (el usuario puede completarlo despues con el boton "Consultar precio" de la columna PVP USD, que si hace una busqueda dedicada a esto).
 
+OJO al convertir pesos argentinos a USD: en Argentina el PUNTO separa miles y la COMA separa decimales (al reves que en ingles) -- "$498.000" son CUATROCIENTOS NOVENTA Y OCHO MIL pesos, no cuatrocientos noventa y ocho. Anotá primero el monto exacto en pesos, convertilo con el tipo de cambio aproximado actual, y recien ahi devolvé el numero en USD. Si el resultado en USD te da sospechosamente alto o bajo para el tipo de producto, revisá si confundiste el separador de miles antes de responder.
+
 Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
-{"categoria_slug": string o null, "segmento": string (nunca null, elegi el mas probable), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda y si fue una inferencia indirecta", "pvp_usd": number o null (el precio estimado en USD para Argentina), "pvp_razonamiento": "explicacion breve de 1 oracion: que precios encontraste, si son de Argentina o estimados, y como calculaste el valor"}`;
+{"categoria_slug": string o null, "segmento": string (nunca null, elegi el mas probable), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones, mencionando que encontraste en la busqueda y si fue una inferencia indirecta", "pvp_usd": number o null (el precio estimado en USD para Argentina), "pvp_razonamiento": "explicacion breve de 1 oracion: el monto en pesos argentinos que encontraste (si aplica) y el tipo de cambio usado para convertir"}`;
 }
 
 /**
