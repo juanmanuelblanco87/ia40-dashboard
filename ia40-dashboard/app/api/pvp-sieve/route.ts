@@ -61,10 +61,23 @@ export async function GET(req: Request) {
   }
   const categoria = catRows[0];
 
-  // Mismo patron de priorizacion por FOB total que /api/sieve: se completan
-  // primero los modelos con mas peso en el negocio.
+  // Priorizacion por FOB de los ULTIMOS 12 PERIODOS (meses) de la
+  // categoria -- no por el FOB acumulado de TODA la historia. Antes se
+  // usaba el total histórico completo, lo que en categorias con años de
+  // datos podia hacer que un modelo viejo (con mucho FOB acumulado pero
+  // irrelevante hoy) le ganara en prioridad a los modelos que realmente
+  // pesan en el share actual (el mismo "Ultimos N meses moviles" que
+  // muestra la tabla "Share por Modelo" del dashboard) -- reporte real del
+  // usuario: "no pega los PVP de mayor a menor peso del SOM%". Con este
+  // fix, la prioridad del batch coincide con lo que el usuario ve en pantalla.
   const pendientes = await query<PendienteRow>(
-    `select t.marca, t.modelo
+    `with periodos_recientes as (
+       select distinct period from monthly_brand_model_agg
+       where category_id = $1
+       order by period desc
+       limit 12
+     )
+     select t.marca, t.modelo
      from (
        select
          agg.marca, agg.modelo,
@@ -74,6 +87,7 @@ export async function GET(req: Request) {
        left join model_pvp mp
          on mp.category_id = agg.category_id and mp.marca = agg.marca and mp.modelo = agg.modelo
        where agg.category_id = $1
+         and agg.period in (select period from periodos_recientes)
          and (mp.id is null or mp.status <> 'found')
          and agg.marca is not null and agg.marca <> ''
          and agg.modelo is not null and agg.modelo <> ''
