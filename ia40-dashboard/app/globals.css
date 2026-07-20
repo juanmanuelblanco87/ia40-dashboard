@@ -44,6 +44,29 @@ body {
   letter-spacing: 0.2px;
 }
 
+/* Boton de navegacion entre el Modulo de Importaciones y el Calculador de
+   Importacion (20/07/2026, ver components/AppHeader.tsx) -- estilo propio
+   porque el boton global (fondo blanco) no se lee bien sobre el header
+   oscuro. */
+.app-header-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.app-header-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
