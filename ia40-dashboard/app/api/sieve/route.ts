@@ -100,13 +100,21 @@ export async function GET(req: Request) {
 
   const segmentosActuales = segmentosValidos(slug);
 
-  // Se prioriza por FOB total acumulado (todos los meses) de mayor a menor,
-  // para que el tamizador revise primero los modelos con mas peso en el
-  // negocio en vez de ir alfabetico -- pedido explicito del usuario
-  // (17/07/2026): "el tamizador debe comenzar desde modelos con mayor peso
-  // en FOB a menor peso en FOB".
+  // Se prioriza por FOB de los ULTIMOS 12 PERIODOS (meses) de la categoria,
+  // no por el FOB acumulado de TODA la historia -- mismo fix aplicado en
+  // app/api/pvp-sieve/route.ts (17/07/2026): en categorias con años de
+  // datos, un modelo viejo con mucho FOB acumulado pero irrelevante hoy le
+  // ganaba en prioridad a los modelos que realmente pesan en el share
+  // actual (el mismo "Ultimos N meses moviles" que muestra la tabla "Share
+  // por Modelo" del dashboard).
   const pendientes = await query<PendienteRow>(
-    `select t.marca, t.modelo, t.segmento_actual
+    `with periodos_recientes as (
+       select distinct period from monthly_brand_model_agg
+       where category_id = $1
+       order by period desc
+       limit 12
+     )
+     select t.marca, t.modelo, t.segmento_actual
      from (
        select
          agg.marca, agg.modelo,
@@ -119,6 +127,7 @@ export async function GET(req: Request) {
        left join model_sieve_log log
          on log.category_id = agg.category_id and log.marca = agg.marca and log.modelo = agg.modelo
        where agg.category_id = $1
+         and agg.period in (select period from periodos_recientes)
          and log.id is null
          and agg.marca is not null and agg.marca <> ''
          and agg.modelo is not null and agg.modelo <> ''
