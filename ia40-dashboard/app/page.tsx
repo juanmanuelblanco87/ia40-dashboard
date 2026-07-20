@@ -660,7 +660,18 @@ function AppHeader() {
     <header className="app-header">
       <div className="app-header-inner">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo-icomsalud-teal.png" alt="Icom Salud" className="app-header-logo" />
+        {/* Click en el logo = refresh completo de la pagina (pedido
+            explicito del usuario, 20/07/2026) -- util como "volver al
+            inicio" rapido sin tener que usar el boton de refresh del
+            navegador. */}
+        <img
+          src="/logo-icomsalud-teal.png"
+          alt="Icom Salud"
+          className="app-header-logo"
+          onClick={() => window.location.reload()}
+          title="Actualizar página"
+          style={{ cursor: "pointer" }}
+        />
         <div style={{ width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.25)" }} />
         <div className="app-header-title">Módulo de Importaciones</div>
       </div>
