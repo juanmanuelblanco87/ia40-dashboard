@@ -67,6 +67,30 @@ body {
   border-color: rgba(255, 255, 255, 0.6);
 }
 
+/* Spinner de carga (20/07/2026) -- usado en el Calculador de Importacion
+   mientras se espera una respuesta de IA (arancel/IVA/CBM/PVP/flete) o el
+   calculo del FOB, para que quede claro que la app esta "pensando" y no
+   trabada. Un solo div, sin dependencias externas. */
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(2, 95, 91, 0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+.spinner-light {
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
