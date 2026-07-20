@@ -913,6 +913,52 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
   `.app-header-nav-btn` en `app/globals.css` (pill semi-transparente, pensado
   para leerse bien sobre el fondo oscuro del header).
 
+- **UX (20/07/2026) — spinner de carga en las consultas de IA del
+  Calculador de Importación:** los botones que disparan una llamada a
+  OpenAI (crear tipo de producto, los 4 "🔄" de recalcular en el modal de
+  edición, "Calcular", y el "🔄" de flete en Supuestos generales) ahora
+  muestran un spinner animado (`.spinner` en `app/globals.css`) mientras
+  esperan la respuesta, en vez de solo texto -- pedido explicito del
+  usuario ("colocar algun relojito animado para saber que esta
+  pensando").
+
+- **Fix de lógica (20/07/2026) — costo de envío de Mercado Libre corregido
+  a la tabla real de MeLi:** el modelo anterior (campo manual
+  `envio_ars_con_iva` por tipo de producto + "envío gratis" arriba de un
+  umbral) no reflejaba cómo cobra MeLi en realidad. Reporte del usuario:
+  "si el producto vale menos de 33000 entonces solo paga 2mil en concepto
+  de Fee por producto de bajo valor, si vale mas de 33000 entonces:
+  productos chicos (8000 ar$) productos medianos 12000 productos grandes
+  (silla de ruedas) 32000". Cambios:
+  - `calc_product_types.envio_ars_con_iva` (manual, ARS libre) se reemplazó
+    por `tamano_envio` ('chico' | 'mediano' | 'grande'), elegible con un
+    `<select>` en el modal "✎ Editar" en vez de un input numérico.
+  - `calc_supuestos` gana 3 columnas nuevas: `envio_chico_ars` ($8.000
+    default), `envio_mediano_ars` ($12.000), `envio_grande_ars` ($32.000);
+    y la columna `umbral_envio_gratis_ars` se renombró a
+    `umbral_bajo_valor_ars` (default $33.000, antes $30.000); el default de
+    `fee_bajo_ticket_ars` subió de $1.200 a $2.000.
+  - `lib/importCalc.ts`: si `pvpMeliArsConIva < umbralBajoValorArs` se
+    cobra solo `feeBajoTicketArs`; si es mayor o igual, se cobra el costo
+    de Mercado Envíos según `producto.tamanoEnvio` (nunca ambos a la vez,
+    igual que antes). El campo `envioGratisAplica` se renombró a
+    `envioPorTamanoAplica` porque el envío de MeLi nunca es gratis para el
+    vendedor -- siempre paga el Fee de bajo valor O el costo por tamaño.
+  - Investigamos si se podía consultar el costo real via la API pública de
+    Mercado Libre (`GET /sites/MLA/listing_prices`, ver
+    [Costos por vender](https://developers.mercadolibre.com.ar/es_ar/comision-por-vender)
+    y [Costos de envío](https://developers.mercadolibre.com.ar/costos-de-envios))
+    en vez de hardcodear los 3 montos. La API existe y es pública (sin
+    auth), pero para que devuelva el costo de envío EXACTO en Argentina
+    exige mandar `category_id`, `logistic_type`, `shipping_mode` y
+    `billable_weight` -- datos que dependen de la configuración real de
+    Mercado Envíos de la cuenta de Cobus (no solo del producto), y que no
+    pudimos verificar en vivo esta sesión (herramientas de red/browser
+    caídas). Se optó por dejar los 3 montos como supuestos editables
+    (`calc_supuestos`) en vez de una integración en vivo no verificada;
+    queda como mejora futura si se quiere una integración real con esa
+    API una vez se puedan probar las llamadas end-to-end.
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
