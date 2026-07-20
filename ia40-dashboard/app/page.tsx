@@ -1161,10 +1161,17 @@ export default function Home() {
             <button
               onClick={resetSieveLog}
               disabled={sieving || resetting || !slug}
-              title="Borra el registro de tamizado para poder re-tamizar de cero (ej. para completar PVP en modelos ya tamizados antes de que existiera esa columna)"
-              style={{ fontSize: 12, padding: "4px 10px" }}
+              title="Limpiar tamizado: borra el registro para poder re-tamizar de cero (ej. para completar PVP en modelos ya tamizados antes de que existiera esa columna)"
+              aria-label="Limpiar tamizado"
+              style={{
+                fontSize: 15,
+                padding: "5px 9px",
+                lineHeight: 1,
+                color: "#d93a3a",
+                borderColor: "#d93a3a",
+              }}
             >
-              {resetting ? "Limpiando..." : "🧹 Limpiar tamizado"}
+              {resetting ? "…" : "↺"}
             </button>
           )}
           {sieveStatus && (
@@ -1180,9 +1187,7 @@ export default function Home() {
               )}
             </div>
           )}
-        </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <button onClick={runPvpSieve} disabled={pvpSieving || !slug} title="Completa el PVP de los modelos que el tamizador dejó sin precio, usando la búsqueda exhaustiva (misma que 'Consultar precio', pero en lote)">
             {pvpSieving ? "💲 Completando PVP..." : "💲 Completar PVP"}
           </button>
