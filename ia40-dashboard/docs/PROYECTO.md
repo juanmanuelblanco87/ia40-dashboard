@@ -688,6 +688,20 @@ escala, así que se agregó un batch dedicado:
   veces sobre la misma categoría es seguro: los `'found'` no se vuelven a
   consultar (no se duplica gasto de OpenAI), solo se reintentan los
   `'not_found'`/`'error'`/sin fila todavía.
+- **Fix (17/07/2026, misma tarde) — "no pega los PVP de mayor a menor peso
+  del SOM%":** la query de priorización (tanto en `/api/pvp-sieve` como en
+  `/api/sieve`) sumaba el FOB de TODA la historia de
+  `monthly_brand_model_agg` para decidir qué modelo procesar primero. En
+  categorías con años de datos, eso podía hacer que un modelo viejo con
+  mucho FOB acumulado (pero irrelevante hoy) le ganara en prioridad a los
+  modelos que realmente pesan en el share ACTUAL — mientras que la tabla
+  "Share por Modelo" del dashboard ordena por FOB de los "Últimos N meses
+  móviles" (`periodInfo.last12Set` en `app/page.tsx`), no por el histórico
+  completo. Resultado visible: el batch procesaba modelos que no aparecían
+  ni cerca del tope de la tabla, dejando sin PVP a los que sí se ven arriba.
+  Fix: ambas queries ahora usan un CTE (`periodos_recientes`) que limita la
+  suma de FOB a los últimos 12 períodos de la categoría, alineando la
+  prioridad del backend con lo que se ve en pantalla.
 
 ## 11. Endpoints API
 
