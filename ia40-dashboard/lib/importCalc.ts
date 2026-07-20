@@ -28,6 +28,8 @@
  * manual o estimado), y devuelve toda la cascada + ambos canales.
  */
 
+export type TamanoEnvio = "chico" | "mediano" | "grande";
+
 export interface CalcSupuestos {
   tipoCambioArs: number;
   comisionMlPct: number;
@@ -36,8 +38,14 @@ export interface CalcSupuestos {
   tasaEstadisticaPct: number;
   ley25413Pct: number;
   seguroUsdUnidad: number;
+  /** Fee fijo por "producto de bajo valor" que cobra Mercado Libre cuando el
+   * PVP con IVA es MENOR a umbralBajoValorArs -- pedido explicito del
+   * usuario (20/07/2026): "si el producto vale menos de 33000 entonces solo
+   * paga 2mil en concepto de Fee por producto de bajo valor". Default $2.000. */
   feeBajoTicketArs: number;
-  umbralEnvioGratisArs: number;
+  /** Umbral de PVP (ARS con IVA) que separa el Fee de bajo valor del costo
+   * de envio real de Mercado Envios (por tamaño). Default $33.000. */
+  umbralBajoValorArs: number;
   /** PVP Distribucion = PVP MeLi x (1 - este %). Default 0.35 (35%). */
   descuentoDistribucionPct: number;
   fleteMaritimoUsd: number;
@@ -47,6 +55,13 @@ export interface CalcSupuestos {
   fleteLocalUsd: number;
   manipuleoUsd: number;
   capacidadCbmContenedor: number;
+  /** Costo de envio de Mercado Envios (ARS, CON IVA) segun el tamaño del
+   * producto, cuando el PVP con IVA es MAYOR O IGUAL a umbralBajoValorArs --
+   * pedido explicito del usuario (20/07/2026): "productos chicos (8000 ar$)
+   * productos medianos 12000 productos grandes (silla de ruedas) 32000". */
+  envioChicoArs: number;
+  envioMedianoArs: number;
+  envioGrandeArs: number;
 }
 
 export interface CalcProducto {
@@ -55,9 +70,12 @@ export interface CalcProducto {
   /** Comision de agente de compra sobre FOB. Default 0 (ver nota arriba). */
   traderPct: number;
   cbmM3: number;
-  /** Costo de envio al cliente (ARS, CON IVA) -- solo se aplica si el PVP
-   * de MeLi supera el umbral de envio gratis. Manual (ver calc_product_types). */
-  envioArsConIva: number;
+  /** Categoria de tamaño para el costo de envio de Mercado Envios (ver
+   * CalcSupuestos.envioChicoArs/envioMedianoArs/envioGrandeArs). Reemplaza
+   * al viejo campo manual "envioArsConIva" (20/07/2026): el usuario aclaro
+   * que el costo real de MeLi se define por una tabla de tamaño, no por un
+   * monto libre por producto. */
+  tamanoEnvio: TamanoEnvio;
 }
 
 export interface CalcInput {
@@ -89,8 +107,13 @@ export interface CalcCanal {
   iibbArs: number;
   padsArs: number;
   feeBajoTicketArs: number;
-  /** true si el PVP supero el umbral de envio gratis (solo relevante en MeLi). */
-  envioGratisAplica: boolean;
+  /** true si el PVP con IVA supera el umbral de bajo valor y por lo tanto
+   * se usa el costo de envio de Mercado Envios por tamaño (en vez del Fee
+   * de bajo valor). Solo relevante en MeLi. Nombre anterior:
+   * "envioGratisAplica" -- se renombro (20/07/2026) porque el envio de
+   * MeLi NUNCA es gratis para el vendedor, siempre paga el Fee de bajo
+   * valor O el costo por tamaño. */
+  envioPorTamanoAplica: boolean;
   margenArs: number;
   /** Margen sobre venta neta de IVA (misma base que usa la planilla del cliente). */
   margenPctSobreNeto: number;
@@ -147,19 +170,28 @@ export function calcularImportacion(input: CalcInput): CalcResult {
   };
 
   // ---- 2) Canal MeLi ----
-  const envioGratisAplica = pvpMeliArsConIva >= supuestos.umbralEnvioGratisArs;
+  // Costo de envio de Mercado Envios (20/07/2026, reemplaza el viejo modelo
+  // de "envio gratis" -- pedido explicito del usuario, con los numeros
+  // reales de la tabla de MeLi): si el PVP con IVA es MENOR al umbral, el
+  // vendedor paga un Fee fijo de "producto de bajo valor"; si es MAYOR O
+  // IGUAL, paga el costo real de envio segun el tamaño del producto
+  // (chico/mediano/grande). Nunca es realmente "gratis" para el vendedor.
+  const envioPorTamanoAplica = pvpMeliArsConIva >= supuestos.umbralBajoValorArs;
+  const envioPorTamanoArsConIva =
+    producto.tamanoEnvio === "chico"
+      ? supuestos.envioChicoArs
+      : producto.tamanoEnvio === "grande"
+      ? supuestos.envioGrandeArs
+      : supuestos.envioMedianoArs;
   const pvpMeliNeto = pvpMeliArsConIva / (1 + producto.ivaPct);
   const comisionMlArs = pvpMeliNeto * supuestos.comisionMlPct;
-  // Envio (con IVA) solo se cobra al vendedor si el PVP supera el umbral de
-  // envio gratis; por debajo de eso, el comprador paga su propio envio y en
-  // cambio aplica el fee de bajo ticket.
-  const envioConIvaMeli = envioGratisAplica ? producto.envioArsConIva : 0;
+  const envioConIvaMeli = envioPorTamanoAplica ? envioPorTamanoArsConIva : 0;
   const envioNetoMeliArs = envioConIvaMeli / (1 + producto.ivaPct);
   const iibbMeliArs = pvpMeliNeto * supuestos.iibbPct;
   // PADS se calcula sobre el PVP CON IVA (no sobre el neto) -- verificado
   // contra la planilla.
   const padsMeliArs = pvpMeliArsConIva * supuestos.padsPct;
-  const feeBajoTicketMeliArs = envioGratisAplica ? 0 : supuestos.feeBajoTicketArs;
+  const feeBajoTicketMeliArs = envioPorTamanoAplica ? 0 : supuestos.feeBajoTicketArs;
 
   const margenMeliArs =
     pvpMeliNeto -
@@ -178,7 +210,7 @@ export function calcularImportacion(input: CalcInput): CalcResult {
     iibbArs: iibbMeliArs,
     padsArs: padsMeliArs,
     feeBajoTicketArs: feeBajoTicketMeliArs,
-    envioGratisAplica,
+    envioPorTamanoAplica,
     margenArs: margenMeliArs,
     margenPctSobreNeto: pvpMeliNeto > 0 ? margenMeliArs / pvpMeliNeto : 0,
     margenPctSobreConIva: pvpMeliArsConIva > 0 ? margenMeliArs / pvpMeliArsConIva : 0,
@@ -202,7 +234,7 @@ export function calcularImportacion(input: CalcInput): CalcResult {
     iibbArs: iibbDistArs,
     padsArs: 0,
     feeBajoTicketArs: 0,
-    envioGratisAplica: false,
+    envioPorTamanoAplica: false,
     margenArs: margenDistArs,
     margenPctSobreNeto: pvpDistNeto > 0 ? margenDistArs / pvpDistNeto : 0,
     margenPctSobreConIva: pvpDistConIva > 0 ? margenDistArs / pvpDistConIva : 0,
