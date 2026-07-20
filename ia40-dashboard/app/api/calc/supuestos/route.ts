@@ -13,7 +13,7 @@ function toNumbers(row: any) {
     ley25413Pct: Number(row.ley_25413_pct),
     seguroUsdUnidad: Number(row.seguro_usd_unidad),
     feeBajoTicketArs: Number(row.fee_bajo_ticket_ars),
-    umbralEnvioGratisArs: Number(row.umbral_envio_gratis_ars),
+    umbralBajoValorArs: Number(row.umbral_bajo_valor_ars),
     descuentoDistribucionPct: Number(row.descuento_distribucion_pct),
     fleteMaritimoUsd: Number(row.flete_maritimo_usd),
     fleteConfianza: row.flete_confianza as string | null,
@@ -26,6 +26,11 @@ function toNumbers(row: any) {
     fleteLocalUsd: Number(row.flete_local_usd),
     manipuleoUsd: Number(row.manipuleo_usd),
     capacidadCbmContenedor: Number(row.capacidad_cbm_contenedor),
+    // Costo de envio de Mercado Envios por tamaño (20/07/2026, ver
+    // docs/PROYECTO.md): solo aplica si el PVP supera umbralBajoValorArs.
+    envioChicoArs: Number(row.envio_chico_ars),
+    envioMedianoArs: Number(row.envio_mediano_ars),
+    envioGrandeArs: Number(row.envio_grande_ars),
   };
 }
 
@@ -62,9 +67,10 @@ export async function PATCH(req: Request) {
     `update calc_supuestos set
        tipo_cambio_ars=$1, comision_ml_pct=$2, iibb_pct=$3, pads_pct=$4,
        tasa_estadistica_pct=$5, ley_25413_pct=$6, seguro_usd_unidad=$7,
-       fee_bajo_ticket_ars=$8, umbral_envio_gratis_ars=$9, descuento_distribucion_pct=$10,
+       fee_bajo_ticket_ars=$8, umbral_bajo_valor_ars=$9, descuento_distribucion_pct=$10,
        flete_maritimo_usd=$11, forwarder_usd=$12, despachante_usd=$13, thc_usd=$14,
        flete_local_usd=$15, manipuleo_usd=$16, capacidad_cbm_contenedor=$17,
+       envio_chico_ars=$18, envio_mediano_ars=$19, envio_grande_ars=$20,
        updated_at=now()
      where id=1`,
     [
@@ -76,7 +82,7 @@ export async function PATCH(req: Request) {
       Number(next.ley25413Pct),
       Number(next.seguroUsdUnidad),
       Number(next.feeBajoTicketArs),
-      Number(next.umbralEnvioGratisArs),
+      Number(next.umbralBajoValorArs),
       Number(next.descuentoDistribucionPct),
       Number(next.fleteMaritimoUsd),
       Number(next.forwarderUsd),
@@ -85,6 +91,9 @@ export async function PATCH(req: Request) {
       Number(next.fleteLocalUsd),
       Number(next.manipuleoUsd),
       Number(next.capacidadCbmContenedor),
+      Number(next.envioChicoArs),
+      Number(next.envioMedianoArs),
+      Number(next.envioGrandeArs),
     ]
   );
 
