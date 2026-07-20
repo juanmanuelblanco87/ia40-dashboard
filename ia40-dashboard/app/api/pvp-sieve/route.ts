@@ -114,7 +114,25 @@ export async function GET(req: Request) {
 
   async function procesarItem({ marca, modelo }: PendienteRow) {
     try {
-      const pvp = await getOrSearchModelPvp(categoria.id, categoria.name, marca, modelo);
+      let pvp;
+      try {
+        pvp = await getOrSearchModelPvp(categoria.id, categoria.name, marca, modelo);
+      } catch (err: any) {
+        // Un timeout puntual de OpenAI (45s, ver lib/pvpFinder.ts) no
+        // significa que el modelo no tenga precio -- es solo una respuesta
+        // lenta pasajera (reporte real en produccion: 1 de 60 items dio
+        // timeout mientras los otros 59 respondieron bien). Se reintenta UNA
+        // sola vez, y solo si todavia queda presupuesto de tiempo de sobra
+        // (45s) en este request, antes de darlo por error definitivo -- asi
+        // no se pierde un PVP valido solo por una demora momentanea de la API.
+        const esTimeout = String(err?.message ?? err).toLowerCase().includes("timeout");
+        const quedaTiempo = Date.now() - startedAt < PVP_SIEVE_TIME_BUDGET_MS - 45_000;
+        if (esTimeout && quedaTiempo) {
+          pvp = await getOrSearchModelPvp(categoria.id, categoria.name, marca, modelo);
+        } else {
+          throw err;
+        }
+      }
       resumen.procesados++;
       if (pvp.pvp_usd != null) resumen.encontrados++;
       else resumen.sin_evidencia++;
