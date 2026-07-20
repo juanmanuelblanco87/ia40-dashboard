@@ -808,6 +808,111 @@ escala, así que se agregó un batch dedicado:
   del segmento visible hubiera cambiado. Fix: `runSieve()` ahora también
   llama a `reloadPvpSieveStatus()` en esos casos.
 
+## 10.3 Calculador de Importación (20/07/2026)
+
+Nueva sub-app, separada del Módulo de Importaciones, que reconstruye en la
+web la lógica de costeo que el cliente ya usaba en su planilla
+`STOKE_FOB_Objetivo_Fase1.xlsx`. El usuario carga un tipo de producto y un
+FOB, aprieta "Calcular" y obtiene toda la cascada de costos hasta el Costo
+Nacionalizado, más el margen (absoluto y %) vendiendo por Mercado Libre y
+vendiendo a Distribución. Vive en `app/calculo-importacion/page.tsx`, con
+navegación cruzada desde/hacia el Módulo de Importaciones vía un botón nuevo
+en el header compartido (`components/AppHeader.tsx`, extraído de
+`app/page.tsx` para poder reusar el logo/estilos en ambas páginas).
+
+- **Catálogo abierto de tipos de producto (`calc_product_types`), no atado a
+  las 9 categorías de IA40:** pedido explícito del usuario ("hay que dejar
+  la lógica abierta a cualquier categoría, si mañana quisiera traer
+  televisores con una consulta a IA deberíamos cambiar los supuestos que
+  aplican en esa NCM"). Cada tipo de producto es una fila independiente con
+  su propio arancel %, IVA %, CBM, PVP de mercado y Trader % — no hay un
+  enum fijo de categorías, el usuario puede crear "Silla de Ruedas", "TV 32
+  pulgadas" y "TV 65 pulgadas" como tres entradas separadas, cada una con su
+  propia caché de IA (pedido explícito: "no es lo mismo una TV de 32 que una
+  de 65").
+
+- **Supuestos generales (`calc_supuestos`, fila única):** parámetros que
+  aplican a TODOS los tipos de producto por igual — tipo de cambio, comisión
+  ML, IIBB, PADS, tasa estadística, Ley 25413, seguro por unidad, fee bajo
+  ticket + umbral de envío gratis, descuento de Distribución, flete
+  marítimo + costos fijos de logística (forwarder, despachante, THC, flete
+  local, manipuleo) y capacidad del contenedor en CBM. Todo editable a mano
+  desde un modal ("⚙️ Supuestos generales").
+
+- **Arancel, IVA, CBM y PVP de mercado se estiman por IA la primera vez que
+  se crea un tipo de producto** (`lib/calcAi.ts`, mismo patrón de OpenAI
+  Responses API + `web_search` + `gpt-5.4-mini` ya usado en
+  `lib/aiClassifier.ts` y `lib/pvpFinder.ts` — deliberadamente duplicado en
+  vez de compartido, siguiendo el criterio ya establecido en este proyecto
+  de no tocar código ya probado). Quedan cacheados en `calc_product_types`
+  con su propio nivel de confianza (alta/media/baja, mismo punto de color
+  verde/amarillo/rojo que ya existía para el PVP del módulo principal) y
+  razonamiento auditable. Cada campo se puede editar a mano o volver a
+  consultar a la IA individualmente con un botón "🔄" (modal "✎ Editar").
+  El endpoint `/api/calc/run` además actúa como red de seguridad: si algún
+  campo quedó sin estimar (falla parcial al crear el tipo de producto),
+  lo completa on-the-fly antes de calcular.
+
+- **Trader % es 0% por defecto y siempre editable a mano** (pedido
+  explícito: "el trader dejalo 0% y dejalo editable en el caso que tengamos
+  que abonarlo") — no se estima por IA, es una decisión comercial del
+  usuario caso a caso.
+
+- **Flete marítimo se estima por IA (China → Buenos Aires, contenedor
+  40HQ) y queda editable** ("el valor del flete también consultarlo a la
+  IA y dejarlo editable en el caso que consigamos algo mejor") — tiene su
+  propio botón "🔄" en el modal de Supuestos generales, independiente del
+  refresco de arancel/IVA/CBM/PVP de cada tipo de producto (el flete es un
+  supuesto global, no por producto).
+
+- **Resolución del PVP de Mercado Libre — prioridad manual > caché > IA**
+  (pedido explícito: "el PVP es algo que también quiero colocar yo
+  manualmente, pero si no se coloca que lo calcule por IA"): si el usuario
+  carga un PVP en el formulario de cálculo, se usa ese valor y NUNCA
+  pisa el valor cacheado en el catálogo (es un dato de ese cálculo puntual,
+  no una corrección permanente). Si lo deja vacío, se usa el PVP cacheado
+  en `calc_product_types.pvp_ars_estimado`; si tampoco hay caché, se estima
+  por IA en el momento y esa estimación sí se guarda en el catálogo para la
+  próxima vez.
+
+- **Canal Distribución: PVP = 65% del PVP de MeLi, solo se descuenta IIBB**
+  (pedido explícito: "sobre el PVP de MeLi colocar un 35% de descuento —
+  35% GM para el minorista"; y en la pregunta de aclaración sobre qué otras
+  deducciones aplicar a Distribución, el usuario eligió "Solo IIBB
+  (recomendado)"). El % de descuento es parte de los Supuestos generales
+  (`descuento_distribucion_pct`), editable.
+
+- **Fórmulas verificadas contra el caso real "SILLA RUEDAS CLASSIC"** de la
+  hoja "Margen por FOB Conseguido" del Excel del cliente, para confirmar
+  cada fórmula antes de programarla (`lib/importCalc.ts`, motor de cálculo
+  puro sin llamadas a red/DB):
+  - `CIF = FOB + Seguro` — el Trader se suma DESPUÉS del CIF, no antes
+    (confirmado cruzando contra el número real de la planilla).
+  - `Arancel / Tasa estadística / Ley 25413` se calculan como % sobre el
+    CIF.
+  - `Costo fijo por CBM = (flete marítimo + forwarder + despachante + THC +
+    flete local + manipuleo) / capacidad del contenedor en CBM`; la
+    logística de cada producto es `CBM del producto × ese costo fijo por
+    CBM`.
+  - `Costo Nacionalizado (USD) = CIF + Arancel + Tasa estadística + Ley
+    25413 + Logística + Trader`, convertido a ARS con el tipo de cambio de
+    Supuestos generales.
+  - MeLi: `PVP neto = PVP con IVA / (1 + IVA%)`; se descuentan comisión ML,
+    envío (neto, $0 si el PVP con IVA supera el umbral de envío gratis),
+    IIBB y PADS (este último calculado sobre el PVP CON IVA, no sobre el
+    neto — confirmado contra la planilla) y, si corresponde, el fee de
+    "bajo ticket"; `Margen = PVP neto − deducciones − Costo Nacionalizado`.
+  - El costo de envío al cliente (`envio_ars_con_iva`) queda como campo
+    manual editable por tipo de producto (default $0): la planilla original
+    ya aclaraba que es "proporcional al tamaño/peso... ajustar con
+    cotización real por SKU", sin una fórmula limpia que reproducir.
+
+- **Navegación:** botón "🧮 Cálculo de Importación" en el header del Módulo
+  de Importaciones (`app/page.tsx`) que lleva a `/calculo-importacion`; ahí,
+  un botón "← Volver al módulo de importaciones" para volver. Estilo nuevo
+  `.app-header-nav-btn` en `app/globals.css` (pill semi-transparente, pensado
+  para leerse bien sobre el fondo oscuro del header).
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -829,6 +934,12 @@ escala, así que se agregó un batch dedicado:
 | `/api/sieve/status` | GET | Progreso del tamizador para una categoría (`{total, tamizado, pendientes, porcentaje}`). Liviano, sin llamadas externas — usado para la barra de progreso. |
 | `/api/pvp-sieve` | GET | "Completar PVP": corre en lote la búsqueda exhaustiva de precio (`lib/pvpFinder.ts`) sobre los modelos sin PVP `'found'` de una categoría (ver sección 10.2, botón "💲 Completar PVP"). |
 | `/api/pvp-sieve/status` | GET | Progreso de PVP para una categoría (`{total, encontrados, pendientes, porcentaje}`). Liviano — usado para la barra de progreso del botón "Completar PVP". |
+| `/api/calc/product-types` | GET/POST | Lista el catálogo de tipos de producto del Calculador de Importación (GET) / crea uno nuevo y dispara la estimación por IA de arancel, IVA y CBM en paralelo (POST, ver sección 10.3). |
+| `/api/calc/product-types/:id` | PATCH/DELETE | Edita a mano cualquier campo de un tipo de producto (los campos de IA editados quedan marcados `razonamiento='(editado a mano)'`) / borra el tipo de producto. |
+| `/api/calc/product-types/:id/refresh` | POST | `?field=arancel\|iva\|cbm\|pvp` — fuerza una nueva consulta a la IA para un solo campo puntual de un tipo de producto. |
+| `/api/calc/supuestos` | GET/PATCH | Lee (y crea si no existe) / edita la fila única de Supuestos generales del Calculador de Importación. |
+| `/api/calc/supuestos/refresh-flete` | POST | Fuerza una nueva consulta a la IA para el costo de flete marítimo internacional (China → Buenos Aires, contenedor 40HQ). |
+| `/api/calc/run` | POST | `{productTypeId, fobUsd, pvpArsManual?}` — corre el cálculo completo (Costo Nacionalizado + margen MeLi/Distribución) para un tipo de producto y un FOB dados; ver sección 10.3 para la prioridad de resolución del PVP. |
 
 ## 12. Variables de entorno
 
