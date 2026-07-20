@@ -753,6 +753,46 @@ escala, así que se agregó un batch dedicado:
   sin aparecer, lo más probable es que este archivo puntual nunca se haya
   pegado en GitHub (es fácil de saltear por estar en una subcarpeta nueva).
 
+- **Fix (20/07/2026) — PVP con valores que no reflejan la realidad (bug de
+  formato de números argentino):** caso real detectado por el usuario
+  comparando contra Gemini: "ASIENTO ESPUMA INTEL" (MELEJ S.R.L) mostraba
+  "pvp_usd": 498, cuando el precio real rondaba los USD 21-27 ($27.000-
+  $32.000 pesos argentinos). Hipótesis: el modelo encontró un precio
+  escrito con el formato numérico argentino (punto = separador de miles,
+  ej. "$498.000" = cuatrocientos noventa y ocho MIL pesos) y lo tomó
+  directamente como si "498" ya fuera el valor en USD, sin dividir por el
+  tipo de cambio. Fix en `lib/pvpFinder.ts` y `lib/aiClassifier.ts`: se
+  agregó al prompt una explicación explícita del formato numérico
+  argentino, el pedido de anotar el monto en pesos y el tipo de cambio
+  usado en el razonamiento (para poder auditar desde la tabla), y un
+  chequeo de sensatez ("si el resultado te da sospechosamente alto o bajo,
+  revisá si confundiste el separador de miles"). Además, en `app/page.tsx`
+  se agregó un punto de color junto al precio (verde=alta, amarillo=media,
+  rojo=baja confianza) para que la confianza de la IA sea visible de un
+  vistazo, no solo en el tooltip — así se puede priorizar qué precios
+  conviene chequear a mano. Esto reduce el riesgo pero no lo elimina del
+  todo: sigue siendo una estimación de IA con búsqueda web, no una fuente
+  de precios verificada.
+
+- **UX (20/07/2026) — "Completar PVP" encadena lotes automáticamente:**
+  cada click corría UN solo lote (hasta 60 modelos, cortado a los ~4-5 min
+  de presupuesto de `/api/pvp-sieve`) — para categorías con muchos modelos
+  pendientes, terminarla entera significaba clickear el botón una y otra
+  vez cada pocos minutos. Reporte real del usuario: la "corrida general"
+  de Completar PVP se sentía como "casi 10 minutos" de estar reclickeando.
+  Fix en `app/page.tsx` (`runPvpSieve()`): ahora un solo click encadena
+  lotes automáticamente (sin volver a tocar el botón) hasta que ya no
+  queden modelos pendientes en la categoría/segmento actual, mostrando el
+  resumen ACUMULADO de todas las vueltas y actualizando la barra de
+  progreso en cada una. Tope de seguridad: 30 vueltas seguidas (hasta 1800
+  modelos) para no quedar en un loop infinito ante algún bug de backend.
+  Se agregó un botón "⏹ Detener" (visible mientras corre) para interrumpir
+  en cualquier momento — lo ya encontrado en vueltas anteriores queda
+  guardado, no se pierde. El tiempo real total para una categoría grande
+  sigue acotado por la latencia de OpenAI (no se resolvió el fondo de la
+  lentitud, que depende del proveedor), pero ya no requiere babysitting
+  manual del botón.
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
