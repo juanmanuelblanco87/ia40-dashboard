@@ -1,926 +1,1716 @@
 "use client";
 
-/**
- * Calculador de Importacion (20/07/2026) -- pagina nueva, separada del
- * Modulo de Importaciones (app/page.tsx). Reconstruye la logica de la
- * planilla STOKE_FOB_Objetivo_Fase1.xlsx del cliente: dado un tipo de
- * producto (catalogo abierto, no atado a las 9 categorias de IA40) y un
- * FOB, calcula toda la cascada de costos hasta el Costo Nacionalizado, y el
- * margen resultante vendiendo por Mercado Libre y vendiendo a Distribucion.
- * Ver el racional completo (formulas, supuestos, decisiones tomadas con el
- * usuario) en docs/PROYECTO.md, seccion "Calculador de Importacion".
- *
- * Arancel, IVA y CBM se estiman por IA (OpenAI + web_search, ver
- * lib/calcAi.ts) la primera vez que se usa un tipo de producto, y quedan
- * cacheados -- editables a mano y con boton de recalcular. El PVP de MeLi
- * es MANUAL si se carga en el formulario de calculo; si se deja vacio, se
- * estima por IA (y tambien se cachea).
- */
-
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import EvolutionChart, { SeriesPoint, PivotResult, formatPeriod, fmtNumber } from "@/components/EvolutionChart";
+import MultiSelectDropdown from "@/components/MultiSelectDropdown";
 import AppHeader from "@/components/AppHeader";
-import { fmtNumber } from "@/components/EvolutionChart";
+import { segmentosValidos } from "@/lib/segmentos";
 
-function fmtUsd(n: number): string {
-  return n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function fmtPct(n: number): string {
-  return `${(n * 100).toFixed(1)}%`;
-}
-function fmtPctInput(n: number | null): string {
-  return n == null ? "" : (n * 100).toFixed(2);
-}
-
-interface ProductType {
-  id: number;
-  nombre: string;
-  ncm_code: string | null;
-  arancel_pct: number | null;
-  arancel_confianza: string | null;
-  arancel_razonamiento: string | null;
-  arancel_status: string;
-  iva_pct: number | null;
-  iva_confianza: string | null;
-  iva_razonamiento: string | null;
-  iva_status: string;
-  trader_pct: number;
-  envio_ars_con_iva: number;
-  cbm_m3: number | null;
-  cbm_confianza: string | null;
-  cbm_razonamiento: string | null;
-  cbm_status: string;
-  pvp_ars_estimado: number | null;
-  pvp_confianza: string | null;
-  pvp_razonamiento: string | null;
-  pvp_status: string;
-}
-
-interface Supuestos {
-  tipoCambioArs: number;
-  comisionMlPct: number;
-  iibbPct: number;
-  padsPct: number;
-  tasaEstadisticaPct: number;
-  ley25413Pct: number;
-  seguroUsdUnidad: number;
-  feeBajoTicketArs: number;
-  umbralEnvioGratisArs: number;
-  descuentoDistribucionPct: number;
-  fleteMaritimoUsd: number;
-  fleteConfianza: string | null;
-  fleteRazonamiento: string | null;
-  fleteStatus: string;
-  forwarderUsd: number;
-  despachanteUsd: number;
-  thcUsd: number;
-  fleteLocalUsd: number;
-  manipuleoUsd: number;
-  capacidadCbmContenedor: number;
-}
-
-interface CalcCostoNacionalizado {
-  traderUsd: number;
-  seguroUsd: number;
-  cifUsd: number;
-  arancelUsd: number;
-  tasaEstadisticaUsd: number;
-  ley25413Usd: number;
-  costoFijoPorCbmUsd: number;
-  logisticaUsd: number;
-  costoNacionalizadoUsd: number;
-  costoNacionalizadoArs: number;
-}
-
-interface CalcCanal {
-  pvpConIva: number;
-  pvpNeto: number;
-  comisionMlArs: number;
-  envioNetoArs: number;
-  iibbArs: number;
-  padsArs: number;
-  feeBajoTicketArs: number;
-  envioGratisAplica: boolean;
-  margenArs: number;
-  margenPctSobreNeto: number;
-  margenPctSobreConIva: number;
-}
-
-interface RunResult {
-  productType: ProductType;
-  supuestos: Supuestos;
-  pvpFuente: "manual" | "cache" | "ia";
-  resultado: {
-    costoNacionalizado: CalcCostoNacionalizado;
-    meli: CalcCanal;
-    distribucion: CalcCanal;
-  };
-  error?: string;
-}
-
-const CONFIANZA_COLOR: Record<string, string> = {
-  alta: "#2fa84f",
-  media: "#e0a52f",
-  baja: "#d93a3a",
+// Colores fijos para los 6 segmentos originales de "Sillas de Ruedas" (se
+// mantienen para no cambiar los colores ya conocidos de esa categoria).
+// Para las demas categorias (cada una con sus propios nombres de segmento,
+// ver lib/segmentos.ts) se asigna un color de forma deterministica desde
+// SEGMENTO_PALETTE en base al nombre del segmento -- asi ningun segmento
+// queda sin color asignado (bug anterior: todo caia a un gris de fallback).
+const SEGMENTO_COLORS: Record<string, string> = {
+  "Silla Estándar": "#2f6fe0",
+  "Silla Ultra Livianas": "#1f9e63",
+  "Sillas Infantiles": "#e8722f",
+  "Silla Postural": "#9b30d9",
+  "Silla Activa y Deportivas": "#d93a3a",
+  "Silla de Traslado": "#1aa8c9",
 };
-
-function ConfianzaDot({ confianza, razonamiento }: { confianza: string | null; razonamiento: string | null }) {
-  if (!confianza) return null;
-  return (
-    <span
-      title={razonamiento ? `Confianza IA: ${confianza}. ${razonamiento}` : `Confianza IA: ${confianza}`}
-      style={{
-        width: 7,
-        height: 7,
-        borderRadius: "50%",
-        display: "inline-block",
-        marginLeft: 5,
-        background: CONFIANZA_COLOR[confianza] ?? "#6d7e79",
-      }}
-    />
-  );
+const SEGMENTO_PALETTE = [
+  "#2f6fe0",
+  "#1f9e63",
+  "#e8722f",
+  "#9b30d9",
+  "#d93a3a",
+  "#1aa8c9",
+  "#c9a227",
+  "#5f6b7a",
+  "#e0507a",
+  "#3ab795",
+  "#f2994a",
+  "#7d5ba6",
+];
+function colorForSegmento(key: string): string {
+  const fijo = SEGMENTO_COLORS[key];
+  if (fijo) return fijo;
+  // Hash simple y estable del nombre -> siempre el mismo color para el
+  // mismo segmento, sin depender del orden en que aparecen las filas.
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return SEGMENTO_PALETTE[hash % SEGMENTO_PALETTE.length];
 }
 
-export default function CalculoImportacionPage() {
-  const [productTypes, setProductTypes] = useState<ProductType[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [loadingTypes, setLoadingTypes] = useState(false);
+interface Category {
+  id: number;
+  slug: string;
+  name: string;
+  ncm_codes: string[];
+}
 
-  const [showNuevo, setShowNuevo] = useState(false);
-  const [nuevoNombre, setNuevoNombre] = useState("");
-  const [nuevoNcm, setNuevoNcm] = useState("");
-  const [creando, setCreando] = useState(false);
-  const [creandoError, setCreandoError] = useState<string | null>(null);
+interface TopEntry {
+  key: string;
+  value: number;
+  other: number;
+}
 
-  const [showEditar, setShowEditar] = useState(false);
-  const [refrescando, setRefrescando] = useState<string | null>(null); // 'arancel' | 'iva' | 'cbm' | 'pvp' | null
-  const [guardandoEdit, setGuardandoEdit] = useState(false);
-  const [editForm, setEditForm] = useState<{
-    arancelPct: string;
-    ivaPct: string;
-    traderPct: string;
-    envioArsConIva: string;
-    cbmM3: string;
-  } | null>(null);
+function computeTop(
+  series: SeriesPoint[],
+  periodSet: Set<string> | null,
+  dimension: "proveedor" | "marca" | "modelo"
+): { topFob: TopEntry | null; topUnidades: TopEntry | null } {
+  const totals = new Map<string, { fob: number; uni: number }>();
+  for (const s of series) {
+    if (periodSet && !periodSet.has(s.period)) continue;
+    const key = ((s as any)[dimension] ?? "sin_dato") as string;
+    const cur = totals.get(key) ?? { fob: 0, uni: 0 };
+    cur.fob += Number(s.total_fob_dolars) || 0;
+    cur.uni += Number(s.total_unidades) || 0;
+    totals.set(key, cur);
+  }
+  let topFob: TopEntry | null = null;
+  let topUnidades: TopEntry | null = null;
+  for (const [key, v] of totals) {
+    if (!topFob || v.fob > topFob.value) topFob = { key, value: v.fob, other: v.uni };
+    if (!topUnidades || v.uni > topUnidades.value) topUnidades = { key, value: v.uni, other: v.fob };
+  }
+  return { topFob, topUnidades };
+}
 
-  const [fobUsd, setFobUsd] = useState("");
-  const [pvpManual, setPvpManual] = useState("");
-  const [calculando, setCalculando] = useState(false);
-  const [resultado, setResultado] = useState<RunResult | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
+interface ShareRow {
+  key: string;
+  fob: number;
+  fobPct: number;
+  unidades: number;
+  unidadesPct: number;
+}
 
-  const [showSupuestos, setShowSupuestos] = useState(false);
-  const [supuestos, setSupuestos] = useState<Supuestos | null>(null);
-  const [supuestosForm, setSupuestosForm] = useState<Record<string, string> | null>(null);
-  const [guardandoSupuestos, setGuardandoSupuestos] = useState(false);
-  const [refrescandoFlete, setRefrescandoFlete] = useState(false);
+function computeShareTable(
+  series: SeriesPoint[],
+  periodSet: Set<string> | null,
+  dimension: "proveedor" | "marca" | "segmento"
+): ShareRow[] {
+  const totals = new Map<string, { fob: number; uni: number }>();
+  let totalFob = 0;
+  let totalUni = 0;
+  for (const s of series) {
+    if (periodSet && !periodSet.has(s.period)) continue;
+    const key = ((s as any)[dimension] ?? "sin_dato") as string;
+    const fob = Number(s.total_fob_dolars) || 0;
+    const uni = Number(s.total_unidades) || 0;
+    const cur = totals.get(key) ?? { fob: 0, uni: 0 };
+    cur.fob += fob;
+    cur.uni += uni;
+    totals.set(key, cur);
+    totalFob += fob;
+    totalUni += uni;
+  }
+  const rows: ShareRow[] = Array.from(totals.entries()).map(([key, v]) => ({
+    key,
+    fob: v.fob,
+    fobPct: totalFob > 0 ? (v.fob / totalFob) * 100 : 0,
+    unidades: v.uni,
+    unidadesPct: totalUni > 0 ? (v.uni / totalUni) * 100 : 0,
+  }));
+  rows.sort((a, b) => b.fob - a.fob);
+  return rows;
+}
 
-  const selected = productTypes.find((p) => p.id === selectedId) ?? null;
-
-  const reloadProductTypes = () => {
-    setLoadingTypes(true);
-    fetch("/api/calc/product-types")
-      .then((r) => r.json())
-      .then((d) => {
-        const list: ProductType[] = d.productTypes ?? [];
-        setProductTypes(list);
-        if (!selectedId && list.length > 0) setSelectedId(list[0].id);
-      })
-      .catch(() => setProductTypes([]))
-      .finally(() => setLoadingTypes(false));
-  };
-
-  useEffect(reloadProductTypes, []);
-
-  const reloadSupuestos = () => {
-    fetch("/api/calc/supuestos")
-      .then((r) => r.json())
-      .then((d) => setSupuestos(d.supuestos ?? null))
-      .catch(() => setSupuestos(null));
-  };
-
-  useEffect(reloadSupuestos, []);
-
-  const crearTipoProducto = () => {
-    const nombre = nuevoNombre.trim();
-    if (!nombre || creando) return;
-    setCreando(true);
-    setCreandoError(null);
-    fetch("/api/calc/product-types", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nombre, ncmCode: nuevoNcm.trim() || undefined }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.error) {
-          setCreandoError(d.error);
-          return;
-        }
-        setNuevoNombre("");
-        setNuevoNcm("");
-        setShowNuevo(false);
-        reloadProductTypes();
-        if (d.productType) setSelectedId(d.productType.id);
-      })
-      .catch(() => setCreandoError("No se pudo crear el tipo de producto. Proba de nuevo."))
-      .finally(() => setCreando(false));
-  };
-
-  const abrirEditar = () => {
-    if (!selected) return;
-    setEditForm({
-      arancelPct: fmtPctInput(selected.arancel_pct),
-      ivaPct: fmtPctInput(selected.iva_pct),
-      traderPct: fmtPctInput(selected.trader_pct),
-      envioArsConIva: String(selected.envio_ars_con_iva ?? 0),
-      cbmM3: selected.cbm_m3 != null ? String(selected.cbm_m3) : "",
-    });
-    setShowEditar(true);
-  };
-
-  const recalcularCampo = (field: "arancel" | "iva" | "cbm" | "pvp") => {
-    if (!selected || refrescando) return;
-    setRefrescando(field);
-    fetch(`/api/calc/product-types/${selected.id}/refresh?field=${field}`, { method: "POST" })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.productType) {
-          setProductTypes((prev) => prev.map((p) => (p.id === d.productType.id ? d.productType : p)));
-          if (editForm) {
-            const updated: ProductType = d.productType;
-            setEditForm({
-              arancelPct: fmtPctInput(updated.arancel_pct),
-              ivaPct: fmtPctInput(updated.iva_pct),
-              traderPct: fmtPctInput(updated.trader_pct),
-              envioArsConIva: String(updated.envio_ars_con_iva ?? 0),
-              cbmM3: updated.cbm_m3 != null ? String(updated.cbm_m3) : "",
-            });
-          }
-        } else if (d.error) {
-          alert(`No se pudo recalcular: ${d.error}`);
-        }
-      })
-      .catch(() => alert("No se pudo recalcular. Proba de nuevo."))
-      .finally(() => setRefrescando(null));
-  };
-
-  const guardarEdit = () => {
-    if (!selected || !editForm || guardandoEdit) return;
-    setGuardandoEdit(true);
-    fetch(`/api/calc/product-types/${selected.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        arancelPct: Number(editForm.arancelPct) / 100,
-        ivaPct: Number(editForm.ivaPct) / 100,
-        traderPct: Number(editForm.traderPct) / 100,
-        envioArsConIva: Number(editForm.envioArsConIva),
-        cbmM3: Number(editForm.cbmM3),
-      }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.productType) {
-          setProductTypes((prev) => prev.map((p) => (p.id === d.productType.id ? d.productType : p)));
-          setShowEditar(false);
-        }
-      })
-      .catch(() => alert("No se pudo guardar. Proba de nuevo."))
-      .finally(() => setGuardandoEdit(false));
-  };
-
-  const borrarTipoProducto = () => {
-    if (!selected) return;
-    const ok = window.confirm(`¿Borrar el tipo de producto "${selected.nombre}"? Esta acción no se puede deshacer.`);
-    if (!ok) return;
-    fetch(`/api/calc/product-types/${selected.id}`, { method: "DELETE" })
-      .then(() => {
-        setSelectedId(null);
-        setResultado(null);
-        reloadProductTypes();
-      })
-      .catch(() => alert("No se pudo borrar. Proba de nuevo."));
-  };
-
-  const calcular = () => {
-    if (!selected || calculando) return;
-    const fob = Number(fobUsd);
-    if (!Number.isFinite(fob) || fob <= 0) {
-      setRunError("Cargá un FOB válido (mayor a 0).");
-      return;
-    }
-    setCalculando(true);
-    setRunError(null);
-    setResultado(null);
-    fetch("/api/calc/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        productTypeId: selected.id,
-        fobUsd: fob,
-        pvpArsManual: pvpManual.trim() ? Number(pvpManual) : undefined,
-      }),
-    })
-      .then((r) => r.json())
-      .then((d: RunResult) => {
-        if (d.error) {
-          setRunError(d.error);
-          return;
-        }
-        setResultado(d);
-        if (d.productType) {
-          setProductTypes((prev) => prev.map((p) => (p.id === d.productType.id ? d.productType : p)));
-        }
-      })
-      .catch(() => setRunError("No se pudo calcular. Proba de nuevo."))
-      .finally(() => setCalculando(false));
-  };
-
-  const abrirSupuestos = () => {
-    if (!supuestos) return;
-    setSupuestosForm({
-      tipoCambioArs: String(supuestos.tipoCambioArs),
-      comisionMlPct: fmtPctInput(supuestos.comisionMlPct),
-      iibbPct: fmtPctInput(supuestos.iibbPct),
-      padsPct: fmtPctInput(supuestos.padsPct),
-      tasaEstadisticaPct: fmtPctInput(supuestos.tasaEstadisticaPct),
-      ley25413Pct: fmtPctInput(supuestos.ley25413Pct),
-      seguroUsdUnidad: String(supuestos.seguroUsdUnidad),
-      feeBajoTicketArs: String(supuestos.feeBajoTicketArs),
-      umbralEnvioGratisArs: String(supuestos.umbralEnvioGratisArs),
-      descuentoDistribucionPct: fmtPctInput(supuestos.descuentoDistribucionPct),
-      fleteMaritimoUsd: String(supuestos.fleteMaritimoUsd),
-      forwarderUsd: String(supuestos.forwarderUsd),
-      despachanteUsd: String(supuestos.despachanteUsd),
-      thcUsd: String(supuestos.thcUsd),
-      fleteLocalUsd: String(supuestos.fleteLocalUsd),
-      manipuleoUsd: String(supuestos.manipuleoUsd),
-      capacidadCbmContenedor: String(supuestos.capacidadCbmContenedor),
-    });
-    setShowSupuestos(true);
-  };
-
-  const guardarSupuestos = () => {
-    if (!supuestosForm || guardandoSupuestos) return;
-    setGuardandoSupuestos(true);
-    fetch("/api/calc/supuestos", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tipoCambioArs: Number(supuestosForm.tipoCambioArs),
-        comisionMlPct: Number(supuestosForm.comisionMlPct) / 100,
-        iibbPct: Number(supuestosForm.iibbPct) / 100,
-        padsPct: Number(supuestosForm.padsPct) / 100,
-        tasaEstadisticaPct: Number(supuestosForm.tasaEstadisticaPct) / 100,
-        ley25413Pct: Number(supuestosForm.ley25413Pct) / 100,
-        seguroUsdUnidad: Number(supuestosForm.seguroUsdUnidad),
-        feeBajoTicketArs: Number(supuestosForm.feeBajoTicketArs),
-        umbralEnvioGratisArs: Number(supuestosForm.umbralEnvioGratisArs),
-        descuentoDistribucionPct: Number(supuestosForm.descuentoDistribucionPct) / 100,
-        fleteMaritimoUsd: Number(supuestosForm.fleteMaritimoUsd),
-        forwarderUsd: Number(supuestosForm.forwarderUsd),
-        despachanteUsd: Number(supuestosForm.despachanteUsd),
-        thcUsd: Number(supuestosForm.thcUsd),
-        fleteLocalUsd: Number(supuestosForm.fleteLocalUsd),
-        manipuleoUsd: Number(supuestosForm.manipuleoUsd),
-        capacidadCbmContenedor: Number(supuestosForm.capacidadCbmContenedor),
-      }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.supuestos) {
-          setSupuestos(d.supuestos);
-          setShowSupuestos(false);
-        }
-      })
-      .catch(() => alert("No se pudo guardar. Proba de nuevo."))
-      .finally(() => setGuardandoSupuestos(false));
-  };
-
-  const recalcularFlete = () => {
-    if (refrescandoFlete) return;
-    setRefrescandoFlete(true);
-    fetch("/api/calc/supuestos/refresh-flete", { method: "POST" })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.error) {
-          alert(`No se pudo recalcular el flete: ${d.error}`);
-          return;
-        }
-        reloadSupuestos();
-        if (supuestosForm) {
-          setSupuestosForm({ ...supuestosForm, fleteMaritimoUsd: String(d.fleteMaritimoUsd) });
-        }
-      })
-      .catch(() => alert("No se pudo recalcular el flete. Proba de nuevo."))
-      .finally(() => setRefrescandoFlete(false));
-  };
-
-  const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box" };
-
+function ShareTable({
+  title,
+  rows,
+  last12Label,
+  nameLabel = "Nombre",
+}: {
+  title: string;
+  rows: ShareRow[];
+  last12Label: string;
+  nameLabel?: string;
+}) {
   return (
-    <>
-      <AppHeader
-        title="Calculador de Importación"
-        actions={
-          <Link href="/" className="app-header-nav-btn">
-            ← Volver al módulo de importaciones
-          </Link>
-        }
-      />
-      <div className="container">
-        <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-            <h1 style={{ fontSize: 15, margin: 0 }}>Tipo de producto</h1>
-            <button onClick={abrirSupuestos} disabled={!supuestos} style={{ fontSize: 12 }}>
-              ⚙️ Supuestos generales
-            </button>
-          </div>
-          <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 12 }}>
-            Catálogo abierto: creá cualquier tipo de producto que necesites (no está atado a las categorías del
-            dashboard). Arancel, IVA y CBM se estiman con IA la primera vez y quedan guardados.
-          </div>
-
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <select
-              value={selectedId ?? ""}
-              onChange={(e) => {
-                setSelectedId(e.target.value ? Number(e.target.value) : null);
-                setResultado(null);
-                setRunError(null);
-              }}
-              style={{ minWidth: 240 }}
-              disabled={loadingTypes}
-            >
-              <option value="">{loadingTypes ? "Cargando..." : "Elegí un tipo de producto"}</option>
-              {productTypes.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nombre}
-                </option>
-              ))}
-            </select>
-            <button onClick={() => setShowNuevo((v) => !v)} style={{ fontSize: 13 }}>
-              + Nuevo tipo de producto
-            </button>
-            {selected && (
-              <>
-                <button onClick={abrirEditar} style={{ fontSize: 13 }}>
-                  ✎ Editar
-                </button>
-                <button onClick={borrarTipoProducto} style={{ fontSize: 13, color: "#d93a3a", borderColor: "#d93a3a" }}>
-                  🗑 Borrar
-                </button>
-              </>
+    <div className="panel">
+      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>{title}</h1>
+      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>{last12Label}</div>
+      <div className="table-scroll" style={{ maxHeight: 360, overflowY: "auto" }}>
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>{nameLabel}</th>
+              <th style={{ textAlign: "right" }}>FOB USD</th>
+              <th style={{ textAlign: "right" }}>FOB %</th>
+              <th style={{ textAlign: "right" }}>Unidades</th>
+              <th style={{ textAlign: "right" }}>Unidades %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key}>
+                <td>{r.key}</td>
+                <td style={{ textAlign: "right" }}>{fmtNumber(r.fob)}</td>
+                <td style={{ textAlign: "right" }}>{r.fobPct.toFixed(1)}%</td>
+                <td style={{ textAlign: "right" }}>{fmtNumber(r.unidades)}</td>
+                <td style={{ textAlign: "right" }}>{r.unidadesPct.toFixed(1)}%</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} style={{ color: "var(--muted)" }}>Sin datos</td>
+              </tr>
             )}
-          </div>
-
-          {showNuevo && (
-            <div
-              style={{
-                marginTop: 14,
-                background: "var(--bg)",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                padding: 14,
-              }}
-            >
-              <div className="row">
-                <div style={{ flex: 2, minWidth: 220 }}>
-                  <label>Nombre del tipo de producto</label>
-                  <input
-                    type="text"
-                    value={nuevoNombre}
-                    onChange={(e) => setNuevoNombre(e.target.value)}
-                    placeholder='ej. "Silla de Ruedas", "TV 32 pulgadas"'
-                  />
-                </div>
-                <div style={{ flex: 1, minWidth: 160 }}>
-                  <label>NCM (opcional)</label>
-                  <input type="text" value={nuevoNcm} onChange={(e) => setNuevoNcm(e.target.value)} placeholder="8713.10.00" />
-                </div>
-              </div>
-              {creandoError && <div style={{ color: "#d93a3a", fontSize: 12, marginTop: 6 }}>{creandoError}</div>}
-              <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                <button onClick={crearTipoProducto} disabled={creando || !nuevoNombre.trim()}>
-                  {creando ? "Creando y estimando arancel/IVA/CBM con IA..." : "Crear"}
-                </button>
-                <button onClick={() => setShowNuevo(false)} disabled={creando}>
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {selected && (
-            <div style={{ marginTop: 14, display: "flex", gap: 18, flexWrap: "wrap", fontSize: 13 }}>
-              <div>
-                <span style={{ color: "var(--muted)" }}>Arancel: </span>
-                <strong>{selected.arancel_pct != null ? fmtPct(selected.arancel_pct) : "—"}</strong>
-                <ConfianzaDot confianza={selected.arancel_confianza} razonamiento={selected.arancel_razonamiento} />
-              </div>
-              <div>
-                <span style={{ color: "var(--muted)" }}>IVA: </span>
-                <strong>{selected.iva_pct != null ? fmtPct(selected.iva_pct) : "—"}</strong>
-                <ConfianzaDot confianza={selected.iva_confianza} razonamiento={selected.iva_razonamiento} />
-              </div>
-              <div>
-                <span style={{ color: "var(--muted)" }}>CBM: </span>
-                <strong>{selected.cbm_m3 != null ? `${selected.cbm_m3} m³` : "—"}</strong>
-                <ConfianzaDot confianza={selected.cbm_confianza} razonamiento={selected.cbm_razonamiento} />
-              </div>
-              <div>
-                <span style={{ color: "var(--muted)" }}>Trader: </span>
-                <strong>{fmtPct(selected.trader_pct)}</strong>
-              </div>
-              <div>
-                <span style={{ color: "var(--muted)" }}>Envío al cliente: </span>
-                <strong>${fmtNumber(selected.envio_ars_con_iva)}</strong>
-              </div>
-              <div>
-                <span style={{ color: "var(--muted)" }}>PVP mercado (IA): </span>
-                <strong>{selected.pvp_ars_estimado != null ? `$${fmtNumber(selected.pvp_ars_estimado)}` : "—"}</strong>
-                <ConfianzaDot confianza={selected.pvp_confianza} razonamiento={selected.pvp_razonamiento} />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {selected && (
-          <div className="panel">
-            <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 12 }}>Calcular</h1>
-            <div className="row">
-              <div style={{ flex: 1, minWidth: 160 }}>
-                <label>FOB (USD)</label>
-                <input
-                  type="number"
-                  value={fobUsd}
-                  onChange={(e) => setFobUsd(e.target.value)}
-                  placeholder="ej. 24.00"
-                />
-              </div>
-              <div style={{ flex: 1, minWidth: 200 }}>
-                <label>PVP MeLi (ARS con IVA) — opcional</label>
-                <input
-                  type="number"
-                  value={pvpManual}
-                  onChange={(e) => setPvpManual(e.target.value)}
-                  placeholder="dejar vacío para estimar con IA"
-                />
-              </div>
-              <div style={{ display: "flex", alignItems: "flex-end" }}>
-                <button onClick={calcular} disabled={calculando || !fobUsd}>
-                  {calculando ? "Calculando..." : "Calcular"}
-                </button>
-              </div>
-            </div>
-            {runError && <div style={{ color: "#d93a3a", fontSize: 13, marginTop: 10 }}>{runError}</div>}
-          </div>
-        )}
-
-        {resultado && !resultado.error && (
-          <>
-            <div className="panel">
-              <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>Costo Nacionalizado</h1>
-              <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>
-                PVP de MeLi usado en este cálculo: ${fmtNumber(resultado.resultado.meli.pvpConIva)}{" "}
-                {resultado.pvpFuente === "manual" && "(cargado a mano)"}
-                {resultado.pvpFuente === "cache" && "(estimado por IA, ya cacheado)"}
-                {resultado.pvpFuente === "ia" && "(recién estimado por IA)"}
-              </div>
-              <table className="admin-table" style={{ fontSize: 13 }}>
-                <tbody>
-                  <tr>
-                    <td>FOB</td>
-                    <td style={{ textAlign: "right" }}>US$ {fmtUsd(Number(fobUsd))}</td>
-                  </tr>
-                  <tr>
-                    <td>+ Trader ({fmtPct(selected!.trader_pct)})</td>
-                    <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.traderUsd)}</td>
-                  </tr>
-                  <tr>
-                    <td>+ Seguro</td>
-                    <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.seguroUsd)}</td>
-                  </tr>
-                  <tr>
-                    <td>
-                      <strong>CIF</strong>
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      <strong>US$ {fmtUsd(resultado.resultado.costoNacionalizado.cifUsd)}</strong>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td>+ Arancel ({fmtPct(selected!.arancel_pct ?? 0)} sobre CIF)</td>
-                    <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.arancelUsd)}</td>
-                  </tr>
-                  <tr>
-                    <td>+ Tasa estadística</td>
-                    <td style={{ textAlign: "right" }}>
-                      US$ {fmtUsd(resultado.resultado.costoNacionalizado.tasaEstadisticaUsd)}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td>+ Ley 25413</td>
-                    <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.ley25413Usd)}</td>
-                  </tr>
-                  <tr>
-                    <td>+ Logística ({selected!.cbm_m3} m³ × US$ {fmtUsd(resultado.resultado.costoNacionalizado.costoFijoPorCbmUsd)}/m³)</td>
-                    <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.logisticaUsd)}</td>
-                  </tr>
-                  <tr>
-                    <td>
-                      <strong>COSTO NACIONALIZADO</strong>
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      <strong>
-                        US$ {fmtUsd(resultado.resultado.costoNacionalizado.costoNacionalizadoUsd)} — $
-                        {fmtNumber(resultado.resultado.costoNacionalizado.costoNacionalizadoArs)}
-                      </strong>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div className="row">
-              <div style={{ flex: 1, minWidth: 320 }} className="panel">
-                <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 12 }}>Vendiendo por MeLi</h1>
-                <CanalTable canal={resultado.resultado.meli} showMeliDetalle />
-              </div>
-              <div style={{ flex: 1, minWidth: 320 }} className="panel">
-                <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 12 }}>Vendiendo a Distribución</h1>
-                <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>
-                  PVP = PVP MeLi × (1 − {fmtPct(resultado.supuestos.descuentoDistribucionPct)})
-                </div>
-                <CanalTable canal={resultado.resultado.distribucion} showMeliDetalle={false} />
-              </div>
-            </div>
-          </>
-        )}
+          </tbody>
+        </table>
       </div>
-
-      {showEditar && selected && editForm && (
-        <div
-          onClick={() => setShowEditar(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.5)",
-            zIndex: 100,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "#fff",
-              borderRadius: 10,
-              padding: 20,
-              maxWidth: 480,
-              width: "100%",
-            }}
-          >
-            <h1 style={{ fontSize: 16, marginTop: 0 }}>Editar "{selected.nombre}"</h1>
-            <div className="row">
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <label>Arancel %</label>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    type="number"
-                    value={editForm.arancelPct}
-                    onChange={(e) => setEditForm({ ...editForm, arancelPct: e.target.value })}
-                    style={inputStyle}
-                  />
-                  <button onClick={() => recalcularCampo("arancel")} disabled={refrescando === "arancel"} title="Recalcular con IA">
-                    {refrescando === "arancel" ? "…" : "🔄"}
-                  </button>
-                </div>
-              </div>
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <label>IVA %</label>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    type="number"
-                    value={editForm.ivaPct}
-                    onChange={(e) => setEditForm({ ...editForm, ivaPct: e.target.value })}
-                    style={inputStyle}
-                  />
-                  <button onClick={() => recalcularCampo("iva")} disabled={refrescando === "iva"} title="Recalcular con IA">
-                    {refrescando === "iva" ? "…" : "🔄"}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div className="row" style={{ marginTop: 10 }}>
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <label>CBM (m³)</label>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    type="number"
-                    value={editForm.cbmM3}
-                    onChange={(e) => setEditForm({ ...editForm, cbmM3: e.target.value })}
-                    style={inputStyle}
-                  />
-                  <button onClick={() => recalcularCampo("cbm")} disabled={refrescando === "cbm"} title="Recalcular con IA">
-                    {refrescando === "cbm" ? "…" : "🔄"}
-                  </button>
-                </div>
-              </div>
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <label>Trader % (manual)</label>
-                <input
-                  type="number"
-                  value={editForm.traderPct}
-                  onChange={(e) => setEditForm({ ...editForm, traderPct: e.target.value })}
-                  style={inputStyle}
-                />
-              </div>
-            </div>
-            <div className="row" style={{ marginTop: 10 }}>
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <label>Envío al cliente (ARS con IVA, manual)</label>
-                <input
-                  type="number"
-                  value={editForm.envioArsConIva}
-                  onChange={(e) => setEditForm({ ...editForm, envioArsConIva: e.target.value })}
-                  style={inputStyle}
-                />
-              </div>
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <label>PVP mercado (IA)</label>
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ fontSize: 13 }}>
-                    {selected.pvp_ars_estimado != null ? `$${fmtNumber(selected.pvp_ars_estimado)}` : "sin dato"}
-                  </span>
-                  <button onClick={() => recalcularCampo("pvp")} disabled={refrescando === "pvp"} title="Recalcular con IA">
-                    {refrescando === "pvp" ? "…" : "🔄"}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-              <button onClick={() => setShowEditar(false)} disabled={guardandoEdit}>
-                Cancelar
-              </button>
-              <button onClick={guardarEdit} disabled={guardandoEdit}>
-                {guardandoEdit ? "Guardando..." : "Guardar"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showSupuestos && supuestosForm && (
-        <div
-          onClick={() => setShowSupuestos(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.5)",
-            zIndex: 100,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-            overflowY: "auto",
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: "#fff", borderRadius: 10, padding: 20, maxWidth: 620, width: "100%" }}
-          >
-            <h1 style={{ fontSize: 16, marginTop: 0 }}>Supuestos generales</h1>
-            <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 14 }}>
-              Aplican a TODOS los tipos de producto. Solo Arancel, IVA, CBM y Trader se definen por tipo de producto.
-            </div>
-            <div className="row">
-              <Campo label="Tipo de cambio (ARS/USD)" value={supuestosForm.tipoCambioArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, tipoCambioArs: v })} />
-              <Campo label="Comisión Mercado Libre %" value={supuestosForm.comisionMlPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, comisionMlPct: v })} />
-              <Campo label="IIBB %" value={supuestosForm.iibbPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, iibbPct: v })} />
-            </div>
-            <div className="row" style={{ marginTop: 10 }}>
-              <Campo label="PADS %" value={supuestosForm.padsPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, padsPct: v })} />
-              <Campo label="Tasa estadística %" value={supuestosForm.tasaEstadisticaPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, tasaEstadisticaPct: v })} />
-              <Campo label="Ley 25413 %" value={supuestosForm.ley25413Pct} onChange={(v) => setSupuestosForm({ ...supuestosForm, ley25413Pct: v })} />
-            </div>
-            <div className="row" style={{ marginTop: 10 }}>
-              <Campo label="Seguro por unidad (USD)" value={supuestosForm.seguroUsdUnidad} onChange={(v) => setSupuestosForm({ ...supuestosForm, seguroUsdUnidad: v })} />
-              <Campo label="Fee bajo ticket (ARS)" value={supuestosForm.feeBajoTicketArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, feeBajoTicketArs: v })} />
-              <Campo label="Umbral envío gratis (ARS)" value={supuestosForm.umbralEnvioGratisArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, umbralEnvioGratisArs: v })} />
-            </div>
-            <div className="row" style={{ marginTop: 10 }}>
-              <Campo label="Descuento Distribución %" value={supuestosForm.descuentoDistribucionPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, descuentoDistribucionPct: v })} />
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <label>Flete marítimo (USD/contenedor)</label>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    type="number"
-                    value={supuestosForm.fleteMaritimoUsd}
-                    onChange={(e) => setSupuestosForm({ ...supuestosForm, fleteMaritimoUsd: e.target.value })}
-                    style={inputStyle}
-                  />
-                  <button onClick={recalcularFlete} disabled={refrescandoFlete} title="Recalcular con IA">
-                    {refrescandoFlete ? "…" : "🔄"}
-                  </button>
-                </div>
-                {supuestos?.fleteRazonamiento && (
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{supuestos.fleteRazonamiento}</div>
-                )}
-              </div>
-              <Campo label="Capacidad contenedor (CBM)" value={supuestosForm.capacidadCbmContenedor} onChange={(v) => setSupuestosForm({ ...supuestosForm, capacidadCbmContenedor: v })} />
-            </div>
-            <div className="row" style={{ marginTop: 10 }}>
-              <Campo label="Forwarder (USD)" value={supuestosForm.forwarderUsd} onChange={(v) => setSupuestosForm({ ...supuestosForm, forwarderUsd: v })} />
-              <Campo label="Despachante (USD)" value={supuestosForm.despachanteUsd} onChange={(v) => setSupuestosForm({ ...supuestosForm, despachanteUsd: v })} />
-              <Campo label="THC / terminal (USD)" value={supuestosForm.thcUsd} onChange={(v) => setSupuestosForm({ ...supuestosForm, thcUsd: v })} />
-            </div>
-            <div className="row" style={{ marginTop: 10 }}>
-              <Campo label="Flete local puerto→depósito (USD)" value={supuestosForm.fleteLocalUsd} onChange={(v) => setSupuestosForm({ ...supuestosForm, fleteLocalUsd: v })} />
-              <Campo label="Manipuleo (USD)" value={supuestosForm.manipuleoUsd} onChange={(v) => setSupuestosForm({ ...supuestosForm, manipuleoUsd: v })} />
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-              <button onClick={() => setShowSupuestos(false)} disabled={guardandoSupuestos}>
-                Cancelar
-              </button>
-              <button onClick={guardarSupuestos} disabled={guardandoSupuestos}>
-                {guardandoSupuestos ? "Guardando..." : "Guardar"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-function Campo({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <div style={{ flex: 1, minWidth: 140 }}>
-      <label>{label}</label>
-      <input type="number" value={value} onChange={(e) => onChange(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
     </div>
   );
 }
 
-function CanalTable({ canal, showMeliDetalle }: { canal: CalcCanal; showMeliDetalle: boolean }) {
+function SegmentoPieChart({ rows, last12Label }: { rows: ShareRow[]; last12Label: string }) {
   return (
-    <table className="admin-table" style={{ fontSize: 13 }}>
-      <tbody>
-        <tr>
-          <td>PVP (con IVA)</td>
-          <td style={{ textAlign: "right" }}>${fmtNumber(canal.pvpConIva)}</td>
-        </tr>
-        <tr>
-          <td>PVP neto de IVA</td>
-          <td style={{ textAlign: "right" }}>${fmtNumber(canal.pvpNeto)}</td>
-        </tr>
-        {showMeliDetalle && (
-          <>
+    <div className="panel">
+      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>Share por Segmento (FOB)</h1>
+      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>{last12Label}</div>
+      {rows.length === 0 ? (
+        <p style={{ color: "var(--muted)" }}>Sin datos.</p>
+      ) : (
+        <div className="pie-wrap">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={rows}
+              dataKey="fob"
+              nameKey="key"
+              cx="50%"
+              cy="50%"
+              outerRadius={100}
+              label={(entry: any) => `${Number(entry.fobPct ?? 0).toFixed(0)}%`}
+            >
+              {rows.map((r) => (
+                <Cell key={r.key} fill={colorForSegmento(r.key)} />
+              ))}
+            </Pie>
+            <Tooltip formatter={(value: any) => fmtNumber(Number(value))} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+          </PieChart>
+        </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ModelShareRow {
+  marca: string;
+  modelo: string;
+  segmento: string;
+  importador: string;
+  fob: number;
+  fobPct: number;
+  unidades: number;
+  unidadesPct: number;
+  /** fob / unidades del periodo (0 si no hay unidades). */
+  fobUnitario: number;
+}
+
+export interface ModelImageEntry {
+  marca: string;
+  modelo: string;
+  image_url: string | null;
+  thumbnail_url: string | null;
+  source_url: string | null;
+  status: string; // 'pending' | 'found' | 'not_found' | 'error'
+}
+
+/**
+ * PVP (Precio de Venta al Publico) estimado en USD via OpenAI (busqueda web,
+ * ver lib/pvpFinder.ts), cacheado en la tabla model_pvp. Se consulta ON
+ * DEMAND igual que la imagen: el usuario hace click en "Consultar precio" en
+ * la fila y se guarda para siempre (salvo que haya dado 'error').
+ */
+export interface ModelPvpEntry {
+  marca: string;
+  modelo: string;
+  pvp_usd: number | null;
+  confianza: string | null;
+  razonamiento: string | null;
+  status: string; // 'pending' | 'found' | 'not_found' | 'error'
+}
+
+function modelImageKey(marca: string, modelo: string): string {
+  return `${marca}|||${modelo}`;
+}
+
+/**
+ * Share por combinacion marca+modelo (no por modelo solo: el mismo nombre de
+ * modelo puede repetirse entre marcas distintas). Ademas de FOB%/Unidades%
+ * sobre el periodo elegido, calcula el importador principal de cada
+ * combinacion (el que mas FOB acumulo) para mostrarlo como referencia.
+ */
+function computeShareByModel(series: SeriesPoint[], periodSet: Set<string> | null): ModelShareRow[] {
+  interface Acc {
+    marca: string;
+    modelo: string;
+    segmento: string;
+    fob: number;
+    uni: number;
+    byImporter: Map<string, number>;
+  }
+  const totals = new Map<string, Acc>();
+  let totalFob = 0;
+  let totalUni = 0;
+  for (const s of series) {
+    if (periodSet && !periodSet.has(s.period)) continue;
+    const marca = s.marca ?? "sin_dato";
+    const modelo = s.modelo ?? "sin_dato";
+    const segmento = s.segmento ?? "sin_dato";
+    const key = modelImageKey(marca, modelo);
+    const fob = Number(s.total_fob_dolars) || 0;
+    const uni = Number(s.total_unidades) || 0;
+    const cur = totals.get(key) ?? { marca, modelo, segmento, fob: 0, uni: 0, byImporter: new Map<string, number>() };
+    cur.fob += fob;
+    cur.uni += uni;
+    const prov = s.proveedor ?? "sin_dato";
+    cur.byImporter.set(prov, (cur.byImporter.get(prov) ?? 0) + fob);
+    totals.set(key, cur);
+    totalFob += fob;
+    totalUni += uni;
+  }
+
+  const rows: ModelShareRow[] = Array.from(totals.values()).map((v) => {
+    let importador = "-";
+    let topVal = -Infinity;
+    for (const [imp, val] of v.byImporter) {
+      if (val > topVal) {
+        topVal = val;
+        importador = imp;
+      }
+    }
+    return {
+      marca: v.marca,
+      modelo: v.modelo,
+      segmento: v.segmento,
+      importador,
+      fob: v.fob,
+      fobPct: totalFob > 0 ? (v.fob / totalFob) * 100 : 0,
+      unidades: v.uni,
+      unidadesPct: totalUni > 0 ? (v.uni / totalUni) * 100 : 0,
+      fobUnitario: v.uni > 0 ? v.fob / v.uni : 0,
+    };
+  });
+  rows.sort((a, b) => b.fob - a.fob);
+  return rows;
+}
+
+// Titulo (tooltip) del boton de imagen -- el boton en si se ve como un
+// icono de lupa para no ocupar tanto lugar en la tabla (ver ModelShareTable).
+const IMAGE_BUTTON_LABEL: Record<string, string> = {
+  found: "Ver imagen",
+  not_found: "Sin imagen (click para reintentar)",
+  error: "Reintentar busqueda de imagen",
+  // "pending" = todavia no se busco: el click dispara la busqueda on-demand
+  // (ver ModelImageModal), no hace falta un backfill previo.
+  pending: "Buscar imagen",
+};
+
+const PVP_BUTTON_LABEL: Record<string, string> = {
+  not_found: "No se encontro un precio confiable (click para reintentar)",
+  error: "Reintentar consulta de precio",
+  pending: "Consultar precio (OpenAI busca en la web)",
+};
+
+function ModelShareTable({
+  rows,
+  last12Label,
+  imageStatus,
+  onViewImage,
+  pvpEntry,
+  pvpLoadingKeys,
+  onConsultPvp,
+}: {
+  rows: ModelShareRow[];
+  last12Label: string;
+  imageStatus: (marca: string, modelo: string) => string;
+  onViewImage: (marca: string, modelo: string, segmento: string) => void;
+  pvpEntry: (marca: string, modelo: string) => ModelPvpEntry | undefined;
+  pvpLoadingKeys: Set<string>;
+  onConsultPvp: (marca: string, modelo: string, segmento: string) => void;
+}) {
+  const cellStyle: React.CSSProperties = { padding: "5px 6px", fontSize: 12.5 };
+  const cellRight: React.CSSProperties = { ...cellStyle, textAlign: "right" };
+  return (
+    <div className="panel">
+      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>Share por Modelo</h1>
+      <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>{last12Label}</div>
+      <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
+        <table className="admin-table" style={{ fontSize: 12.5 }}>
+          <thead>
             <tr>
-              <td>(−) Comisión Mercado Libre</td>
-              <td style={{ textAlign: "right" }}>${fmtNumber(canal.comisionMlArs)}</td>
+              <th style={cellStyle}>Modelo</th>
+              <th style={cellStyle}>Marca</th>
+              <th style={cellStyle}>Segmento</th>
+              <th style={cellStyle}>Importador</th>
+              <th style={cellRight}>FOB USD</th>
+              <th style={cellRight}>FOB %</th>
+              <th style={cellRight}>Unidades</th>
+              <th style={cellRight}>Uds %</th>
+              <th style={cellRight}>FOB Unit.</th>
+              <th style={cellRight}>PVP USD</th>
+              <th style={cellStyle}></th>
             </tr>
-            <tr>
-              <td>(−) Envío al cliente {canal.envioGratisAplica ? "" : "(no aplica, bajo umbral)"}</td>
-              <td style={{ textAlign: "right" }}>${fmtNumber(canal.envioNetoArs)}</td>
-            </tr>
-            <tr>
-              <td>(−) PADS</td>
-              <td style={{ textAlign: "right" }}>${fmtNumber(canal.padsArs)}</td>
-            </tr>
-            {canal.feeBajoTicketArs > 0 && (
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const status = imageStatus(r.marca, r.modelo);
+              const key = modelImageKey(r.marca, r.modelo);
+              const pvp = pvpEntry(r.marca, r.modelo);
+              const pvpStatus = pvp?.status ?? "pending";
+              const pvpLoading = pvpLoadingKeys.has(key);
+              return (
+                <tr key={key}>
+                  <td style={cellStyle}>{r.modelo}</td>
+                  <td style={cellStyle}>{r.marca}</td>
+                  <td style={cellStyle}>{r.segmento}</td>
+                  <td style={cellStyle}>{r.importador}</td>
+                  <td style={cellRight}>{fmtNumber(r.fob)}</td>
+                  <td style={cellRight}>{r.fobPct.toFixed(1)}%</td>
+                  <td style={cellRight}>{fmtNumber(r.unidades)}</td>
+                  <td style={cellRight}>{r.unidadesPct.toFixed(1)}%</td>
+                  <td style={cellRight}>{r.unidades > 0 ? `$${fmtNumber(r.fobUnitario)}` : "-"}</td>
+                  <td style={cellRight}>
+                    {pvpLoading ? (
+                      <span style={{ color: "var(--muted)" }}>Buscando...</span>
+                    ) : pvpStatus === "found" && pvp?.pvp_usd != null ? (
+                      // El puntito de color es la "confianza" que devolvio la IA
+                      // (verde=alta, amarillo=media, rojo=baja) -- pedido implicito
+                      // del usuario tras detectar un PVP incorrecto (20/07/2026,
+                      // ver ACTUALIZACION 4 en lib/pvpFinder.ts): antes la
+                      // confianza solo se veia en el tooltip, ahora es visible de
+                      // un vistazo para saber cuales precios conviene chequear a
+                      // mano. El tooltip (razonamiento) ahora tambien incluye el
+                      // monto en pesos y el tipo de cambio usado, para auditar.
+                      <span
+                        title={pvp.razonamiento ?? undefined}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+                      >
+                        ${fmtNumber(pvp.pvp_usd)}
+                        <span
+                          title={`Confianza de la IA: ${pvp.confianza ?? "baja"}`}
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: "50%",
+                            display: "inline-block",
+                            flexShrink: 0,
+                            background:
+                              pvp.confianza === "alta" ? "#2fa84f" : pvp.confianza === "media" ? "#e0a52f" : "#d93a3a",
+                          }}
+                        />
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => onConsultPvp(r.marca, r.modelo, r.segmento)}
+                        title={PVP_BUTTON_LABEL[pvpStatus] ?? "Consultar precio"}
+                        style={{ fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap" }}
+                      >
+                        {pvpStatus === "not_found" ? "Sin dato ↻" : pvpStatus === "error" ? "Error ↻" : "Consultar"}
+                      </button>
+                    )}
+                  </td>
+                  <td style={cellStyle}>
+                    <button
+                      onClick={() => onViewImage(r.marca, r.modelo, r.segmento)}
+                      title={IMAGE_BUTTON_LABEL[status] ?? "Buscar imagen"}
+                      aria-label={IMAGE_BUTTON_LABEL[status] ?? "Buscar imagen"}
+                      style={{ fontSize: 13, padding: "2px 7px", lineHeight: 1 }}
+                    >
+                      🔍
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
               <tr>
-                <td>(−) Fee bajo ticket</td>
-                <td style={{ textAlign: "right" }}>${fmtNumber(canal.feeBajoTicketArs)}</td>
+                <td colSpan={11} style={{ color: "var(--muted)" }}>Sin datos</td>
               </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// NOTA (17/07/2026): las opciones del <select> de Segmento en el modal de
+// correccion ("Corregir") ya NO son una lista fija -- vienen de
+// segmentosValidos(categorySlug) (lib/segmentos.ts), que tiene una lista
+// distinta por categoria. Antes esto solo mostraba (y el backend solo
+// aceptaba) los 6 segmentos de "Sillas de ruedas", asi que corregir el
+// segmento de un andador, una cama, etc. era imposible.
+
+function ModelImageModal({
+  marca,
+  modelo,
+  categorySlug,
+  segmentoActual,
+  entry,
+  onClose,
+  onResolved,
+  onOverrideSaved,
+}: {
+  marca: string;
+  modelo: string;
+  categorySlug: string;
+  segmentoActual: string;
+  entry: ModelImageEntry | undefined;
+  onClose: () => void;
+  onResolved: (entry: ModelImageEntry) => void;
+  onOverrideSaved: () => void;
+}) {
+  const [local, setLocal] = useState<ModelImageEntry | undefined>(entry);
+  const [searching, setSearching] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [imageUrlInput, setImageUrlInput] = useState("");
+  const [segmentoInput, setSegmentoInput] = useState(segmentoActual);
+  const [saving, setSaving] = useState(false);
+  const [imgError, setImgError] = useState(false);
+
+  // Si cambia la imagen (ej. se guarda una correccion nueva), se resetea el
+  // estado de error para volver a intentar cargarla.
+  useEffect(() => {
+    setImgError(false);
+  }, [local?.image_url]);
+
+  useEffect(() => {
+    setLocal(entry);
+    const needsSearch = !entry || entry.status === "pending" || entry.status === "error";
+    if (!needsSearch) return;
+
+    let cancelled = false;
+    setSearching(true);
+    fetch("/api/model-images/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: categorySlug, marca, modelo }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        if (d.image) {
+          setLocal(d.image);
+          onResolved(d.image);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const errEntry: ModelImageEntry = { marca, modelo, image_url: null, thumbnail_url: null, source_url: null, status: "error" };
+        setLocal(errEntry);
+        onResolved(errEntry);
+      })
+      .finally(() => {
+        if (!cancelled) setSearching(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marca, modelo, categorySlug]);
+
+  const startEditing = () => {
+    setImageUrlInput(local?.image_url ?? "");
+    setSegmentoInput(segmentoActual);
+    setEditing(true);
+  };
+
+  const saveOverride = async () => {
+    setSaving(true);
+    try {
+      const body: Record<string, string> = { category: categorySlug, marca, modelo };
+      const trimmedUrl = imageUrlInput.trim();
+      if (trimmedUrl) body.image_url = trimmedUrl;
+      if (segmentoInput) body.segmento = segmentoInput;
+
+      const res = await fetch("/api/model-overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("save_failed");
+
+      if (trimmedUrl) {
+        const updated: ModelImageEntry = {
+          marca,
+          modelo,
+          image_url: trimmedUrl,
+          thumbnail_url: trimmedUrl,
+          source_url: local?.source_url ?? null,
+          status: "found",
+        };
+        setLocal(updated);
+        onResolved(updated);
+      }
+      setEditing(false);
+      onOverrideSaved();
+    } catch {
+      alert("No se pudo guardar la correccion. Proba de nuevo.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const status = searching ? "searching" : local?.status ?? "pending";
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.7)",
+        zIndex: 100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--panel, #171a21)",
+          border: "1px solid var(--border, #2a2e37)",
+          borderRadius: 10,
+          padding: 20,
+          maxWidth: 480,
+          width: "100%",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+          <strong style={{ fontSize: 15 }}>{marca} — {modelo}</strong>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {!editing && (
+              <button onClick={startEditing} title="Corregir imagen o segmento" style={{ padding: "4px 10px", fontSize: 13 }}>
+                ✎ Corregir
+              </button>
+            )}
+            <button onClick={onClose} style={{ padding: "4px 10px", fontSize: 13 }}>Cerrar</button>
+          </div>
+        </div>
+        <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 14 }}>Segmento: {segmentoActual}</div>
+
+        {editing && (
+          <div style={{ textAlign: "left", background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+            <label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
+              URL de imagen (dejar vacio para no cambiarla)
+            </label>
+            <input
+              type="text"
+              value={imageUrlInput}
+              onChange={(e) => setImageUrlInput(e.target.value)}
+              placeholder="https://..."
+              style={{ width: "100%", boxSizing: "border-box", padding: "6px 8px", fontSize: 13, marginBottom: 12 }}
+            />
+            <label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
+              Segmento
+            </label>
+            <select
+              value={segmentoInput}
+              onChange={(e) => setSegmentoInput(e.target.value)}
+              style={{ width: "100%", padding: "6px 8px", fontSize: 13, marginBottom: 14 }}
+            >
+              {segmentosValidos(categorySlug).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setEditing(false)} disabled={saving} style={{ padding: "4px 10px", fontSize: 13 }}>
+                Cancelar
+              </button>
+              <button onClick={saveOverride} disabled={saving} style={{ padding: "4px 10px", fontSize: 13 }}>
+                {saving ? "Guardando..." : "Guardar"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {status === "searching" && (
+          <p style={{ color: "var(--muted)" }}>Buscando imagen...</p>
+        )}
+        {status === "not_found" && (
+          <p style={{ color: "var(--muted)" }}>No se encontro una imagen representativa para este modelo.</p>
+        )}
+        {status === "error" && (
+          <p style={{ color: "var(--muted)" }}>
+            Hubo un error buscando esta imagen (puede ser cuota mensual de SerpApi agotada). Cerra y
+            proba "Reintentar" mas tarde.
+          </p>
+        )}
+        {status === "found" && local?.image_url && !imgError && (
+          <>
+            <img
+              src={local.image_url}
+              alt={`${marca} ${modelo}`}
+              onError={() => setImgError(true)}
+              style={{ maxWidth: "100%", maxHeight: 360, borderRadius: 6 }}
+            />
+            {local.source_url && (
+              <p style={{ marginTop: 10 }}>
+                <a href={local.source_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 13 }}>
+                  Ver fuente original →
+                </a>
+              </p>
             )}
           </>
         )}
-        <tr>
-          <td>(−) IIBB</td>
-          <td style={{ textAlign: "right" }}>${fmtNumber(canal.iibbArs)}</td>
-        </tr>
-        <tr>
-          <td>
-            <strong>MARGEN ABSOLUTO</strong>
-          </td>
-          <td style={{ textAlign: "right" }}>
-            <strong style={{ color: canal.margenArs >= 0 ? "#2fa84f" : "#d93a3a" }}>${fmtNumber(canal.margenArs)}</strong>
-          </td>
-        </tr>
-        <tr>
-          <td>Margen % (sobre neto)</td>
-          <td style={{ textAlign: "right" }}>{fmtPct(canal.margenPctSobreNeto)}</td>
-        </tr>
-        <tr>
-          <td>Margen % (sobre PVP con IVA)</td>
-          <td style={{ textAlign: "right" }}>{fmtPct(canal.margenPctSobreConIva)}</td>
-        </tr>
-      </tbody>
-    </table>
+        {status === "found" && local?.image_url && imgError && (
+          <p style={{ color: "var(--muted)" }}>
+            No se pudo cargar la imagen desde ese link. Probablemente pegaste la URL de la <em>pagina</em> del
+            producto en vez de la URL directa de la imagen (que tiene que terminar en algo como .jpg, .png o
+            .webp). Para conseguirla: abri la pagina del producto, click derecho sobre la imagen y elegi
+            "Copiar direccion de la imagen" (o "Copy image address"), y pega eso con "✎ Corregir".
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// AppHeader se extrajo a components/AppHeader.tsx (20/07/2026) para poder
+// reusarlo tambien en app/calculo-importacion/page.tsx, con el boton de
+// navegacion "Cálculo de Importación" pasado como `actions` mas abajo.
+
+function TopCard({ title, lastMonth, last12, last12Label }: {
+  title: string;
+  lastMonth: { topFob: TopEntry | null; topUnidades: TopEntry | null };
+  last12: { topFob: TopEntry | null; topUnidades: TopEntry | null };
+  last12Label: string;
+}) {
+  return (
+    <div className="panel">
+      <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 14 }}>{title}</h1>
+
+      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, marginBottom: 10, minHeight: 132, boxSizing: "border-box" }}>
+        <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>FOB USD</div>
+        <div style={{ fontSize: 14, marginBottom: 4 }}>
+          <span style={{ color: "var(--muted)" }}>Ultimo mes: </span>
+          <strong>{lastMonth.topFob?.key ?? "-"}</strong>
+          {lastMonth.topFob && <span style={{ color: "var(--muted)" }}> — {fmtNumber(lastMonth.topFob.value)} USD</span>}
+        </div>
+        <div style={{ fontSize: 14 }}>
+          <span style={{ color: "var(--muted)" }}>{last12Label}: </span>
+          <strong>{last12.topFob?.key ?? "-"}</strong>
+          {last12.topFob && <span style={{ color: "var(--muted)" }}> — {fmtNumber(last12.topFob.value)} USD</span>}
+        </div>
+      </div>
+
+      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, minHeight: 132, boxSizing: "border-box" }}>
+        <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>Unidades</div>
+        <div style={{ fontSize: 14, marginBottom: 4 }}>
+          <span style={{ color: "var(--muted)" }}>Ultimo mes: </span>
+          <strong>{lastMonth.topUnidades?.key ?? "-"}</strong>
+          {lastMonth.topUnidades && <span style={{ color: "var(--muted)" }}> — {fmtNumber(lastMonth.topUnidades.value)} un.</span>}
+        </div>
+        <div style={{ fontSize: 14 }}>
+          <span style={{ color: "var(--muted)" }}>{last12Label}: </span>
+          <strong>{last12.topUnidades?.key ?? "-"}</strong>
+          {last12.topUnidades && <span style={{ color: "var(--muted)" }}> — {fmtNumber(last12.topUnidades.value)} un.</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Para categorias cuya NCM trae de fondo mucha data no-medica (ver
+// docs/PROYECTO.md, parser de cada categoria), el filtro de Segmento
+// arranca preseleccionado en el segmento de uso ortopedico/relevante que
+// nos interesa, en vez de mostrar TODO desde el arranque. Los datos de los
+// demas segmentos NO se pierden ni se descartan (siguen sincronizados) --
+// el usuario puede ampliar o cambiar la seleccion de Segmento en cualquier
+// momento para verlos.
+interface SieveSummary {
+  categoria?: string;
+  solicitados?: number;
+  procesados?: number;
+  sin_cambios?: number;
+  segmento_corregido?: number;
+  categoria_movida?: number;
+  sin_evidencia?: number;
+  errores?: number;
+  /** Cuantos items trajeron un PVP nuevo en esta corrida (ver sección 10.2). */
+  pvp_actualizado?: number;
+  movidos?: { marca: string; modelo: string; de: string; a: string; segmento: string | null; razonamiento: string }[];
+  corregidos?: { marca: string; modelo: string; segmento: string; razonamiento: string }[];
+  detalle_errores?: string[];
+  parcial?: boolean;
+  error?: string;
+}
+
+/** Resumen del boton "Completar PVP" (ver /api/pvp-sieve). */
+interface PvpSieveSummary {
+  categoria?: string;
+  solicitados?: number;
+  procesados?: number;
+  encontrados?: number;
+  sin_evidencia?: number;
+  errores?: number;
+  detalle_errores?: string[];
+  parcial?: boolean;
+  error?: string;
+}
+
+const DEFAULT_SEGMENTO_FILTER: Record<string, string[]> = {
+  sillas_ducha: ["Sillas de Ducha / Sanitarias"],
+  almohadones_ortopedicos: ["Cojín Ortopédico / Antiescaras"],
+  elevadores_inodoro: ["Elevador / Asiento Sanitario Ortopédico"],
+};
+
+export default function Home() {
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [slug, setSlug] = useState<string>("");
+  const [marcas, setMarcas] = useState<string[]>([]);
+  const [modelosSel, setModelosSel] = useState<string[]>([]);
+  const [importadores, setImportadores] = useState<string[]>([]);
+  const [colores, setColores] = useState<string[]>([]);
+  const [segmentos, setSegmentos] = useState<string[]>([]);
+  const [meses, setMeses] = useState<string[]>([]);
+  const [groupBy, setGroupBy] = useState<"marca" | "modelo" | "proveedor">("marca");
+  const [metric, setMetric] = useState<"total_fob_dolars" | "total_unidades">("total_fob_dolars");
+  const [series, setSeries] = useState<SeriesPoint[]>([]);
+  const [options, setOptions] = useState<{ marca: string; modelo: string }[]>([]);
+  const [importerOptions, setImporterOptions] = useState<string[]>([]);
+  const [colorOptions, setColorOptions] = useState<string[]>([]);
+  const [segmentoOptions, setSegmentoOptions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [pivot, setPivot] = useState<PivotResult | null>(null);
+  const [modelImages, setModelImages] = useState<Map<string, ModelImageEntry>>(new Map());
+  const [modelPvp, setModelPvp] = useState<Map<string, ModelPvpEntry>>(new Map());
+  const [pvpLoadingKeys, setPvpLoadingKeys] = useState<Set<string>>(new Set());
+  const [viewingModel, setViewingModel] = useState<{ marca: string; modelo: string; segmento: string } | null>(null);
+  const [sieving, setSieving] = useState(false);
+  const [sieveResult, setSieveResult] = useState<SieveSummary | null>(null);
+  const [showSieveErrors, setShowSieveErrors] = useState(false);
+  // true/false = ultimo resultado conocido de /api/evolution; null = todavia no se sabe
+  const [syncOk, setSyncOk] = useState<boolean | null>(null);
+  const [sieveStatus, setSieveStatus] = useState<{ total: number; tamizado: number; pendientes: number; porcentaje: number } | null>(null);
+  // Segundos que tardo, en promedio, cada modelo procesado en la ULTIMA
+  // corrida (busqueda + IA por modelo) -- se usa para estimar cuanto falta
+  // para terminar toda la categoria (sieveStatus.pendientes * este valor).
+  const [sieveSecondsPerItem, setSieveSecondsPerItem] = useState<number | null>(null);
+
+  const reloadSieveStatus = () => {
+    if (!slug) {
+      setSieveStatus(null);
+      return;
+    }
+    fetch(`/api/sieve/status?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => setSieveStatus(d.error ? null : d))
+      .catch(() => setSieveStatus(null));
+  };
+
+  useEffect(reloadSieveStatus, [slug]);
+
+  const [resetting, setResetting] = useState(false);
+
+  // "Limpiar tamizado": borra model_sieve_log de la categoria para poder
+  // re-tamizarla de cero -- necesario para categorias que ya estaban al
+  // 100% ANTES de que existiera la columna PVP USD (esas combinaciones
+  // nunca vuelven a pasar por procesarItem, asi que sin esto nunca
+  // completarian el PVP). Confirma antes de borrar porque el proximo
+  // tamizado va a volver a gastar una llamada a OpenAI por modelo.
+  const resetSieveLog = () => {
+    if (!slug || resetting || sieving) return;
+    const ok = window.confirm(
+      "Esto borra el registro de tamizado de esta categoria: el proximo click en \"Tamizar categoria\" va a volver a procesar TODOS los modelos (gastando OpenAI de nuevo por cada uno) en vez de solo los pendientes. No borra segmentos, categorias ni PVP ya guardados. ¿Continuar?"
+    );
+    if (!ok) return;
+    setResetting(true);
+    fetch(`/api/sieve?category=${encodeURIComponent(slug)}`, { method: "DELETE" })
+      .then((r) => r.json())
+      .then(() => {
+        setSieveResult(null);
+        setSieveSecondsPerItem(null);
+        reloadSieveStatus();
+      })
+      .catch(() => alert("No se pudo limpiar el tamizado. Proba de nuevo."))
+      .finally(() => setResetting(false));
+  };
+
+  const runSieve = () => {
+    if (!slug || sieving) return;
+    setSieving(true);
+    setSieveResult(null);
+    setShowSieveErrors(false);
+    const startedAt = Date.now();
+    fetch(`/api/sieve?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setSieveResult(d);
+        const elapsedSec = (Date.now() - startedAt) / 1000;
+        const procesados = d.procesados ?? 0;
+        if (procesados > 0) setSieveSecondsPerItem(elapsedSec / procesados);
+        // Si se corrigieron segmentos o se movieron filas de categoria, la
+        // serie actual puede haber cambiado -- se recarga para reflejarlo.
+        if ((d.segmento_corregido ?? 0) > 0 || (d.categoria_movida ?? 0) > 0) {
+          reloadSeries();
+          // El tamizador puede reclasificar el segmento de un modelo (via
+          // model_segmento_override) haciendolo entrar o salir del filtro
+          // de Segmento activo -- y "Completar PVP" cuenta su total/% sobre
+          // ESE mismo filtro (ver ACTUALIZACION en app/api/pvp-sieve/status
+          // /route.ts). Sin este reload, la barra de Completar PVP quedaba
+          // "estatica", mostrando siempre el total de ANTES de tamizar --
+          // reporte real del usuario (20/07/2026): "se van sumando
+          // productos y el completar PVP sigue estatico".
+          reloadPvpSieveStatus();
+        }
+        if ((d.pvp_actualizado ?? 0) > 0) reloadModelPvp();
+        reloadSieveStatus();
+      })
+      .catch(() => setSieveResult({ error: "No se pudo correr el tamizador. Proba de nuevo." } as any))
+      .finally(() => setSieving(false));
+  };
+
+  /** "125" -> "2 min 5 s"; redondea a lo mas util (segundos si es poco, minutos si es mucho). */
+  function fmtDuration(totalSeconds: number): string {
+    const s = Math.max(0, Math.round(totalSeconds));
+    if (s < 60) return `${s} s`;
+    const mins = Math.round(s / 60);
+    if (mins < 60) return `~${mins} min`;
+    const hs = Math.floor(mins / 60);
+    const restMin = mins % 60;
+    return `~${hs} h ${restMin} min`;
+  }
+
+  // ---- "Completar PVP": batch exhaustivo (lib/pvpFinder.ts) para los
+  // modelos que el tamizador de segmentos dejo sin PVP (el PVP del
+  // tamizador es solo oportunista, ver ACTUALIZACION 2 en
+  // lib/aiClassifier.ts) -- corre /api/pvp-sieve, que reusa la misma
+  // getOrSearchModelPvp() del boton manual "Consultar precio" pero en lote.
+  const [pvpSieving, setPvpSieving] = useState(false);
+  const [pvpSieveResult, setPvpSieveResult] = useState<PvpSieveSummary | null>(null);
+  const [showPvpSieveErrors, setShowPvpSieveErrors] = useState(false);
+  const [pvpSieveStatus, setPvpSieveStatus] = useState<{ total: number; encontrados: number; pendientes: number; porcentaje: number } | null>(null);
+  const [pvpSieveSecondsPerItem, setPvpSieveSecondsPerItem] = useState<number | null>(null);
+
+  // El % de avance y el batch en si ahora respetan el filtro de Segmento
+  // activo (mismo `segmentos` que usa reloadSeries) -- si no, "Completar
+  // PVP" podia gastar su cupo en modelos de OTRO segmento oculto por el
+  // filtro por defecto de la categoria (ver DEFAULT_SEGMENTO_FILTER), sin
+  // tocar nunca los que el usuario tiene realmente a la vista (reporte
+  // real: "no pega los PVP de mayor a menor peso del SOM%" con "PVP
+  // encontrado: 59" pero ninguno de los visibles en pantalla). Ver tambien
+  // ACTUALIZACION en app/api/pvp-sieve/route.ts.
+  const pvpSieveParams = () => {
+    const params = new URLSearchParams({ category: slug });
+    for (const s2 of segmentos) params.append("segmento", s2);
+    return params;
+  };
+
+  const reloadPvpSieveStatus = () => {
+    if (!slug) {
+      setPvpSieveStatus(null);
+      return;
+    }
+    fetch(`/api/pvp-sieve/status?${pvpSieveParams()}`)
+      .then((r) => r.json())
+      .then((d) => setPvpSieveStatus(d.error ? null : d))
+      .catch(() => setPvpSieveStatus(null));
+  };
+
+  useEffect(reloadPvpSieveStatus, [slug, segmentos]);
+
+  // Antes "Completar PVP" hacia UN solo click = UN solo lote (hasta 60
+  // modelos, cortado a los ~4-5 min de presupuesto de tiempo) -- para
+  // categorias con muchos modelos pendientes, terminar la categoria entera
+  // significaba clickear el boton una y otra vez cada pocos minutos.
+  // Reporte real del usuario (20/07/2026): "corrida general" de Completar
+  // PVP sentida como "casi 10 minutos", justamente por tener que quedarse
+  // reclickeando. Ahora el boton encadena lotes automaticamente (sin que el
+  // usuario tenga que volver a clickear) hasta que ya no queden modelos
+  // pendientes de esa categoria/segmento, mostrando el resumen ACUMULADO de
+  // todas las vueltas y actualizando la barra de progreso en cada una. Se
+  // puede interrumpir en cualquier momento con el boton "Detener" (lo ya
+  // encontrado en vueltas anteriores queda guardado igual, no se pierde).
+  const pvpSieveStopRef = useRef(false);
+
+  const stopPvpSieve = () => {
+    pvpSieveStopRef.current = true;
+  };
+
+  const runPvpSieve = async () => {
+    if (!slug || pvpSieving) return;
+    setPvpSieving(true);
+    setPvpSieveResult(null);
+    setShowPvpSieveErrors(false);
+    pvpSieveStopRef.current = false;
+
+    let acumulado: PvpSieveSummary = {
+      categoria: slug,
+      solicitados: 0,
+      procesados: 0,
+      encontrados: 0,
+      sin_evidencia: 0,
+      errores: 0,
+      detalle_errores: [],
+      parcial: false,
+    };
+
+    const MAX_VUELTAS = 30;
+    let terminoTodo = false;
+
+    try {
+      // Tope de seguridad de vueltas (30 lotes de hasta 60 = 1800 modelos)
+      // para no quedar en un loop infinito ante algun bug de backend que
+      // siempre devuelva `solicitados > 0` sin avanzar nunca.
+      for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {
+        if (pvpSieveStopRef.current) break;
+        const startedAt = Date.now();
+        const res = await fetch(`/api/pvp-sieve?${pvpSieveParams()}`);
+        const d: PvpSieveSummary = await res.json();
+
+        if (d.error) {
+          setPvpSieveResult({ ...acumulado, error: d.error });
+          return;
+        }
+
+        const elapsedSec = (Date.now() - startedAt) / 1000;
+        const procesadosVuelta = d.procesados ?? 0;
+        if (procesadosVuelta > 0) setPvpSieveSecondsPerItem(elapsedSec / procesadosVuelta);
+
+        acumulado = {
+          categoria: slug,
+          solicitados: (acumulado.solicitados ?? 0) + (d.solicitados ?? 0),
+          procesados: (acumulado.procesados ?? 0) + (d.procesados ?? 0),
+          encontrados: (acumulado.encontrados ?? 0) + (d.encontrados ?? 0),
+          sin_evidencia: (acumulado.sin_evidencia ?? 0) + (d.sin_evidencia ?? 0),
+          errores: (acumulado.errores ?? 0) + (d.errores ?? 0),
+          detalle_errores: [...(acumulado.detalle_errores ?? []), ...(d.detalle_errores ?? [])],
+          parcial: false,
+        };
+        setPvpSieveResult(acumulado);
+        if ((d.encontrados ?? 0) > 0) reloadModelPvp();
+        reloadPvpSieveStatus();
+
+        // Esta vuelta no encontro NADA pendiente -> ya no queda nada por
+        // hacer en esta categoria/segmento, se termina el loop.
+        if ((d.solicitados ?? 0) === 0) {
+          terminoTodo = true;
+          break;
+        }
+      }
+      // Si salimos del for sin terminar todo (por Detener o por llegar al
+      // tope de vueltas), lo marcamos como parcial para que el usuario sepa
+      // que puede clickear "Completar PVP" de nuevo para seguir.
+      if (!terminoTodo) {
+        acumulado = { ...acumulado, parcial: true };
+        setPvpSieveResult(acumulado);
+      }
+    } catch {
+      setPvpSieveResult({ ...acumulado, error: "No se pudo completar el PVP. Proba de nuevo." } as any);
+    } finally {
+      setPvpSieving(false);
+    }
+  };
+
+  useEffect(() => {
+    fetch("/api/categories")
+      .then((r) => r.json())
+      .then((d) => {
+        setCategories(d.categories ?? []);
+        if (d.categories?.[0]) {
+          setSlug(d.categories[0].slug);
+          setSegmentos(DEFAULT_SEGMENTO_FILTER[d.categories[0].slug] ?? []);
+        }
+      });
+  }, []);
+
+  // Extraida como funcion reusable para poder recargar la serie sin cambiar
+  // filtros (ej. despues de guardar una correccion manual de segmento desde
+  // el modal de imagen, sin esperar al proximo /api/sync).
+  const reloadSeries = () => {
+    if (!slug) return;
+    setLoading(true);
+    const params = new URLSearchParams({ category: slug });
+    for (const m of marcas) params.append("marca", m);
+    for (const i of importadores) params.append("importador", i);
+    for (const m of modelosSel) params.append("modelo", m);
+    for (const c of colores) params.append("color", c);
+    for (const s2 of segmentos) params.append("segmento", s2);
+    fetch(`/api/evolution?${params}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("bad_status");
+        return r.json();
+      })
+      .then((d) => {
+        setSeries(d.series ?? []);
+        setOptions(d.options ?? []);
+        setImporterOptions(d.importerOptions ?? []);
+        setColorOptions(d.colorOptions ?? []);
+        setSegmentoOptions(d.segmentoOptions ?? []);
+        setSyncOk(true);
+      })
+      .catch(() => setSyncOk(false))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(reloadSeries, [slug, marcas, modelosSel, importadores, colores, segmentos]);
+
+  useEffect(() => {
+    if (!slug) return;
+    fetch(`/api/model-images?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        const map = new Map<string, ModelImageEntry>();
+        for (const row of (d.images ?? []) as ModelImageEntry[]) {
+          map.set(modelImageKey(row.marca, row.modelo), row);
+        }
+        setModelImages(map);
+      })
+      .catch(() => setModelImages(new Map()));
+  }, [slug]);
+
+  // Extraida en su propia funcion para poder recargarla tanto al cambiar de
+  // categoria como despues de correr el tamizador (que ahora tambien
+  // completa PVP en la misma busqueda, ver guardarPvp() en
+  // app/api/sieve/route.ts) -- asi la columna PVP USD se actualiza sola sin
+  // esperar a un cambio de categoria/refresco de pagina.
+  const reloadModelPvp = () => {
+    if (!slug) return;
+    fetch(`/api/model-pvp?category=${encodeURIComponent(slug)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        const map = new Map<string, ModelPvpEntry>();
+        for (const row of (d.pvps ?? []) as ModelPvpEntry[]) {
+          map.set(modelImageKey(row.marca, row.modelo), row);
+        }
+        setModelPvp(map);
+      })
+      .catch(() => setModelPvp(new Map()));
+  };
+
+  useEffect(reloadModelPvp, [slug]);
+
+  // Consulta on-demand del PVP de un modelo puntual (click en "Consultar" en
+  // la columna PVP USD de Share por Modelo) -- llama a OpenAI (web_search) y
+  // queda cacheado en model_pvp, igual que la busqueda de imagen.
+  const handleConsultPvp = (marca: string, modelo: string, _segmento: string) => {
+    const key = modelImageKey(marca, modelo);
+    if (pvpLoadingKeys.has(key)) return;
+    setPvpLoadingKeys((prev) => new Set(prev).add(key));
+    fetch("/api/model-pvp/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: slug, marca, modelo }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.pvp) {
+          setModelPvp((prev) => {
+            const next = new Map(prev);
+            next.set(key, d.pvp);
+            return next;
+          });
+        }
+      })
+      .catch(() => {
+        setModelPvp((prev) => {
+          const next = new Map(prev);
+          next.set(key, {
+            marca,
+            modelo,
+            pvp_usd: null,
+            confianza: null,
+            razonamiento: null,
+            status: "error",
+          });
+          return next;
+        });
+      })
+      .finally(() => {
+        setPvpLoadingKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      });
+  };
+
+  const marcaOptions = Array.from(new Set(options.map((o) => o.marca).filter(Boolean))) as string[];
+  const modelos = Array.from(new Set(options.map((o) => o.modelo).filter(Boolean))) as string[];
+  const mesOptions = useMemo(
+    () => Array.from(new Set(series.map((s) => s.period))).sort().reverse(),
+    [series]
+  );
+
+  // Los meses seleccionados solo filtran lo que se ve en el grafico/tabla;
+  // los totales de "ultimo mes"/"ultimos 12 meses" siempre usan la serie
+  // completa (sin el filtro de mes), para que no cambien de significado.
+  const filteredSeries = useMemo(
+    () => (meses.length > 0 ? series.filter((s) => meses.includes(s.period)) : series),
+    [series, meses]
+  );
+
+  const periodInfo = useMemo(() => {
+    const distinctPeriods = Array.from(new Set(series.map((s) => s.period))).sort();
+    if (distinctPeriods.length === 0) return { lastPeriod: null as string | null, lastSet: null, last12Set: null, last12Count: 0 };
+    const lastPeriod = distinctPeriods[distinctPeriods.length - 1];
+    const last12 = distinctPeriods.slice(-12);
+    return {
+      lastPeriod,
+      lastSet: new Set([lastPeriod]),
+      last12Set: new Set(last12),
+      last12Count: last12.length,
+    };
+  }, [series]);
+
+  // ---- Totales de encabezado: ultimo mes y ultimos 12 meses moviles (ambas metricas siempre) ----
+  const totals = useMemo(() => {
+    const lastMonth = { fob: 0, unidades: 0 };
+    const last12 = { fob: 0, unidades: 0 };
+    for (const s of series) {
+      const fob = Number(s.total_fob_dolars) || 0;
+      const uni = Number(s.total_unidades) || 0;
+      if (periodInfo.lastSet?.has(s.period)) {
+        lastMonth.fob += fob;
+        lastMonth.unidades += uni;
+      }
+      if (periodInfo.last12Set?.has(s.period)) {
+        last12.fob += fob;
+        last12.unidades += uni;
+      }
+    }
+    return { lastPeriod: periodInfo.lastPeriod, lastMonth, last12, last12Count: periodInfo.last12Count };
+  }, [series, periodInfo]);
+
+  // ---- Top importador / marca / modelo (ultimo mes y ultimos 12 meses) ----
+  const topImporter = useMemo(
+    () => ({
+      lastMonth: computeTop(series, periodInfo.lastSet, "proveedor"),
+      last12: computeTop(series, periodInfo.last12Set, "proveedor"),
+    }),
+    [series, periodInfo]
+  );
+  const topBrand = useMemo(
+    () => ({
+      lastMonth: computeTop(series, periodInfo.lastSet, "marca"),
+      last12: computeTop(series, periodInfo.last12Set, "marca"),
+    }),
+    [series, periodInfo]
+  );
+  const topModel = useMemo(
+    () => ({
+      lastMonth: computeTop(series, periodInfo.lastSet, "modelo"),
+      last12: computeTop(series, periodInfo.last12Set, "modelo"),
+    }),
+    [series, periodInfo]
+  );
+
+  // ---- Share por Importador y por Marca, ultimos 12 meses moviles ----
+  const shareByImporter = useMemo(
+    () => computeShareTable(series, periodInfo.last12Set, "proveedor"),
+    [series, periodInfo]
+  );
+  const shareByBrand = useMemo(
+    () => computeShareTable(series, periodInfo.last12Set, "marca"),
+    [series, periodInfo]
+  );
+  const shareByModel = useMemo(
+    () => computeShareByModel(series, periodInfo.last12Set),
+    [series, periodInfo]
+  );
+  const shareBySegmento = useMemo(
+    () => computeShareTable(series, periodInfo.last12Set, "segmento"),
+    [series, periodInfo]
+  );
+
+  const imageStatusFor = (marca: string, modelo: string) =>
+    modelImages.get(modelImageKey(marca, modelo))?.status ?? "pending";
+
+  const pvpEntryFor = (marca: string, modelo: string) => modelPvp.get(modelImageKey(marca, modelo));
+
+  // ---- Descarga CSV de la tabla mes a mes (mismo orden que se ve en pantalla) ----
+  const downloadCsv = () => {
+    if (!pivot) return;
+    const rowsDesc = [...pivot.rows].sort((a, b) => (a.period < b.period ? 1 : -1));
+    const header = ["Periodo", ...pivot.keys].join(";");
+    const lines = rowsDesc.map((row) => {
+      const cells = [formatPeriod(row.period), ...pivot.keys.map((k) => Math.round(Number(row[k] ?? 0)))];
+      return cells.join(";");
+    });
+    const totalsRow = [
+      "Total",
+      ...pivot.keys.map((k) => Math.round(rowsDesc.reduce((acc, row) => acc + Number(row[k] ?? 0), 0))),
+    ];
+    const csv = [header, ...lines, totalsRow.join(";")].join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${slug}_${groupBy}_${metric}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+      <AppHeader
+        title="Módulo de Importaciones"
+        actions={
+          <Link href="/calculo-importacion" className="app-header-nav-btn">
+            🧮 Cálculo de Importación
+          </Link>
+        }
+      />
+      <div className="container">
+      <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 14, paddingBottom: 14 }}>
+        <div style={{ fontSize: 13, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+          <span>Datos sincronizados desde Cobus Group</span>
+          {syncOk === true && <span title="Sincronización OK" style={{ color: "#2fa84f" }}>✓</span>}
+          {syncOk === false && <span title="No se pudo cargar la información" style={{ color: "#d93a3a" }}>⚠️</span>}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <button onClick={runSieve} disabled={sieving || !slug}>
+            {sieving ? "🔎 Tamizando..." : "🔎 Tamizar categoría"}
+          </button>
+          {sieveStatus && sieveStatus.tamizado > 0 && (
+            <button
+              onClick={resetSieveLog}
+              disabled={sieving || resetting || !slug}
+              title="Limpiar tamizado: borra el registro para poder re-tamizar de cero (ej. para completar PVP en modelos ya tamizados antes de que existiera esa columna)"
+              aria-label="Limpiar tamizado"
+              style={{
+                fontSize: 15,
+                padding: "5px 9px",
+                lineHeight: 1,
+                color: "#d93a3a",
+                borderColor: "#d93a3a",
+              }}
+            >
+              {resetting ? "…" : "↺"}
+            </button>
+          )}
+          {sieveStatus && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+              <div style={{ width: 120, height: 8, background: "var(--border, #2a2e37)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ width: `${sieveStatus.porcentaje}%`, height: "100%", background: "var(--accent)" }} />
+              </div>
+              <span>
+                {sieveStatus.tamizado}/{sieveStatus.total} tamizado ({sieveStatus.porcentaje}%)
+              </span>
+              {sieveSecondsPerItem != null && sieveStatus.pendientes > 0 && (
+                <span>· ≈{fmtDuration(sieveStatus.pendientes * sieveSecondsPerItem)} restante</span>
+              )}
+            </div>
+          )}
+
+          <button onClick={runPvpSieve} disabled={pvpSieving || !slug} title="Completa el PVP de todos los modelos pendientes de la categoría/segmento actual, encadenando lotes automáticamente hasta terminar (o hasta que apretés Detener)">
+            {pvpSieving ? "💲 Completando PVP..." : "💲 Completar PVP"}
+          </button>
+          {pvpSieving && (
+            <button
+              onClick={stopPvpSieve}
+              title="Detener: lo ya encontrado en este proceso queda guardado, no se pierde"
+              style={{ fontSize: 12, padding: "5px 9px" }}
+            >
+              ⏹ Detener
+            </button>
+          )}
+          {pvpSieveStatus && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+              <div style={{ width: 120, height: 8, background: "var(--border, #2a2e37)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ width: `${pvpSieveStatus.porcentaje}%`, height: "100%", background: "var(--accent)" }} />
+              </div>
+              <span>
+                {pvpSieveStatus.encontrados}/{pvpSieveStatus.total} con PVP ({pvpSieveStatus.porcentaje}%)
+              </span>
+              {pvpSieveSecondsPerItem != null && pvpSieveStatus.pendientes > 0 && (
+                <span>· ≈{fmtDuration(pvpSieveStatus.pendientes * pvpSieveSecondsPerItem)} restante</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {pvpSieveResult && (
+          <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
+            {pvpSieveResult.error ? (
+              <div style={{ color: "#d93a3a" }}>{pvpSieveResult.error}</div>
+            ) : (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <strong>
+                    Procesados {pvpSieveResult.procesados ?? 0} de {pvpSieveResult.solicitados ?? 0} pendientes de PVP
+                  </strong>
+                  <button onClick={() => setPvpSieveResult(null)} style={{ padding: "2px 8px", fontSize: 12 }}>Cerrar</button>
+                </div>
+                <div style={{ color: "var(--muted)" }}>
+                  PVP encontrado: {pvpSieveResult.encontrados ?? 0} · Sin evidencia: {pvpSieveResult.sin_evidencia ?? 0}
+                  {(pvpSieveResult.errores ?? 0) > 0 && (
+                    <>
+                      {" "}· Errores: {pvpSieveResult.errores}{" "}
+                      <button
+                        onClick={() => setShowPvpSieveErrors((v) => !v)}
+                        style={{ padding: "1px 6px", fontSize: 11, marginLeft: 4 }}
+                      >
+                        {showPvpSieveErrors ? "Ocultar errores" : "Ver errores"}
+                      </button>
+                    </>
+                  )}
+                </div>
+                {pvpSieveResult.parcial && (
+                  <div style={{ color: "var(--muted)", marginTop: 6 }}>
+                    ⏱️ Se detuvo antes de terminar todos los pendientes (manualmente, o por el tope de seguridad de
+                    30 lotes seguidos) — lo ya procesado quedó guardado. Clickeá "Completar PVP" de nuevo para
+                    seguir con el resto.
+                  </div>
+                )}
+                {showPvpSieveErrors && (pvpSieveResult.detalle_errores?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong style={{ color: "#d93a3a" }}>Detalle de errores:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "#d93a3a" }}>
+                      {pvpSieveResult.detalle_errores!.slice(0, 10).map((e, i) => (
+                        <li key={i}>{e}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {sieveResult && (
+          <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
+            {sieveResult.error ? (
+              <div style={{ color: "#d93a3a" }}>{sieveResult.error}</div>
+            ) : (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <strong>
+                    Procesados {sieveResult.procesados ?? 0} de {sieveResult.solicitados ?? 0} pendientes
+                  </strong>
+                  <button onClick={() => setSieveResult(null)} style={{ padding: "2px 8px", fontSize: 12 }}>Cerrar</button>
+                </div>
+                <div style={{ color: "var(--muted)" }}>
+                  Sin cambios: {sieveResult.sin_cambios ?? 0} · Segmento corregido: {sieveResult.segmento_corregido ?? 0} ·
+                  {" "}Categoría movida: {sieveResult.categoria_movida ?? 0} · Sin evidencia: {sieveResult.sin_evidencia ?? 0}
+                  {" "}· PVP encontrado: {sieveResult.pvp_actualizado ?? 0}
+                  {(sieveResult.errores ?? 0) > 0 && (
+                    <>
+                      {" "}· Errores: {sieveResult.errores}{" "}
+                      <button
+                        onClick={() => setShowSieveErrors((v) => !v)}
+                        style={{ padding: "1px 6px", fontSize: 11, marginLeft: 4 }}
+                      >
+                        {showSieveErrors ? "Ocultar errores" : "Ver errores"}
+                      </button>
+                    </>
+                  )}
+                </div>
+                {sieveResult.parcial && (
+                  <div style={{ color: "var(--muted)", marginTop: 6 }}>
+                    ⏱️ Se alcanzó el límite de tiempo de este click antes de terminar el lote completo — lo ya
+                    procesado quedó guardado. Clickeá "Tamizar categoría" de nuevo para seguir con el resto.
+                  </div>
+                )}
+                {showSieveErrors && (sieveResult.detalle_errores?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong style={{ color: "#d93a3a" }}>Detalle de errores:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "#d93a3a" }}>
+                      {sieveResult.detalle_errores!.slice(0, 10).map((e, i) => (
+                        <li key={i}>{e}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(sieveResult.movidos?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Movidos de categoría:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                      {sieveResult.movidos!.map((m, i) => (
+                        <li key={i}>
+                          {m.marca} — {m.modelo}: {m.de} → <strong>{m.a}</strong> ({m.segmento ?? "sin segmento"})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(sieveResult.corregidos?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Segmento corregido:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                      {sieveResult.corregidos!.map((c, i) => (
+                        <li key={i}>
+                          {c.marca} — {c.modelo}: {c.segmento}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="panel row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
+        <div className="filter-field">
+          <label>🦽 Categoria</label>
+          <select
+            style={{ width: "100%" }}
+            value={slug}
+            onChange={(e) => {
+              setSlug(e.target.value);
+              setMarcas([]);
+              setModelosSel([]);
+              setMeses([]);
+              setImportadores([]);
+              setColores([]);
+              setSegmentos(DEFAULT_SEGMENTO_FILTER[e.target.value] ?? []);
+            }}
+          >
+            {categories.map((c) => (
+              <option key={c.slug} value={c.slug}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="filter-field">
+          <MultiSelectDropdown
+            label="🏷️ Marca"
+            options={marcaOptions.map((m) => ({ value: m, label: m }))}
+            selected={marcas}
+            onChange={setMarcas}
+            placeholder="Todas"
+          />
+        </div>
+
+        <div className="filter-field">
+          <MultiSelectDropdown
+            label="🚚 Importador"
+            options={importerOptions.map((p) => ({ value: p, label: p }))}
+            selected={importadores}
+            onChange={setImportadores}
+            placeholder="Todos"
+          />
+        </div>
+
+        <div className="filter-field">
+          <MultiSelectDropdown
+            label="📦 Modelo"
+            options={modelos.map((m) => ({ value: m, label: m }))}
+            selected={modelosSel}
+            onChange={setModelosSel}
+            placeholder="Todos"
+          />
+        </div>
+
+        <div className="filter-field">
+          <MultiSelectDropdown
+            label="🎨 Color"
+            options={colorOptions.map((c) => ({ value: c, label: c }))}
+            selected={colores}
+            onChange={setColores}
+            placeholder="Todos"
+          />
+        </div>
+
+        <div className="filter-field">
+          <MultiSelectDropdown
+            label="🗂️ Segmento"
+            options={segmentoOptions.map((s) => ({ value: s, label: s }))}
+            selected={segmentos}
+            onChange={setSegmentos}
+            placeholder="Todos"
+          />
+        </div>
+
+        <div className="filter-field">
+          <MultiSelectDropdown
+            label="🗓️ Meses"
+            options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
+            selected={meses}
+            onChange={setMeses}
+            placeholder="Todos"
+            searchable={false}
+          />
+        </div>
+
+        <div className="filter-field">
+          <label>🔀 Agrupar por</label>
+          <select style={{ width: "100%" }} value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
+            <option value="marca">Marca</option>
+            <option value="modelo">Modelo</option>
+            <option value="proveedor">Proveedor</option>
+          </select>
+        </div>
+        <div className="filter-field">
+          <label>📊 Metrica</label>
+          <select style={{ width: "100%" }} value={metric} onChange={(e) => setMetric(e.target.value as any)}>
+            <option value="total_fob_dolars">FOB USD</option>
+            <option value="total_unidades">Unidades</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="kpi-row">
+        <div className="panel" style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div className="kpi-icon">📅</div>
+          <div>
+            <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
+              Ultimo mes{totals.lastPeriod ? ` (${formatPeriod(totals.lastPeriod)})` : ""}
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "var(--accent)" }}>
+              {fmtNumber(totals.lastMonth.fob)} <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 400 }}>USD FOB</span>
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>
+              {fmtNumber(totals.lastMonth.unidades)} <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400 }}>Unidades</span>
+            </div>
+          </div>
+        </div>
+        <div className="panel" style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div className="kpi-icon">🗓️</div>
+          <div>
+            <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
+              Ultimos {totals.last12Count || 12} meses
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "var(--accent)" }}>
+              {fmtNumber(totals.last12.fob)} <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 400 }}>USD FOB</span>
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>
+              {fmtNumber(totals.last12.unidades)} <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400 }}>Unidades</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="stack-row">
+        <TopCard title="Top Importador" lastMonth={topImporter.lastMonth} last12={topImporter.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
+        <TopCard title="Top Marca" lastMonth={topBrand.lastMonth} last12={topBrand.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
+        <TopCard title="Top Modelo" lastMonth={topModel.lastMonth} last12={topModel.last12} last12Label={`Ultimos ${totals.last12Count || 12} meses`} />
+      </div>
+
+      <div className="panel">
+        {loading ? <p style={{ color: "var(--muted)" }}>Cargando...</p> : (
+          <div className="chart-wrap">
+            <EvolutionChart
+              data={filteredSeries}
+              groupBy={groupBy}
+              metric={metric}
+              topN={9}
+              pinnedKeys={groupBy === "marca" ? ["Mugi", "Magesa"] : []}
+              onPivotChange={setPivot}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="stack-row">
+        <ShareTable
+          title="Share por Importador"
+          rows={shareByImporter}
+          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        />
+        <ShareTable
+          title="Share por Marca"
+          rows={shareByBrand}
+          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        />
+      </div>
+
+      <ModelShareTable
+        rows={shareByModel}
+        last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        imageStatus={imageStatusFor}
+        onViewImage={(marca, modelo, segmento) => setViewingModel({ marca, modelo, segmento })}
+        pvpEntry={pvpEntryFor}
+        pvpLoadingKeys={pvpLoadingKeys}
+        onConsultPvp={handleConsultPvp}
+      />
+
+      {viewingModel && (
+        <ModelImageModal
+          key={modelImageKey(viewingModel.marca, viewingModel.modelo)}
+          marca={viewingModel.marca}
+          modelo={viewingModel.modelo}
+          categorySlug={slug}
+          segmentoActual={viewingModel.segmento}
+          entry={modelImages.get(modelImageKey(viewingModel.marca, viewingModel.modelo))}
+          onClose={() => setViewingModel(null)}
+          onResolved={(img) =>
+            setModelImages((prev) => {
+              const next = new Map(prev);
+              next.set(modelImageKey(img.marca, img.modelo), img);
+              return next;
+            })
+          }
+          onOverrideSaved={reloadSeries}
+        />
+      )}
+
+      <div className="stack-row">
+        <SegmentoPieChart
+          rows={shareBySegmento}
+          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        />
+        <ShareTable
+          title="Share por Segmento"
+          nameLabel="Segmento"
+          rows={shareBySegmento}
+          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        />
+      </div>
+
+      {pivot && pivot.rows.length > 0 && (
+        <div className="panel">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <h1 style={{ fontSize: 16, margin: 0 }}>Detalle mes a mes</h1>
+            <button onClick={downloadCsv}>Descargar CSV</button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Periodo</th>
+                  {pivot.keys.map((k) => <th key={k}>{k}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {[...pivot.rows]
+                  .sort((a, b) => (a.period < b.period ? 1 : -1))
+                  .map((row) => (
+                    <tr key={row.period}>
+                      <td>{formatPeriod(row.period)}</td>
+                      {pivot.keys.map((k) => <td key={k}>{fmtNumber(Number(row[k] ?? 0))}</td>)}
+                    </tr>
+                  ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ fontWeight: 700, borderTop: "2px solid var(--border, #2a2e37)" }}>
+                  <td>Total</td>
+                  {pivot.keys.map((k) => (
+                    <td key={k}>{fmtNumber(pivot.rows.reduce((acc, row) => acc + Number(row[k] ?? 0), 0))}</td>
+                  ))}
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <p style={{ color: "var(--muted)", fontSize: 13 }}>
+        Los datos se actualizan una vez por dia via /api/sync (Vercel Cron).
+        Si una categoria no tiene marca/modelo mapeados todavia, esas columnas
+        aparecen como "sin_dato" hasta cargar el mapeo en field_mappings.
+      </p>
+      </div>
+    </>
   );
 }
