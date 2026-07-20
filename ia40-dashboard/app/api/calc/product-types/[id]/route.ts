@@ -9,7 +9,7 @@ function toNumbers(row: any) {
     arancel_pct: row.arancel_pct != null ? Number(row.arancel_pct) : null,
     iva_pct: row.iva_pct != null ? Number(row.iva_pct) : null,
     trader_pct: Number(row.trader_pct ?? 0),
-    envio_ars_con_iva: Number(row.envio_ars_con_iva ?? 0),
+    tamano_envio: row.tamano_envio === "chico" || row.tamano_envio === "grande" ? row.tamano_envio : "mediano",
     cbm_m3: row.cbm_m3 != null ? Number(row.cbm_m3) : null,
     pvp_ars_estimado: row.pvp_ars_estimado != null ? Number(row.pvp_ars_estimado) : null,
   };
@@ -46,7 +46,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const nombre = body.nombre !== undefined ? String(body.nombre).trim() : cur.nombre;
   const ncmCode = body.ncmCode !== undefined ? (body.ncmCode ? String(body.ncmCode).trim() : null) : cur.ncm_code;
   const traderPct = body.traderPct !== undefined ? Number(body.traderPct) : Number(cur.trader_pct);
-  const envioArsConIva = body.envioArsConIva !== undefined ? Number(body.envioArsConIva) : Number(cur.envio_ars_con_iva);
+  const tamanoEnvio =
+    body.tamanoEnvio === "chico" || body.tamanoEnvio === "mediano" || body.tamanoEnvio === "grande"
+      ? body.tamanoEnvio
+      : cur.tamano_envio ?? "mediano";
 
   const arancelPct = body.arancelPct !== undefined ? Number(body.arancelPct) : Number(cur.arancel_pct ?? 0);
   const arancelStatus = body.arancelPct !== undefined ? "found" : cur.arancel_status;
@@ -67,7 +70,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const updated = await query<any>(
     `update calc_product_types set
-       nombre=$1, ncm_code=$2, trader_pct=$3, envio_ars_con_iva=$4,
+       nombre=$1, ncm_code=$2, trader_pct=$3, tamano_envio=$4,
        arancel_pct=$5, arancel_status=$6, arancel_razonamiento=$7,
        iva_pct=$8, iva_status=$9, iva_razonamiento=$10,
        cbm_m3=$11, cbm_status=$12, cbm_razonamiento=$13,
@@ -79,7 +82,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       nombre,
       ncmCode,
       traderPct,
-      envioArsConIva,
+      tamanoEnvio,
       arancelPct,
       arancelStatus,
       arancelRazonamiento,
