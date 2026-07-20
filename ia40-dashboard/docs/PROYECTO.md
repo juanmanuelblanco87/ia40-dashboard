@@ -650,10 +650,10 @@ escala, así que se agregó un batch dedicado:
   que usa el botón manual "Consultar precio": foco en Argentina, con
   fallback a productos similares). Mismo patrón de lote que `/api/sieve`:
   `limit` default 60 / máximo 100, `PVP_SIEVE_CONCURRENCY` (default 8) items
-  en paralelo por tanda, `PVP_SIEVE_TIME_BUDGET_MS` (default 260000) para
-  cortar antes de que Vercel mate la función y devolver `parcial: true` en
-  vez de perder la respuesta completa (mismo mecanismo que el incidente de
-  lentitud del tamizador, sección 15).
+  en paralelo, `PVP_SIEVE_TIME_BUDGET_MS` (default 260000) para cortar antes
+  de que Vercel mate la función y devolver `parcial: true` en vez de perder
+  la respuesta completa (mismo mecanismo que el incidente de lentitud del
+  tamizador, sección 15).
 - `GET /api/pvp-sieve/status?category=<slug>` (`app/api/pvp-sieve/status/route.ts`):
   cuenta cuántas combinaciones marca+modelo tiene la categoría vs. cuántas
   ya tienen `model_pvp.status = 'found'`, para la barra de progreso — no
@@ -663,7 +663,27 @@ escala, así que se agregó un batch dedicado:
   Errores: N`), con el mismo aviso de `parcial` que el tamizador de
   segmentos. Al terminar, si encontró algo nuevo, recarga la columna PVP USD
   de la tabla (`reloadModelPvp()`) sin que el usuario tenga que refrescar la
-  página.
+  página. Aparece en la MISMA fila que "Tamizar categoría" (no en una fila
+  aparte — pedido explícito del usuario).
+- **Fix (17/07/2026, misma tarde) — "no completa el PVP con errores":**
+  primera versión real en producción: de 60 pedidos, 49 procesados y 7 en
+  error (6 de ellos timeout de 45s). Causa raíz: el lote usaba
+  `Promise.all()` por tandas de `PVP_SIEVE_CONCURRENCY` (8) — si UN item de
+  la tanda tardaba el timeout completo, los otros 7 (aunque ya hubieran
+  terminado) quedaban esperando ese mismo tiempo antes de que arrancara la
+  tanda siguiente, desperdiciando gran parte de `PVP_SIEVE_TIME_BUDGET_MS`
+  en espera inútil. Se cambió a un **pool de workers independientes**: cada
+  worker agarra el siguiente item de la cola en cuanto termina el suyo, sin
+  esperar a los demás de su tanda original — mismo fix aplicado
+  preventivamente en `/api/sieve/route.ts` (el tamizador de segmentos tiene
+  la misma estructura de tandas y el mismo riesgo, aunque no se haya
+  reportado el problema ahí todavía). Además, se detectó un caso real de
+  JSON mal formado (el modelo escribió una comilla sin escapar dentro de
+  `"razonamiento"` al citar un precio, lo que rompía `JSON.parse` aunque
+  `pvp_usd` y `confianza` estuvieran bien) — `lib/pvpFinder.ts` ahora tiene
+  un fallback por expresión regular que recupera `pvp_usd`/`confianza`
+  directo del texto crudo cuando el parseo estricto falla, en vez de perder
+  un precio válido por un problema de formato en el texto explicativo.
 - Como reusa `getOrSearchModelPvp()` tal cual, correr este batch varias
   veces sobre la misma categoría es seguro: los `'found'` no se vuelven a
   consultar (no se duplica gasto de OpenAI), solo se reintentan los
