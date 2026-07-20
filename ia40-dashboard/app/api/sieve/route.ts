@@ -305,20 +305,27 @@ export async function GET(req: Request) {
     }
   }
 
-  // Se procesa en tandas paralelas (no una por una) para que un lote grande
-  // no tarde varios minutos -- ver nota de SIEVE_CONCURRENCY arriba. Antes
-  // de cada tanda se chequea el presupuesto de tiempo: si ya se gasto
-  // demasiado, se corta aca y se devuelve lo procesado hasta el momento en
-  // vez de arriesgarse a que Vercel mate la funcion sin devolver nada.
+  // Pool de workers independientes (NO "tandas" con Promise.all): con
+  // Promise.all por tanda, un solo item que tarda el timeout completo hace
+  // esperar a TODOS los de esa tanda aunque ya hayan terminado, desperdiciando
+  // presupuesto de tiempo (mismo bug encontrado y arreglado en
+  // app/api/pvp-sieve/route.ts, 17/07/2026). Con un pool, cada worker agarra
+  // el siguiente item disponible en cuanto termina el suyo, sin esperar a
+  // los demas de su tanda original.
+  let nextIndex = 0;
   const startedAt = Date.now();
-  for (let i = 0; i < pendientes.length; i += SIEVE_CONCURRENCY) {
-    if (Date.now() - startedAt > SIEVE_TIME_BUDGET_MS) {
-      resumen.parcial = true;
-      break;
+  async function worker() {
+    while (true) {
+      if (Date.now() - startedAt > SIEVE_TIME_BUDGET_MS) {
+        resumen.parcial = true;
+        return;
+      }
+      const i = nextIndex++;
+      if (i >= pendientes.length) return;
+      await procesarItem(pendientes[i]);
     }
-    const tanda = pendientes.slice(i, i + SIEVE_CONCURRENCY);
-    await Promise.all(tanda.map(procesarItem));
   }
+  await Promise.all(Array.from({ length: Math.min(SIEVE_CONCURRENCY, pendientes.length) }, () => worker()));
 
   for (const catId of categoriasTocadas) {
     await recomputeMonthlyAgg(catId);
