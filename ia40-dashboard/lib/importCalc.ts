@@ -1,279 +1,212 @@
--- Esquema para el dashboard IA40 (Cobus Group)
--- Pensado para crecer por categorias (sillas de ruedas, andadores, bastones, ...)
--- sin tener que rehacer el modelo cada vez.
+/**
+ * Motor de calculo del "Calculador de Importacion" (20/07/2026).
+ *
+ * Reconstruye la logica de la planilla STOKE_FOB_Objetivo_Fase1.xlsx del
+ * cliente (hoja "Margen por FOB Conseguido"), verificada numero por numero
+ * contra esa planilla antes de escribir este archivo -- ej. fila SILLA
+ * RUEDAS CLASSIC: FOB=24, Trader=1.20 (5%), CIF=25 (=FOB+Seguro, el Trader
+ * NO entra al CIF), Arancel=3.65 (=CIF*14.6%), Tasa=0.75 (=CIF*3%),
+ * Ley25413=0.25 (=CIF*1%), Costo Nacionalizado USD = CIF+Arancel+Tasa+
+ * Ley25413+Logistica+Trader = 48.31 -- coincide exacto con la planilla.
+ *
+ * A diferencia de la planilla original del cliente (pedidos explicitos del
+ * usuario, 20/07/2026):
+ *   - Arancel, IVA y CBM ya NO son fijos por categoria cerrada: son
+ *     propiedades editables de un catalogo ABIERTO de "tipos de producto"
+ *     (tabla calc_product_types), estimadas por IA la primera vez que se
+ *     usa cada tipo (ver lib/calcAi.ts) y cacheadas ahi.
+ *   - Trader default 0% (la planilla original asumia 5% siempre) --
+ *     editable por tipo de producto para el caso puntual donde si se pague.
+ *   - Se agrega el canal "Distribucion" (no existia en la planilla): PVP
+ *     Distribucion = PVP MeLi x (1 - descuento_distribucion_pct, default
+ *     35%), con SOLO IIBB como deduccion (sin comision ML, sin envio, sin
+ *     PADS, sin fee de bajo ticket -- no se vende por MeLi).
+ *
+ * Esta funcion es pura (no toca la DB ni hace llamadas de red): recibe los
+ * supuestos y los datos del tipo de producto ya resueltos (arancel/iva/cbm
+ * ya sea cacheados o recien estimados por IA, y el PVP de MeLi ya sea
+ * manual o estimado), y devuelve toda la cascada + ambos canales.
+ */
 
-create table if not exists categories (
-  id serial primary key,
-  slug text unique not null,          -- 'sillas_de_ruedas', 'andadores', 'bastones'
-  name text not null,                 -- nombre para mostrar en el front
-  created_at timestamptz not null default now()
-);
+export interface CalcSupuestos {
+  tipoCambioArs: number;
+  comisionMlPct: number;
+  iibbPct: number;
+  padsPct: number;
+  tasaEstadisticaPct: number;
+  ley25413Pct: number;
+  seguroUsdUnidad: number;
+  feeBajoTicketArs: number;
+  umbralEnvioGratisArs: number;
+  /** PVP Distribucion = PVP MeLi x (1 - este %). Default 0.35 (35%). */
+  descuentoDistribucionPct: number;
+  fleteMaritimoUsd: number;
+  forwarderUsd: number;
+  despachanteUsd: number;
+  thcUsd: number;
+  fleteLocalUsd: number;
+  manipuleoUsd: number;
+  capacidadCbmContenedor: number;
+}
 
--- Una categoria puede mapear a una o varias posiciones arancelarias (NCM).
-create table if not exists category_ncm_codes (
-  id serial primary key,
-  category_id int not null references categories(id) on delete cascade,
-  ncm_code text not null,             -- ej: '8713.10.00'
-  description text,
-  unique (category_id, ncm_code)
-);
+export interface CalcProducto {
+  arancelPct: number;
+  ivaPct: number;
+  /** Comision de agente de compra sobre FOB. Default 0 (ver nota arriba). */
+  traderPct: number;
+  cbmM3: number;
+  /** Costo de envio al cliente (ARS, CON IVA) -- solo se aplica si el PVP
+   * de MeLi supera el umbral de envio gratis. Manual (ver calc_product_types). */
+  envioArsConIva: number;
+}
 
--- Mapeo de campos: como el 'schema' que devuelve la API es dinamico y todavia
--- no confirmamos los nombres exactos de marca/modelo para sillas de ruedas,
--- cada categoria define de que campo del JSON crudo sale cada dimension.
--- Asi, agregar una categoria nueva con campos distintos no requiere tocar codigo.
-create table if not exists field_mappings (
-  id serial primary key,
-  category_id int not null references categories(id) on delete cascade,
-  target_field text not null check (target_field in ('marca','modelo','proveedor','fecha','fob_dolars','unidades')),
-  source_json_path text not null,     -- ej: 'marca_comercial', 'modelo_producto'
-  unique (category_id, target_field)
-);
+export interface CalcInput {
+  fobUsd: number;
+  /** PVP de MeLi ya resuelto (manual o estimado por IA), ARS CON IVA. */
+  pvpMeliArsConIva: number;
+  supuestos: CalcSupuestos;
+  producto: CalcProducto;
+}
 
--- Registro crudo: una fila por registro devuelto por POST /data.
--- Se guarda todo el JSON tal cual viene, mas algunas columnas indexadas
--- para no tener que parsear JSONB en cada query.
-create table if not exists trade_records (
-  id bigserial primary key,
-  category_id int not null references categories(id) on delete cascade,
-  ncm_code text not null,
-  period date not null,               -- primer dia del mes del registro (YYYY-MM-01)
-  cuit text,
-  raw jsonb not null,                 -- fila completa devuelta por la API
-  fob_dolars numeric,
-  marca text,                         -- calculado por el parser de la categoria (lib/parsers), si tiene uno
-  modelo text,                        -- idem
-  color text,                         -- idem (paso 10 del parser de sillas de ruedas)
-  segmento text,                      -- idem (paso 11 del parser de sillas de ruedas)
-  ingested_at timestamptz not null default now(),
-  source_hash text unique             -- hash del registro para evitar duplicados en re-sync
-);
+export interface CalcCostoNacionalizado {
+  traderUsd: number;
+  seguroUsd: number;
+  cifUsd: number;
+  arancelUsd: number;
+  tasaEstadisticaUsd: number;
+  ley25413Usd: number;
+  costoFijoPorCbmUsd: number;
+  logisticaUsd: number;
+  costoNacionalizadoUsd: number;
+  costoNacionalizadoArs: number;
+}
 
-create index if not exists idx_trade_records_cat_period on trade_records (category_id, period);
-create index if not exists idx_trade_records_ncm on trade_records (ncm_code);
-create index if not exists idx_trade_records_raw_gin on trade_records using gin (raw);
+export interface CalcCanal {
+  pvpConIva: number;
+  pvpNeto: number;
+  comisionMlArs: number;
+  envioNetoArs: number;
+  iibbArs: number;
+  padsArs: number;
+  feeBajoTicketArs: number;
+  /** true si el PVP supero el umbral de envio gratis (solo relevante en MeLi). */
+  envioGratisAplica: boolean;
+  margenArs: number;
+  /** Margen sobre venta neta de IVA (misma base que usa la planilla del cliente). */
+  margenPctSobreNeto: number;
+  /** Margen sobre PVP con IVA (precio de lista). */
+  margenPctSobreConIva: number;
+}
 
--- Agregado mensual por marca/modelo/proveedor, para que el front no tenga
--- que agregar en el momento. Se recalcula en cada sync (ver /api/sync).
-create table if not exists monthly_brand_model_agg (
-  id bigserial primary key,
-  category_id int not null references categories(id) on delete cascade,
-  period date not null,
-  marca text,
-  modelo text,
-  proveedor text,
-  color text,
-  segmento text,
-  total_fob_dolars numeric not null default 0,
-  total_unidades numeric not null default 0,
-  record_count int not null default 0,
-  unique (category_id, period, marca, modelo, proveedor, color, segmento)
-);
+export interface CalcResult {
+  costoNacionalizado: CalcCostoNacionalizado;
+  meli: CalcCanal;
+  distribucion: CalcCanal;
+}
 
-create index if not exists idx_monthly_agg_lookup on monthly_brand_model_agg (category_id, period);
+export function calcularImportacion(input: CalcInput): CalcResult {
+  const { fobUsd, pvpMeliArsConIva, supuestos, producto } = input;
 
--- IA40 no siempre trae marca/modelo directo en el JSON. Cuando no viene, se
--- identifica manualmente por empresa importadora (campo "nombre") y se carga
--- aca via la pantalla /admin. Se va completando de a poco.
-create table if not exists provider_brand_map (
-  id serial primary key,
-  category_id int not null references categories(id) on delete cascade,
-  importer_name text not null,
-  marca text not null,
-  modelo text,
-  updated_at timestamptz not null default now(),
-  unique (category_id, importer_name)
-);
+  // ---- 1) Del FOB al Costo Nacionalizado (USD -> ARS) ----
+  const traderUsd = fobUsd * producto.traderPct;
+  const seguroUsd = supuestos.seguroUsdUnidad;
+  // CIF = FOB + Seguro. El Trader NO entra al CIF (verificado contra la
+  // planilla del cliente: la comision del agente de compra no es parte
+  // del valor aduanero declarado, se suma al costo nacionalizado aparte).
+  const cifUsd = fobUsd + seguroUsd;
+  const arancelUsd = cifUsd * producto.arancelPct;
+  const tasaEstadisticaUsd = cifUsd * supuestos.tasaEstadisticaPct;
+  const ley25413Usd = cifUsd * supuestos.ley25413Pct;
 
--- Un importador puede traer varias marcas, y una marca varios modelos.
--- Cuando la clasificacion por importador entero (provider_brand_map) no
--- alcanza, se puede clasificar cada linea de detalle (cada registro de
--- trade_records) por separado aca. Tiene prioridad sobre provider_brand_map.
-create table if not exists record_brand_map (
-  id serial primary key,
-  trade_record_id bigint not null references trade_records(id) on delete cascade,
-  marca text not null,
-  modelo text,
-  updated_at timestamptz not null default now(),
-  unique (trade_record_id)
-);
+  const costoFijoContenedorUsd =
+    supuestos.fleteMaritimoUsd +
+    supuestos.forwarderUsd +
+    supuestos.despachanteUsd +
+    supuestos.thcUsd +
+    supuestos.fleteLocalUsd +
+    supuestos.manipuleoUsd;
+  const costoFijoPorCbmUsd =
+    supuestos.capacidadCbmContenedor > 0 ? costoFijoContenedorUsd / supuestos.capacidadCbmContenedor : 0;
+  const logisticaUsd = producto.cbmM3 * costoFijoPorCbmUsd;
 
--- Historial de corridas de sync, para debug y para saber desde que fecha
--- retomar la proxima vez (sync incremental).
-create table if not exists sync_runs (
-  id serial primary key,
-  category_id int not null references categories(id) on delete cascade,
-  ncm_code text not null,
-  period_start date not null,
-  period_end date not null,
-  rows_ingested int not null default 0,
-  status text not null default 'ok',  -- 'ok' | 'error'
-  error_message text,
-  run_at timestamptz not null default now()
-);
+  const costoNacionalizadoUsd =
+    cifUsd + arancelUsd + tasaEstadisticaUsd + ley25413Usd + logisticaUsd + traderUsd;
+  const costoNacionalizadoArs = costoNacionalizadoUsd * supuestos.tipoCambioArs;
 
--- Imagen representativa por marca/modelo, conseguida via Google Custom
--- Search API (busqueda de imagenes). Se completa de a poco en un cron
--- separado (/api/sync-images, ver vercel.json) para no gastar de una toda
--- la cuota diaria gratis de la API. "status" evita re-buscar lo mismo en
--- cada corrida: 'found' y 'not_found' quedan fijos, solo 'error' se
--- reintenta en la proxima corrida.
-create table if not exists model_images (
-  id serial primary key,
-  category_id int not null references categories(id) on delete cascade,
-  marca text not null,
-  modelo text not null,
-  image_url text,
-  thumbnail_url text,
-  source_url text,
-  status text not null default 'pending', -- 'pending' | 'found' | 'not_found' | 'error'
-  error_message text,
-  fetched_at timestamptz,
-  created_at timestamptz not null default now(),
-  unique (category_id, marca, modelo)
-);
+  const costoNacionalizado: CalcCostoNacionalizado = {
+    traderUsd,
+    seguroUsd,
+    cifUsd,
+    arancelUsd,
+    tasaEstadisticaUsd,
+    ley25413Usd,
+    costoFijoPorCbmUsd,
+    logisticaUsd,
+    costoNacionalizadoUsd,
+    costoNacionalizadoArs,
+  };
 
-create index if not exists idx_model_images_status on model_images (category_id, status);
+  // ---- 2) Canal MeLi ----
+  const envioGratisAplica = pvpMeliArsConIva >= supuestos.umbralEnvioGratisArs;
+  const pvpMeliNeto = pvpMeliArsConIva / (1 + producto.ivaPct);
+  const comisionMlArs = pvpMeliNeto * supuestos.comisionMlPct;
+  // Envio (con IVA) solo se cobra al vendedor si el PVP supera el umbral de
+  // envio gratis; por debajo de eso, el comprador paga su propio envio y en
+  // cambio aplica el fee de bajo ticket.
+  const envioConIvaMeli = envioGratisAplica ? producto.envioArsConIva : 0;
+  const envioNetoMeliArs = envioConIvaMeli / (1 + producto.ivaPct);
+  const iibbMeliArs = pvpMeliNeto * supuestos.iibbPct;
+  // PADS se calcula sobre el PVP CON IVA (no sobre el neto) -- verificado
+  // contra la planilla.
+  const padsMeliArs = pvpMeliArsConIva * supuestos.padsPct;
+  const feeBajoTicketMeliArs = envioGratisAplica ? 0 : supuestos.feeBajoTicketArs;
 
--- Precio de Venta al Publico (PVP) estimado en USD por marca/modelo,
--- conseguido via OpenAI (tool web_search): o bien ON DEMAND (click en
--- "Consultar" en la tabla, ver lib/pvpFinder.ts) o bien aprovechando la
--- MISMA busqueda que ya hace el tamizador de segmentos para identificar el
--- producto (ver lib/aiClassifier.ts + app/api/sieve/route.ts) -- en ambos
--- casos el modelo busca varios precios en la web y elige el valor que mas se
--- repite (o el mas consistente/representativo). "status" evita re-consultar
--- lo mismo en cada click: 'found' y 'not_found' quedan cacheados para
--- siempre, solo 'error' se reintenta. "fuente_url" guarda el link de la
--- publicacion de donde salio el precio, para poder verificarlo (se muestra
--- como link clickeable en el dashboard).
-create table if not exists model_pvp (
-  id serial primary key,
-  category_id int not null references categories(id) on delete cascade,
-  marca text not null,
-  modelo text not null,
-  pvp_usd numeric,
-  confianza text, -- 'alta' | 'media' | 'baja'
-  fuentes_consistentes int,
-  razonamiento text,
-  fuente_url text,
-  status text not null default 'pending', -- 'pending' | 'found' | 'not_found' | 'error'
-  error_message text,
-  fetched_at timestamptz,
-  created_at timestamptz not null default now(),
-  unique (category_id, marca, modelo)
-);
+  const margenMeliArs =
+    pvpMeliNeto -
+    comisionMlArs -
+    envioNetoMeliArs -
+    iibbMeliArs -
+    padsMeliArs -
+    feeBajoTicketMeliArs -
+    costoNacionalizadoArs;
 
-create index if not exists idx_model_pvp_status on model_pvp (category_id, status);
+  const meli: CalcCanal = {
+    pvpConIva: pvpMeliArsConIva,
+    pvpNeto: pvpMeliNeto,
+    comisionMlArs,
+    envioNetoArs: envioNetoMeliArs,
+    iibbArs: iibbMeliArs,
+    padsArs: padsMeliArs,
+    feeBajoTicketArs: feeBajoTicketMeliArs,
+    envioGratisAplica,
+    margenArs: margenMeliArs,
+    margenPctSobreNeto: pvpMeliNeto > 0 ? margenMeliArs / pvpMeliNeto : 0,
+    margenPctSobreConIva: pvpMeliArsConIva > 0 ? margenMeliArs / pvpMeliArsConIva : 0,
+  };
 
--- Seed inicial: categoria piloto.
-insert into categories (slug, name) values ('sillas_de_ruedas', 'Sillas de ruedas')
-  on conflict (slug) do nothing;
+  // ---- 3) Canal Distribucion (no existe en la planilla original) ----
+  // Pedido explicito del usuario: "sobre el PVP de MeLi colocar un 35% de
+  // descuento (35% GM para el minorista)" -- solo se descuenta IIBB (nada
+  // de comision ML, envio, PADS ni fee de bajo ticket, porque no se vende
+  // por MeLi).
+  const pvpDistConIva = pvpMeliArsConIva * (1 - supuestos.descuentoDistribucionPct);
+  const pvpDistNeto = pvpDistConIva / (1 + producto.ivaPct);
+  const iibbDistArs = pvpDistNeto * supuestos.iibbPct;
+  const margenDistArs = pvpDistNeto - iibbDistArs - costoNacionalizadoArs;
 
--- ===================== Calculador de Importacion (20/07/2026) =====================
--- Modulo nuevo e independiente del catalogo de categorias de IA40 de arriba
--- (esas 9 categorias sirven para clasificar datos de importacion YA
--- OCURRIDOS). El calculador evalua productos HIPOTETICOS/nuevos a partir de
--- un FOB, con su propio catalogo abierto de "tipos de producto" -- pedido
--- explicito del usuario: "hay que dejar la logica abierta a cualquier
--- categoria, si mañana quisiera traer televisores con una consulta a IA
--- deberiamos cambiar los supuestos que aplican en esa NCM". Ver racional
--- completo y formulas en docs/PROYECTO.md.
+  const distribucion: CalcCanal = {
+    pvpConIva: pvpDistConIva,
+    pvpNeto: pvpDistNeto,
+    comisionMlArs: 0,
+    envioNetoArs: 0,
+    iibbArs: iibbDistArs,
+    padsArs: 0,
+    feeBajoTicketArs: 0,
+    envioGratisAplica: false,
+    margenArs: margenDistArs,
+    margenPctSobreNeto: pvpDistNeto > 0 ? margenDistArs / pvpDistNeto : 0,
+    margenPctSobreConIva: pvpDistConIva > 0 ? margenDistArs / pvpDistConIva : 0,
+  };
 
--- Supuestos generales: fila unica (id=1), editable desde la UI de la
--- calculadora. El "costo fijo por CBM utilizable" (USD/CBM) NO se guarda:
--- se calcula en el momento como
---   (flete_maritimo_usd + forwarder_usd + despachante_usd + thc_usd +
---    flete_local_usd + manipuleo_usd) / capacidad_cbm_contenedor
--- para que cualquier edicion de un componente se refleje al instante.
-create table if not exists calc_supuestos (
-  id int primary key default 1,
-  tipo_cambio_ars numeric not null default 1450,
-  comision_ml_pct numeric not null default 0.15,
-  iibb_pct numeric not null default 0.045,
-  pads_pct numeric not null default 0.01,
-  tasa_estadistica_pct numeric not null default 0.03,
-  ley_25413_pct numeric not null default 0.01,
-  seguro_usd_unidad numeric not null default 1.00,
-  fee_bajo_ticket_ars numeric not null default 1200,
-  umbral_envio_gratis_ars numeric not null default 30000,
-  -- PVP a Distribucion = PVP MeLi x (1 - este %). Pedido explicito del
-  -- usuario: "sobre el PVP de MeLi colocar un 35% de descuento (35% GM
-  -- para el minorista)".
-  descuento_distribucion_pct numeric not null default 0.35,
-  -- Flete maritimo internacional (China -> Buenos Aires, contenedor 40HQ):
-  -- estimado por IA (ver lib/calcAi.ts), editable a mano si se consigue una
-  -- cotizacion mejor -- pedido explicito del usuario, 20/07/2026.
-  flete_maritimo_usd numeric not null default 3300,
-  flete_confianza text,      -- 'alta' | 'media' | 'baja'
-  flete_razonamiento text,
-  flete_status text not null default 'pending', -- 'pending' | 'found' | 'error'
-  flete_fetched_at timestamptz,
-  -- Resto de costos fijos por contenedor (no se piden por IA, se cargan a
-  -- mano igual que en la planilla original del cliente):
-  forwarder_usd numeric not null default 800,
-  despachante_usd numeric not null default 750,
-  thc_usd numeric not null default 1300,
-  flete_local_usd numeric not null default 380,
-  manipuleo_usd numeric not null default 250,
-  capacidad_cbm_contenedor numeric not null default 64.6,
-  updated_at timestamptz not null default now(),
-  check (id = 1)
-);
-insert into calc_supuestos (id) values (1) on conflict (id) do nothing;
-
--- Catalogo abierto de "tipos de producto" del calculador (no confundir con
--- la tabla `categories`: esta es exclusiva del calculador y se crea sobre
--- la marcha, sin lista fija). Arancel, IVA y CBM se estiman por IA (OpenAI
--- + tool web_search, ver lib/calcAi.ts) la primera vez que se calcula ese
--- tipo de producto, y quedan cacheados aca -- editables a mano y con boton
--- de "recalcular" (mismo patron que model_pvp/model_images). El PVP de
--- mercado tambien se estima por IA, pero SOLO si el usuario no carga un
--- PVP manual al correr un calculo -- pedido explicito del usuario: "el PVP
--- es algo que tambien quiero colocar yo manualmente, pero si no se coloca
--- que lo calcule por IA".
-create table if not exists calc_product_types (
-  id serial primary key,
-  nombre text not null unique,
-  ncm_code text, -- opcional, solo informativo/referencia
-
-  arancel_pct numeric,
-  arancel_confianza text,
-  arancel_razonamiento text,
-  arancel_status text not null default 'pending', -- 'pending' | 'found' | 'error'
-  arancel_fetched_at timestamptz,
-
-  iva_pct numeric,
-  iva_confianza text,
-  iva_razonamiento text,
-  iva_status text not null default 'pending',
-  iva_fetched_at timestamptz,
-
-  -- Trader NO es por IA: default 0%, se edita a mano solo para el caso
-  -- puntual donde SI se paga comision de agente de compra -- pedido
-  -- explicito del usuario: "el trader dejalo 0% y dejalo editable en el
-  -- caso que tengamos que abonarlo".
-  trader_pct numeric not null default 0,
-
-  -- Costo de envio al cliente (ARS, con IVA) cuando el PVP de MeLi supera
-  -- el umbral de envio gratis. El Excel original lo estima "proporcional
-  -- al tamaño/peso del producto" sin una formula unica -- se deja manual
-  -- (default 0, sin costo de envio hasta que se cargue), editable por tipo
-  -- de producto. NO aplica al canal Distribucion (el distribuidor arregla
-  -- su propia logistica).
-  envio_ars_con_iva numeric not null default 0,
-
-  cbm_m3 numeric,
-  cbm_confianza text,
-  cbm_razonamiento text,
-  cbm_status text not null default 'pending',
-  cbm_fetched_at timestamptz,
-
-  pvp_ars_estimado numeric, -- con IVA
-  pvp_confianza text,
-  pvp_razonamiento text,
-  pvp_status text not null default 'pending',
-  pvp_fetched_at timestamptz,
-
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+  return { costoNacionalizado, meli, distribucion };
+}
