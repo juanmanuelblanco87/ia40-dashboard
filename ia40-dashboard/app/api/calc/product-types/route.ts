@@ -18,7 +18,9 @@ export interface ProductTypeRow {
   iva_razonamiento: string | null;
   iva_status: string;
   trader_pct: number;
-  envio_ars_con_iva: number;
+  /** 'chico' | 'mediano' | 'grande' -- ver docs/PROYECTO.md, costo de envio
+   * de Mercado Envios por tamaño (20/07/2026). */
+  tamano_envio: string;
   cbm_m3: number | null;
   cbm_confianza: string | null;
   cbm_razonamiento: string | null;
@@ -37,7 +39,7 @@ function toNumbers(row: any): ProductTypeRow {
     arancel_pct: row.arancel_pct != null ? Number(row.arancel_pct) : null,
     iva_pct: row.iva_pct != null ? Number(row.iva_pct) : null,
     trader_pct: Number(row.trader_pct ?? 0),
-    envio_ars_con_iva: Number(row.envio_ars_con_iva ?? 0),
+    tamano_envio: row.tamano_envio === "chico" || row.tamano_envio === "grande" ? row.tamano_envio : "mediano",
     cbm_m3: row.cbm_m3 != null ? Number(row.cbm_m3) : null,
     pvp_ars_estimado: row.pvp_ars_estimado != null ? Number(row.pvp_ars_estimado) : null,
   };
