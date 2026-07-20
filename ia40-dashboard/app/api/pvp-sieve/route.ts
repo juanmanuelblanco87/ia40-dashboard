@@ -55,6 +55,11 @@ export async function GET(req: Request) {
   const limitParam = Number(searchParams.get("limit") ?? DEFAULT_LIMIT);
   const limit = Math.max(1, Math.min(limitParam || DEFAULT_LIMIT, MAX_LIMIT));
 
+  // Filtro de Segmento actualmente aplicado en el dashboard (ver
+  // ACTUALIZACION mas abajo) -- 0 o mas valores repetidos como
+  // ?segmento=A&segmento=B. Array vacio = sin filtro (todos los segmentos).
+  const segmentosFiltro = searchParams.getAll("segmento");
+
   const catRows = await query<CategoryRow>(`select id, slug, name from categories where slug = $1`, [slug]);
   if (catRows.length === 0) {
     return NextResponse.json({ error: `Categoria "${slug}" no encontrada` }, { status: 404 });
@@ -70,6 +75,18 @@ export async function GET(req: Request) {
   // muestra la tabla "Share por Modelo" del dashboard) -- reporte real del
   // usuario: "no pega los PVP de mayor a menor peso del SOM%". Con este
   // fix, la prioridad del batch coincide con lo que el usuario ve en pantalla.
+  //
+  // ACTUALIZACION (20/07/2026): lo anterior no alcanzaba en categorias con
+  // MAS de un segmento bajo el mismo NCM (ej. "almohadones_ortopedicos"),
+  // porque esta query no filtraba por segmento -- si otro segmento (oculto
+  // por el filtro que el dashboard preselecciona por defecto, ver
+  // DEFAULT_SEGMENTO_FILTER en app/page.tsx) tenia mas FOB reciente, se
+  // comia el cupo del batch (limit=60) antes de llegar a los modelos del
+  // segmento que el usuario tiene realmente a la vista -- reporte real:
+  // "Completar PVP" marcaba 59 encontrados pero ninguno de los 12 modelos
+  // visibles en pantalla los tenia. Ahora el frontend manda el/los
+  // segmento(s) actualmente filtrados (?segmento=...) y la query los
+  // respeta, igual que hace /api/evolution para la tabla en si.
   const pendientes = await query<PendienteRow>(
     `with periodos_recientes as (
        select distinct period from monthly_brand_model_agg
@@ -81,9 +98,12 @@ export async function GET(req: Request) {
      from (
        select
          agg.marca, agg.modelo,
+         coalesce(mso.segmento, agg.segmento) as segmento_actual,
          sum(agg.total_fob_dolars) over (partition by agg.marca, agg.modelo) as total_fob,
          row_number() over (partition by agg.marca, agg.modelo order by agg.period desc) as rn
        from monthly_brand_model_agg agg
+       left join model_segmento_override mso
+         on mso.category_id = agg.category_id and mso.marca = agg.marca and mso.modelo = agg.modelo
        left join model_pvp mp
          on mp.category_id = agg.category_id and mp.marca = agg.marca and mp.modelo = agg.modelo
        where agg.category_id = $1
@@ -93,9 +113,10 @@ export async function GET(req: Request) {
          and agg.modelo is not null and agg.modelo <> ''
      ) t
      where t.rn = 1
+       and (cardinality($3::text[]) = 0 or t.segmento_actual = any($3::text[]))
      order by t.total_fob desc
      limit $2`,
-    [categoria.id, limit]
+    [categoria.id, limit, segmentosFiltro]
   );
 
   const resumen = {
