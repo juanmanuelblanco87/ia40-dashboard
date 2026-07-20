@@ -110,15 +110,29 @@ export async function GET(req: Request) {
     }
   }
 
+  // Pool de workers independientes (NO "tandas" con Promise.all): con
+  // Promise.all por tanda, un solo item que tarda el timeout completo
+  // (45s) hace esperar a TODOS los de esa tanda aunque ya hayan terminado
+  // -- con 8 items en paralelo y varios timeouts, eso desperdicia buena
+  // parte del presupuesto de tiempo esperando en vano (bug real visto en
+  // produccion: 7 de 60 items en error, casi todos timeout, y el lote se
+  // corto en 49/60 por acumular esas esperas). Con un pool, cada worker
+  // agarra el siguiente item disponible en cuanto termina el suyo, sin
+  // esperar a los demas.
+  let nextIndex = 0;
   const startedAt = Date.now();
-  for (let i = 0; i < pendientes.length; i += PVP_SIEVE_CONCURRENCY) {
-    if (Date.now() - startedAt > PVP_SIEVE_TIME_BUDGET_MS) {
-      resumen.parcial = true;
-      break;
+  async function worker() {
+    while (true) {
+      if (Date.now() - startedAt > PVP_SIEVE_TIME_BUDGET_MS) {
+        resumen.parcial = true;
+        return;
+      }
+      const i = nextIndex++;
+      if (i >= pendientes.length) return;
+      await procesarItem(pendientes[i]);
     }
-    const tanda = pendientes.slice(i, i + PVP_SIEVE_CONCURRENCY);
-    await Promise.all(tanda.map(procesarItem));
   }
+  await Promise.all(Array.from({ length: Math.min(PVP_SIEVE_CONCURRENCY, pendientes.length) }, () => worker()));
 
   return NextResponse.json(resumen);
 }
