@@ -793,6 +793,21 @@ escala, así que se agregó un batch dedicado:
   lentitud, que depende del proveedor), pero ya no requiere babysitting
   manual del botón.
 
+- **Fix (20/07/2026) — barra de "Completar PVP" quedaba estática mientras
+  se tamizaba la categoría:** reporte real del usuario: "cuando voy
+  tamizando la categoría se van sumando productos y el completar PVP sigue
+  estático (...) referenciando a los modelos existentes antes de
+  tamizar". Causa: el tamizador puede reclasificar el segmento de un
+  modelo (via `model_segmento_override`), haciendo que entre o salga del
+  filtro de Segmento activo — y "Completar PVP" calcula su total/% sobre
+  ESE mismo filtro (ver fix anterior de esta misma sección). `runSieve()`
+  en `app/page.tsx` recargaba la serie (`reloadSeries()`) cuando había
+  segmentos corregidos o categorías movidas, pero nunca volvía a pedir
+  `/api/pvp-sieve/status` — así que el total/% de Completar PVP quedaba
+  fijo con el valor de ANTES del tamizado, aunque el conjunto de modelos
+  del segmento visible hubiera cambiado. Fix: `runSieve()` ahora también
+  llama a `reloadPvpSieveStatus()` en esos casos.
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
