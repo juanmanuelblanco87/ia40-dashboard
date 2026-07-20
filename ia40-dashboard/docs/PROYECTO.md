@@ -703,6 +703,29 @@ escala, así que se agregó un batch dedicado:
   suma de FOB a los últimos 12 períodos de la categoría, alineando la
   prioridad del backend con lo que se ve en pantalla.
 
+- **Fix (20/07/2026) — reintento automático ante timeout en "Completar
+  PVP":** en un lote real de 60 modelos, 1 dio error de timeout (45s, ver
+  `lib/pvpFinder.ts`) mientras los otros 59 respondieron bien — un caso
+  puntual de lentitud pasajera de OpenAI, no un problema del modelo en sí.
+  `app/api/pvp-sieve/route.ts` ahora reintenta UNA vez automáticamente
+  cuando el error es un timeout, siempre que quede presupuesto de tiempo de
+  sobra (al menos 45s) dentro de `PVP_SIEVE_TIME_BUDGET_MS` — si no, lo deja
+  como error igual que antes. No aplica a la consulta manual individual
+  (`/api/model-pvp/search`, `maxDuration = 60`) porque ahí un segundo intento
+  de 45s podría hacer que Vercel mate la función antes de responder; el
+  botón "Consultar" ya deja reintentar con un solo click si hace falta.
+
+- **Aclaración (20/07/2026) — barra de progreso de "Completar PVP":** ya
+  existe en `app/page.tsx` (misma UI que la barra del tamizador, alimentada
+  por `/api/pvp-sieve/status`) — si no se ve en producción es porque esta
+  versión de `page.tsx` todavía no se subió a GitHub.
+
+- **UX (20/07/2026) — click en el logo de Icom Salud recarga la página:**
+  pedido explícito del usuario, para tener un "volver al inicio" rápido sin
+  usar el botón de refresh del navegador. Cambio en `AppHeader()`
+  (`app/page.tsx`): `onClick={() => window.location.reload()}` sobre el
+  `<img>` del logo, con `cursor: pointer` y tooltip "Actualizar página".
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
