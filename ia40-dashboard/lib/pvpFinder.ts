@@ -170,7 +170,31 @@ export async function findModelPvp(marca: string, modelo: string, categoryName: 
   if (!text) {
     throw new PvpFinderError(`OpenAI no devolvio texto. Respuesta cruda: ${JSON.stringify(data).slice(0, 300)}`);
   }
-  const parsed = extractJson(text);
+
+  let parsed: any;
+  try {
+    parsed = extractJson(text);
+  } catch (err) {
+    // Fallback tolerante: si el JSON viene mal formado (caso real visto en
+    // produccion: el modelo escribe una comilla sin escapar dentro de
+    // "razonamiento" al citar un precio o una fuente, lo que rompe
+    // JSON.parse aunque el resto de la respuesta este bien) se intenta
+    // recuperar al menos "pvp_usd" y "confianza" con una expresion regular
+    // directa sobre el texto crudo -- son los dos campos que realmente
+    // importan para la tabla, no vale la pena perder un precio valido por
+    // un problema de escaping en el texto explicativo.
+    const pvpMatch = text.match(/"pvp_usd"\s*:\s*(null|[0-9.]+)/);
+    const confMatch = text.match(/"confianza"\s*:\s*"(alta|media|baja)"/);
+    if (pvpMatch) {
+      parsed = {
+        pvp_usd: pvpMatch[1] === "null" ? null : Number(pvpMatch[1]),
+        confianza: confMatch ? confMatch[1] : "baja",
+        razonamiento: "(JSON con formato invalido -- se recupero el precio de forma parcial desde el texto crudo)",
+      };
+    } else {
+      throw err;
+    }
+  }
 
   const pvpUsd: number | null =
     typeof parsed.pvp_usd === "number" && Number.isFinite(parsed.pvp_usd) && parsed.pvp_usd > 0
