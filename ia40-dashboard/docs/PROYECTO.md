@@ -726,6 +726,33 @@ escala, así que se agregó un batch dedicado:
   (`app/page.tsx`): `onClick={() => window.location.reload()}` sobre el
   `<img>` del logo, con `cursor: pointer` y tooltip "Actualizar página".
 
+- **Fix (20/07/2026) — "Completar PVP" seguía sin pegarle a los modelos
+  visibles, aun después del fix de FOB reciente:** causa real encontrada
+  con un caso concreto (categoría "Cojín Ortopédico / Antiescaras", que
+  vive bajo el mismo NCM que otros segmentos de `almohadones_ortopedicos`):
+  la query de prioridad de `/api/pvp-sieve` no filtraba por Segmento, así
+  que un segmento distinto al que el dashboard preselecciona por defecto
+  (ver `DEFAULT_SEGMENTO_FILTER`) podía tener más FOB reciente y comerse
+  todo el cupo del lote (`limit=60`) — el batch reportaba "PVP encontrado:
+  59" real, pero ninguno de esos 59 coincidía con los modelos que se veían
+  en la tabla "Share por Modelo" filtrada por segmento. Fix: el frontend
+  ahora manda el filtro de Segmento activo (`?segmento=...`, repetible) a
+  `/api/pvp-sieve` y a `/api/pvp-sieve/status`, y ambas queries lo respetan
+  (join a `model_segmento_override` + `coalesce` con `agg.segmento`, mismo
+  criterio que ya usaba `/api/sieve`). El % de avance de la barra también
+  se recalcula sobre el subconjunto filtrado, no sobre toda la categoría.
+  Nota: el mismo filtro NO se aplicó a la query de prioridad de
+  `/api/sieve` (tamizador de segmentos) a propósito — ese endpoint existe
+  justamente para encontrar modelos mal clasificados en OTRO segmento, así
+  que filtrar por el segmento "actual" iría en contra de su propósito.
+
+- **Recordatorio (20/07/2026) — verificar que `/api/pvp-sieve/status/route.ts`
+  esté subido a GitHub:** la barra de progreso de "Completar PVP" (idéntica
+  a la del tamizador) depende de este endpoint. Si el código de
+  `app/page.tsx` que la dibuja ya está en producción pero la barra sigue
+  sin aparecer, lo más probable es que este archivo puntual nunca se haya
+  pegado en GitHub (es fácil de saltear por estar en una subcarpeta nueva).
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
