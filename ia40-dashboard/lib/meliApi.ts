@@ -259,12 +259,14 @@ export async function consultarCostosMeli(params: {
       return { envioArs: null, comisionArs: null, rawTexto: rawTexto.slice(0, 1800), error: "Respuesta de API ML no es JSON valido" };
     }
     const row = Array.isArray(data) ? data[0] : data;
+    const rowJson = JSON.stringify(row);
     return {
       envioArs: extraerCostoEnvio(row),
       comisionArs: extraerComision(row),
-      // 1800 chars (antes 500) -- el campo que buscamos (sale_fee_details.fixed_fee)
-      // quedaba fuera del recorte anterior, tapando el diagnostico.
-      rawTexto: JSON.stringify(row).slice(0, 1800),
+      // Se antepone el largo REAL del JSON completo (antes de recortar) --
+      // asi podemos confirmar si el recorte es lo que tapa el dato, o si la
+      // respuesta de MELI genuinamente es mas corta de lo esperado.
+      rawTexto: `[largo total ${rowJson.length} caracteres] ${rowJson.slice(0, 3000)}`,
     };
   } catch (err: any) {
     return { envioArs: null, comisionArs: null, rawTexto: "", error: String(err?.message ?? err) };
