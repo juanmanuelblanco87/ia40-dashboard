@@ -56,6 +56,15 @@ interface ProductType {
   pvp_confianza: string | null;
   pvp_razonamiento: string | null;
   pvp_status: string;
+  ml_category_id: string | null;
+  ml_category_nombre: string | null;
+  peso_kg: number | null;
+  peso_confianza: string | null;
+  peso_razonamiento: string | null;
+  peso_status: string;
+  envio_meli_api_ars: number | null;
+  envio_meli_api_status: string;
+  envio_meli_api_razonamiento: string | null;
 }
 
 interface Supuestos {
@@ -115,6 +124,7 @@ interface RunResult {
   productType: ProductType;
   supuestos: Supuestos;
   pvpFuente: "manual" | "cache" | "ia";
+  envioFuente: "api" | "tabla_fija";
   resultado: {
     costoNacionalizado: CalcCostoNacionalizado;
     meli: CalcCanal;
@@ -167,7 +177,7 @@ export default function CalculoImportacionPage() {
   const [creandoError, setCreandoError] = useState<string | null>(null);
 
   const [showEditar, setShowEditar] = useState(false);
-  const [refrescando, setRefrescando] = useState<string | null>(null); // 'arancel' | 'iva' | 'cbm' | 'pvp' | null
+  const [refrescando, setRefrescando] = useState<string | null>(null); // 'arancel' | 'iva' | 'cbm' | 'pvp' | 'peso' | null
   const [guardandoEdit, setGuardandoEdit] = useState(false);
   const [editForm, setEditForm] = useState<{
     arancelPct: string;
@@ -175,6 +185,7 @@ export default function CalculoImportacionPage() {
     traderPct: string;
     tamanoEnvio: TamanoEnvio;
     cbmM3: string;
+    pesoKg: string;
   } | null>(null);
 
   const [fobUsd, setFobUsd] = useState("");
@@ -249,11 +260,12 @@ export default function CalculoImportacionPage() {
       traderPct: fmtPctInput(selected.trader_pct),
       tamanoEnvio: selected.tamano_envio ?? "mediano",
       cbmM3: selected.cbm_m3 != null ? String(selected.cbm_m3) : "",
+      pesoKg: selected.peso_kg != null ? String(selected.peso_kg) : "",
     });
     setShowEditar(true);
   };
 
-  const recalcularCampo = (field: "arancel" | "iva" | "cbm" | "pvp") => {
+  const recalcularCampo = (field: "arancel" | "iva" | "cbm" | "pvp" | "peso") => {
     if (!selected || refrescando) return;
     setRefrescando(field);
     fetch(`/api/calc/product-types/${selected.id}/refresh?field=${field}`, { method: "POST" })
@@ -269,6 +281,7 @@ export default function CalculoImportacionPage() {
               traderPct: fmtPctInput(updated.trader_pct),
               tamanoEnvio: updated.tamano_envio ?? "mediano",
               cbmM3: updated.cbm_m3 != null ? String(updated.cbm_m3) : "",
+              pesoKg: updated.peso_kg != null ? String(updated.peso_kg) : "",
             });
           }
         } else if (d.error) {
@@ -291,6 +304,7 @@ export default function CalculoImportacionPage() {
         traderPct: Number(editForm.traderPct) / 100,
         tamanoEnvio: editForm.tamanoEnvio,
         cbmM3: Number(editForm.cbmM3),
+        pesoKg: editForm.pesoKg ? Number(editForm.pesoKg) : undefined,
       }),
     })
       .then((r) => r.json())
@@ -563,6 +577,15 @@ export default function CalculoImportacionPage() {
                 <strong>
                   {selected.tamano_envio === "chico" ? "Chico" : selected.tamano_envio === "grande" ? "Grande" : "Mediano"}
                 </strong>
+                {" "}
+                <span style={{ color: "var(--muted)", fontSize: 11.5 }}>
+                  (tabla fija{selected.envio_meli_api_status === "found" ? " — última consulta API: OK" : ""})
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "var(--muted)" }}>Peso facturable: </span>
+                <strong>{selected.peso_kg != null ? `${selected.peso_kg} kg` : "—"}</strong>
+                <ConfianzaDot confianza={selected.peso_confianza} razonamiento={selected.peso_razonamiento} />
               </div>
               <div>
                 <span style={{ color: "var(--muted)" }}>PVP mercado (IA): </span>
@@ -619,6 +642,9 @@ export default function CalculoImportacionPage() {
                 {resultado.pvpFuente === "manual" && "(cargado a mano)"}
                 {resultado.pvpFuente === "cache" && "(estimado por IA, ya cacheado)"}
                 {resultado.pvpFuente === "ia" && "(recién estimado por IA)"}
+              </div>
+              <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>
+                Costo de envío usado: {resultado.envioFuente === "api" ? "dato real de la API de Mercado Libre ✓" : "tabla fija (editable en Supuestos generales)"}
               </div>
               <table className="admin-table" style={{ fontSize: 13 }}>
                 <tbody>
@@ -784,6 +810,9 @@ export default function CalculoImportacionPage() {
                   <option value="mediano">Mediano</option>
                   <option value="grande">Grande (ej. silla de ruedas)</option>
                 </select>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  Se usa como respaldo si la consulta a la API de Mercado Libre falla.
+                </div>
               </div>
               <div style={{ flex: 1, minWidth: 140 }}>
                 <label>PVP mercado (IA)</label>
@@ -794,6 +823,28 @@ export default function CalculoImportacionPage() {
                   <button onClick={() => recalcularCampo("pvp")} disabled={refrescando === "pvp"} title="Recalcular con IA">
                     {refrescando === "pvp" ? <Spinner /> : "🔄"}
                   </button>
+                </div>
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 10 }}>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <label>Peso facturable (kg, para API Mercado Libre)</label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="number"
+                    value={editForm.pesoKg}
+                    onChange={(e) => setEditForm({ ...editForm, pesoKg: e.target.value })}
+                    style={inputStyle}
+                  />
+                  <button onClick={() => recalcularCampo("peso")} disabled={refrescando === "peso"} title="Recalcular con IA">
+                    {refrescando === "peso" ? <Spinner /> : "🔄"}
+                  </button>
+                </div>
+              </div>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <label>Categoría Mercado Libre (auto)</label>
+                <div style={{ fontSize: 13, paddingTop: 8 }}>
+                  {selected.ml_category_nombre ? `${selected.ml_category_nombre} (${selected.ml_category_id})` : "se detecta al calcular"}
                 </div>
               </div>
             </div>
