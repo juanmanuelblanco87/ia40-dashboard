@@ -14,6 +14,7 @@ function supuestosToCalc(row: any): CalcSupuestos {
     iibbPct: Number(row.iibb_pct),
     padsPct: Number(row.pads_pct),
     tasaEstadisticaPct: Number(row.tasa_estadistica_pct),
+    tasaEstadisticaTopeUsd: Number(row.tasa_estadistica_tope_usd),
     ley25413Pct: Number(row.ley_25413_pct),
     seguroUsdUnidad: Number(row.seguro_usd_unidad),
     feeBajoTicketArs: Number(row.fee_bajo_ticket_ars),
