@@ -289,6 +289,25 @@ create table if not exists calc_product_types (
   pvp_status text not null default 'pending',
   pvp_fetched_at timestamptz,
 
+  -- ===== Integracion API publica de Mercado Libre (20/07/2026) =====
+  -- Pedido explicito del usuario: "como hacemos para que le pegue
+  -- realmente a la api?" -- ver lib/meliApi.ts. category_id se predice
+  -- automaticamente (domain_discovery) y se cachea; peso_kg se estima por
+  -- IA como el resto de los campos; envio_meli_api_ars es el resultado de
+  -- la ultima consulta exitosa a listing_prices (se usa en el calculo SI
+  -- esta disponible, si no se cae a la tabla fija tamano_envio de arriba).
+  ml_category_id text,
+  ml_category_nombre text,
+  peso_kg numeric,
+  peso_confianza text,
+  peso_razonamiento text,
+  peso_status text not null default 'pending',
+  peso_fetched_at timestamptz,
+  envio_meli_api_ars numeric,
+  envio_meli_api_status text not null default 'pending', -- 'pending'|'found'|'error'
+  envio_meli_api_razonamiento text, -- guarda el JSON crudo (recortado) o el error, para poder auditar
+  envio_meli_api_fetched_at timestamptz,
+
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
