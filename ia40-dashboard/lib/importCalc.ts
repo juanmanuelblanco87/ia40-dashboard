@@ -76,6 +76,14 @@ export interface CalcProducto {
    * que el costo real de MeLi se define por una tabla de tamaño, no por un
    * monto libre por producto. */
   tamanoEnvio: TamanoEnvio;
+  /** Costo de envio (ARS con IVA) obtenido en vivo de la API publica de
+   * Mercado Libre (ver lib/meliApi.ts, 20/07/2026) para ESTE calculo
+   * puntual. Si viene definido, reemplaza a la tabla fija por tamaño
+   * (envioChicoArs/envioMedianoArs/envioGrandeArs) -- pero el Fee de bajo
+   * valor sigue aplicando igual si el PVP no llega al umbral, sin importar
+   * este valor. undefined/null = usar la tabla fija (comportamiento
+   * anterior, sirve de respaldo si la API no responde). */
+  envioArsConIvaApi?: number | null;
 }
 
 export interface CalcInput {
@@ -177,8 +185,12 @@ export function calcularImportacion(input: CalcInput): CalcResult {
   // IGUAL, paga el costo real de envio segun el tamaño del producto
   // (chico/mediano/grande). Nunca es realmente "gratis" para el vendedor.
   const envioPorTamanoAplica = pvpMeliArsConIva >= supuestos.umbralBajoValorArs;
+  // Prioridad: API de Mercado Libre (si se pudo consultar para este
+  // calculo) > tabla fija por tamaño (respaldo). Ver CalcProducto.envioArsConIvaApi.
   const envioPorTamanoArsConIva =
-    producto.tamanoEnvio === "chico"
+    producto.envioArsConIvaApi != null
+      ? producto.envioArsConIvaApi
+      : producto.tamanoEnvio === "chico"
       ? supuestos.envioChicoArs
       : producto.tamanoEnvio === "grande"
       ? supuestos.envioGrandeArs
