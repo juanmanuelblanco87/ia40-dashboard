@@ -36,6 +36,13 @@ export interface CalcSupuestos {
   iibbPct: number;
   padsPct: number;
   tasaEstadisticaPct: number;
+  /** Tope de la Tasa de Estadistica, en USD equivalentes (21/07/2026,
+   * pedido explicito del usuario tras comparar contra una calculadora
+   * publica): la Tasa de Estadistica de Aduana es 3% sobre CIF pero con un
+   * tope maximo fijo en USD (la calculadora publica que compartio el
+   * usuario usa USD 180) -- sin este tope, productos de FOB alto quedarian
+   * sobreestimados en este concepto. */
+  tasaEstadisticaTopeUsd: number;
   ley25413Pct: number;
   seguroUsdUnidad: number;
   /** Fee fijo por "producto de bajo valor" que cobra Mercado Libre cuando el
@@ -150,7 +157,11 @@ export function calcularImportacion(input: CalcInput): CalcResult {
   // del valor aduanero declarado, se suma al costo nacionalizado aparte).
   const cifUsd = fobUsd + seguroUsd;
   const arancelUsd = cifUsd * producto.arancelPct;
-  const tasaEstadisticaUsd = cifUsd * supuestos.tasaEstadisticaPct;
+  // Tasa de Estadistica: 3% sobre CIF, pero con un tope maximo en USD
+  // (21/07/2026, ver CalcSupuestos.tasaEstadisticaTopeUsd) -- sin el tope
+  // no afecta a FOBs bajos como los que se cargaron hasta ahora, pero
+  // sobreestimaria el costo en productos de FOB alto.
+  const tasaEstadisticaUsd = Math.min(cifUsd * supuestos.tasaEstadisticaPct, supuestos.tasaEstadisticaTopeUsd);
   const ley25413Usd = cifUsd * supuestos.ley25413Pct;
 
   const costoFijoContenedorUsd =
