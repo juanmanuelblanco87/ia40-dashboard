@@ -311,3 +311,20 @@ create table if not exists calc_product_types (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Tokens OAuth de la cuenta real de Mercado Libre de Cobus (20/07/2026).
+-- Fila unica (id=1). Necesario porque el costo de envio con
+-- logistic_type=fulfillment (Mercado Envios Full) depende del contrato de
+-- fulfillment de la cuenta -- la API publica sin auth devuelve 403 para
+-- ese caso (confirmado en produccion). Ver lib/meliApi.ts y
+-- app/api/calc/meli-oauth/*. client_id/client_secret NO se guardan aca,
+-- viven como variables de entorno (MELI_CLIENT_ID / MELI_CLIENT_SECRET).
+create table if not exists meli_oauth (
+  id int primary key default 1,
+  access_token text,
+  refresh_token text,
+  expires_at timestamptz,
+  updated_at timestamptz not null default now(),
+  check (id = 1)
+);
+insert into meli_oauth (id) values (1) on conflict (id) do nothing;
