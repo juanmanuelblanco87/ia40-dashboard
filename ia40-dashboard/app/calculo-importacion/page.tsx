@@ -73,6 +73,7 @@ interface Supuestos {
   iibbPct: number;
   padsPct: number;
   tasaEstadisticaPct: number;
+  tasaEstadisticaTopeUsd: number;
   ley25413Pct: number;
   seguroUsdUnidad: number;
   feeBajoTicketArs: number;
@@ -91,6 +92,7 @@ interface Supuestos {
   envioChicoArs: number;
   envioMedianoArs: number;
   envioGrandeArs: number;
+  tipoCambioFuenteFecha: string | null;
 }
 
 interface CalcCostoNacionalizado {
@@ -199,6 +201,7 @@ export default function CalculoImportacionPage() {
   const [supuestosForm, setSupuestosForm] = useState<Record<string, string> | null>(null);
   const [guardandoSupuestos, setGuardandoSupuestos] = useState(false);
   const [refrescandoFlete, setRefrescandoFlete] = useState(false);
+  const [refrescandoTipoCambio, setRefrescandoTipoCambio] = useState(false);
 
   const [meliConectado, setMeliConectado] = useState<boolean | null>(null);
   const [meliOauthMsg, setMeliOauthMsg] = useState<string | null>(null);
@@ -400,6 +403,7 @@ export default function CalculoImportacionPage() {
       iibbPct: fmtPctInput(supuestos.iibbPct),
       padsPct: fmtPctInput(supuestos.padsPct),
       tasaEstadisticaPct: fmtPctInput(supuestos.tasaEstadisticaPct),
+      tasaEstadisticaTopeUsd: String(supuestos.tasaEstadisticaTopeUsd),
       ley25413Pct: fmtPctInput(supuestos.ley25413Pct),
       seguroUsdUnidad: String(supuestos.seguroUsdUnidad),
       feeBajoTicketArs: String(supuestos.feeBajoTicketArs),
@@ -431,6 +435,7 @@ export default function CalculoImportacionPage() {
         iibbPct: Number(supuestosForm.iibbPct) / 100,
         padsPct: Number(supuestosForm.padsPct) / 100,
         tasaEstadisticaPct: Number(supuestosForm.tasaEstadisticaPct) / 100,
+        tasaEstadisticaTopeUsd: Number(supuestosForm.tasaEstadisticaTopeUsd),
         ley25413Pct: Number(supuestosForm.ley25413Pct) / 100,
         seguroUsdUnidad: Number(supuestosForm.seguroUsdUnidad),
         feeBajoTicketArs: Number(supuestosForm.feeBajoTicketArs),
@@ -476,6 +481,24 @@ export default function CalculoImportacionPage() {
       })
       .catch(() => alert("No se pudo recalcular el flete. Proba de nuevo."))
       .finally(() => setRefrescandoFlete(false));
+  };
+  const recalcularTipoCambio = () => {
+    if (refrescandoTipoCambio) return;
+    setRefrescandoTipoCambio(true);
+    fetch("/api/calc/supuestos/refresh-tipo-cambio", { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.error) {
+          alert(`No se pudo actualizar el tipo de cambio: ${d.error}`);
+          return;
+        }
+        reloadSupuestos();
+        if (supuestosForm) {
+          setSupuestosForm({ ...supuestosForm, tipoCambioArs: String(d.tipoCambioArs) });
+        }
+      })
+      .catch(() => alert("No se pudo actualizar el tipo de cambio. Proba de nuevo."))
+      .finally(() => setRefrescandoTipoCambio(false));
   };
 
   const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box" };
@@ -933,13 +956,34 @@ export default function CalculoImportacionPage() {
               Aplican a TODOS los tipos de producto. Solo Arancel, IVA, CBM y Trader se definen por tipo de producto.
             </div>
             <div className="row">
-              <Campo label="Tipo de cambio (ARS/USD)" value={supuestosForm.tipoCambioArs} onChange={(v) => setSupuestosForm({ ...supuestosForm, tipoCambioArs: v })} />
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <label>Tipo de cambio (ARS/USD)</label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="number"
+                    value={supuestosForm.tipoCambioArs}
+                    onChange={(e) => setSupuestosForm({ ...supuestosForm, tipoCambioArs: e.target.value })}
+                    style={inputStyle}
+                  />
+                  <button onClick={recalcularTipoCambio} disabled={refrescandoTipoCambio} title="Actualizar con el dólar oficial (BCRA)">
+                    {refrescandoTipoCambio ? <Spinner /> : "🔄"}
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  {supuestos?.tipoCambioFuenteFecha
+                    ? `Oficial BCRA al ${supuestos.tipoCambioFuenteFecha}. Es un valor oscilante: podés pisarlo a mano cuando quieras.`
+                    : "Editable a mano, o actualizalo con el dólar oficial del BCRA (🔄)."}
+                </div>
+              </div>
               <Campo label="Comisión Mercado Libre %" value={supuestosForm.comisionMlPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, comisionMlPct: v })} />
               <Campo label="IIBB %" value={supuestosForm.iibbPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, iibbPct: v })} />
             </div>
             <div className="row" style={{ marginTop: 10 }}>
               <Campo label="PADS %" value={supuestosForm.padsPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, padsPct: v })} />
               <Campo label="Tasa estadística %" value={supuestosForm.tasaEstadisticaPct} onChange={(v) => setSupuestosForm({ ...supuestosForm, tasaEstadisticaPct: v })} />
+              <Campo label="Tope Tasa Estadística (USD)" value={supuestosForm.tasaEstadisticaTopeUsd} onChange={(v) => setSupuestosForm({ ...supuestosForm, tasaEstadisticaTopeUsd: v })} />
+            </div>
+            <div className="row" style={{ marginTop: 10 }}>
               <Campo label="Ley 25413 %" value={supuestosForm.ley25413Pct} onChange={(v) => setSupuestosForm({ ...supuestosForm, ley25413Pct: v })} />
             </div>
             <div className="row" style={{ marginTop: 10 }}>
