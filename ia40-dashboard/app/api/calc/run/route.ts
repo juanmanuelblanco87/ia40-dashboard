@@ -185,7 +185,10 @@ export async function POST(req: Request) {
   // de tamano_envio -- el calculo NUNCA se rompe por esto. La categoria de
   // MELI ya no hace falta para el envio, se sigue prediciendo solo para
   // mostrarla en el catalogo.
-  let envioArsConIvaApi: number | null = null;
+  // OJO: la API de MeLi devuelve el costo de envio SIN IVA (a diferencia de
+  // la tabla fija editable, que se carga CON IVA) -- confirmado con el
+  // usuario 21/07/2026. Ver el comentario en lib/importCalc.ts.
+  let envioArsNetoApi: number | null = null;
   let envioFuente: "api" | "tabla_fija" = "tabla_fija";
   try {
     let categoryId: string | null = producto.ml_category_id ?? null;
@@ -214,7 +217,7 @@ export async function POST(req: Request) {
     if (pesoKg != null && producto.cbm_m3 != null) {
       const r = await consultarCostosMeli({ price: pvpMeliArsConIva, cbmM3: producto.cbm_m3, billableWeightKg: pesoKg });
       if (r.envioArs != null) {
-        envioArsConIvaApi = r.envioArs;
+        envioArsNetoApi = r.envioArs;
         envioFuente = "api";
         await query(
           `update calc_product_types set envio_meli_api_ars=$1, envio_meli_api_status='found',
@@ -239,7 +242,7 @@ export async function POST(req: Request) {
     traderPct: producto.trader_pct,
     cbmM3: producto.cbm_m3 ?? 0,
     tamanoEnvio: producto.tamano_envio,
-    envioArsConIvaApi,
+    envioArsNetoApi,
   };
 
   const resultado = calcularImportacion({
