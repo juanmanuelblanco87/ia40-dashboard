@@ -1082,6 +1082,45 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
   siendo editable a mano en cualquier momento (pedido explícito: "es un
   valor bastante oscilante").
 
+## 10.5 Dólar oficial en el header + Portal de acceso (21/07/2026)
+
+- **Dólar oficial en el header:** `components/AppHeader.tsx` consulta
+  `GET /api/bcra/tipo-cambio` al montar (una sola vez, sin IA, sin guardar
+  nada en la base) y muestra "USD oficial: $X.XXX" en el header de TODAS
+  las páginas. Reusa `lib/bcra.ts` (mismo cliente del BCRA que el botón 🔄
+  de "Tipo de cambio" en Supuestos del Calculador), pero es un dato
+  puramente informativo -- no toca `calc_supuestos.tipo_cambio_ars`, que
+  sigue siendo el que se usa para calcular y sigue siendo editable a mano.
+
+- **Portal de acceso:** pedido explícito del usuario ("limitar los accesos
+  de cualquier persona con acceso al link"), reutilizando el criterio de
+  otro proyecto de Icom Salud (`icom_panel_unificado.html`, compartido como
+  referencia): usuario/contraseña COMPARTIDOS para todo el equipo, sin
+  cuentas individuales. Diferencia importante: la referencia validaba todo
+  en el navegador (`const USERS = {...}` a la vista en el código fuente,
+  saltable con la consola) -- acá se hace cumplir en el servidor:
+  - `middleware.ts` (raíz del proyecto): corre antes de CUALQUIER página o
+    API. Si la cookie `icom_auth` no coincide con `AUTH_SESSION_TOKEN`
+    (variable de entorno), redirige a `/login` (o devuelve 401 si es una
+    ruta `/api/*`). Si `AUTH_SESSION_TOKEN` no está configurado, no
+    bloquea nada (evita dejar la app inaccesible por un olvido).
+  - **Excluidas del gate a propósito** (las llama un tercero, no un
+    navegador logueado): `/api/sync`, `/api/sync-images` (cron), todo
+    `/api/calc/meli-oauth/*` (callback de Mercado Libre) y
+    `/api/calc/meli-webhook` (notificaciones de Mercado Libre). También
+    cualquier archivo estático (logos, `_next/*`).
+  - `POST /api/login`: valida `{usuario, contrasena}` contra `AUTH_USERS`
+    (variable de entorno, JSON, ej. `{"icom":"2026"}`) y si coincide guarda
+    la cookie httpOnly `icom_auth = AUTH_SESSION_TOKEN`.
+  - `POST /api/logout`: borra la cookie. Botón "Salir" agregado en
+    `AppHeader.tsx`.
+  - `app/login/page.tsx`: pantalla de login con la misma paleta/estilo del
+    resto de la app (no se copió el HTML de la referencia, solo el
+    criterio de usuario/contraseña compartidos).
+  - **Setup pendiente del usuario** (una sola vez, Vercel → Environment
+    Variables): `AUTH_USERS` (ej. `{"icom":"2026"}`) y
+    `AUTH_SESSION_TOKEN` (cualquier string largo al azar).
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -1114,6 +1153,9 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
 | `/api/calc/meli-oauth/status` | GET | `{conectado, expiresAt, updatedAt}` — si hay una cuenta de Mercado Libre conectada. |
 | `/api/calc/meli-webhook` | GET/POST | Receptor de notificaciones (webhooks) de Mercado Libre — requerido por ML al tildar "Seleccionar Todo" en Tópicos al crear la app OAuth. Por ahora solo loguea y responde `{ok:true}`, no procesa nada. |
 | `/api/calc/supuestos/refresh-tipo-cambio` | POST | Trae el dólar oficial más reciente de la API del BCRA (Estadísticas Cambiarias) y actualiza el Tipo de cambio de Supuestos generales. |
+| `/api/bcra/tipo-cambio` | GET | Dólar oficial mayorista del BCRA para mostrar en el header (informativo, ver sección 10.5). |
+| `/api/login` | POST | `{usuario, contrasena}` — valida contra `AUTH_USERS` y guarda la cookie de sesión (ver sección 10.5, Portal de acceso). |
+| `/api/logout` | POST | Borra la cookie de sesión. |
 
 ## 12. Variables de entorno
 
@@ -1136,6 +1178,8 @@ como único mecanismo de auth). Lista real de variables usadas en el código:
 | `SIEVE_TIME_BUDGET_MS` | `app/api/sieve/route.ts` | Presupuesto de tiempo total del request antes de cortar el lote y devolver un resumen parcial (default 260000 = 260s). |
 | `MELI_CLIENT_ID` | `lib/meliApi.ts`, `app/api/calc/meli-oauth/*` | Client ID de la app creada en developers.mercadolibre.com.ar con la cuenta real de Mercado Libre de Cobus (Calculador de Importación, sección 10.3). |
 | `MELI_CLIENT_SECRET` | `lib/meliApi.ts` | Client Secret de esa misma app -- usado para intercambiar/refrescar tokens OAuth. Nunca se expone al frontend. |
+| `AUTH_USERS` | `app/api/login/route.ts` | JSON con usuario/contraseña compartidos del Portal de acceso, ej. `{"icom":"2026"}` (sección 10.5). |
+| `AUTH_SESSION_TOKEN` | `middleware.ts`, `app/api/login/route.ts` | String largo al azar (ej. `openssl rand -hex 32`) usado como valor de la cookie de sesión del Portal de acceso. Si no está seteada, el portal queda desactivado (no bloquea nada). |
 
 ## 13. Frontend
 
