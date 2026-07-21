@@ -718,7 +718,7 @@ export default function CalculoImportacionPage() {
                     <td style={{ textAlign: "right" }}>US$ {fmtUsd(Number(fobUsd))}</td>
                   </tr>
                   <tr>
-                    <td>+ Trader ({fmtPct(selected!.trader_pct)})</td>
+                    <td>+ Trader ({fmtPct(resultado.productType.trader_pct)})</td>
                     <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.traderUsd)}</td>
                   </tr>
                   <tr>
@@ -734,7 +734,7 @@ export default function CalculoImportacionPage() {
                     </td>
                   </tr>
                   <tr>
-                    <td>+ Arancel ({fmtPct(selected!.arancel_pct ?? 0)} sobre CIF)</td>
+                    <td>+ Arancel ({fmtPct(resultado.productType.arancel_pct ?? 0)} sobre CIF)</td>
                     <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.arancelUsd)}</td>
                   </tr>
                   <tr>
@@ -748,7 +748,7 @@ export default function CalculoImportacionPage() {
                     <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.ley25413Usd)}</td>
                   </tr>
                   <tr>
-                    <td>+ Logística ({selected!.cbm_m3} m³ × US$ {fmtUsd(resultado.resultado.costoNacionalizado.costoFijoPorCbmUsd)}/m³)</td>
+                    <td>+ Logística ({resultado.productType.cbm_m3} m³ × US$ {fmtUsd(resultado.resultado.costoNacionalizado.costoFijoPorCbmUsd)}/m³)</td>
                     <td style={{ textAlign: "right" }}>US$ {fmtUsd(resultado.resultado.costoNacionalizado.logisticaUsd)}</td>
                   </tr>
                   <tr>
