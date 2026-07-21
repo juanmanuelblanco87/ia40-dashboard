@@ -209,26 +209,32 @@ export async function predecirCategoriaMeli(nombreProducto: string): Promise<Cat
 }
 
 /** Busca de forma tolerante un costo de envio dentro de la respuesta de
- * `/users/$USER_ID/shipping_options/free`. La doc oficial ("Calculate
- * shipping costs & handling time") documenta la forma de respuesta del
- * endpoint hermano `/items/$ITEM_ID/shipping_options` como
- * `{ options: [ { cost, list_cost, ... } ] }` -- `options[0].cost` es el
- * costo final (puede ser 0 si el comprador tiene envio gratis, que es el
- * caso normal en Full) y `list_cost` es el costo de publicacion real sin
- * aplicar ningun descuento/gratuidad -- por eso list_cost es el candidato
- * mas representativo del costo real de Mercado Envios. Se dejan varios
- * candidatos porque no se pudo confirmar en vivo la forma exacta de la
- * variante `/free` (sin item_id) esta sesion. */
+ * `/users/$USER_ID/shipping_options/free`. CONFIRMADO en produccion
+ * (21/07/2026, primera respuesta real y completa obtenida) que la forma
+ * real de esta respuesta (variante `/free`, sin item_id) es:
+ *   { coverage: { all_country: { list_cost, currency_id, billable_weight,
+ *       discount: { rate, type, promoted_amount } }, ... } }
+ * `coverage.all_country.list_cost` es el costo real de Mercado Envios
+ * (validado: para la silla de ruedas de prueba dio $33.570, muy cerca de
+ * la estimacion manual del usuario de $32.000 para "grande"). El objeto
+ * `discount` describe un descuento obligatorio que ve el comprador -- no
+ * cambia el costo real que paga/absorbe el vendedor, por eso se ignora. Se
+ * dejan los candidatos viejos (`options[].cost`, etc, de la variante CON
+ * item_id) por si en algun caso raro la respuesta viene en ese otro
+ * formato. */
 function extraerCostoEnvio(data: any): number | null {
   const opcion = Array.isArray(data?.options) ? data.options[0] : Array.isArray(data) ? data[0] : data;
+  const coverageCosts = data?.coverage ? Object.values(data.coverage).map((c: any) => c?.list_cost) : [];
   const candidatos = [
+    data?.coverage?.all_country?.list_cost,
+    ...coverageCosts,
     opcion?.list_cost,
     opcion?.cost,
     opcion?.base_cost,
     data?.shipping_fee,
     data?.list_cost,
     data?.cost,
-    // Candidatos del endpoint viejo (listing_prices), se dejan por si acaso.
+    // Candidatos de endpoints viejos (listing_prices / variante con item_id), se dejan por si acaso.
     data?.sale_fee_details?.fixed_fee,
   ];
   for (const c of candidatos) {
