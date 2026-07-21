@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { estimarArancel, estimarIva, estimarCbm, CalcAiError } from "@/lib/calcAi";
+import { tamanoEnvioPorCbm } from "@/lib/importCalc";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -129,10 +130,13 @@ export async function POST(req: Request) {
   }
 
   if (cbmR.status === "fulfilled") {
+    // Tamaño de envío auto-calculado por CBM (21/07/2026, pedido explicito
+    // del usuario) -- ver lib/importCalc.ts, tamanoEnvioPorCbm().
+    const tamanoEnvio = cbmR.value.m3 != null ? tamanoEnvioPorCbm(cbmR.value.m3) : "mediano";
     await query(
       `update calc_product_types set cbm_m3=$1, cbm_confianza=$2, cbm_razonamiento=$3,
-         cbm_status='found', cbm_fetched_at=now(), updated_at=now() where id=$4`,
-      [cbmR.value.m3, cbmR.value.confianza, cbmR.value.razonamiento, id]
+         cbm_status='found', cbm_fetched_at=now(), tamano_envio=$4, updated_at=now() where id=$5`,
+      [cbmR.value.m3, cbmR.value.confianza, cbmR.value.razonamiento, tamanoEnvio, id]
     );
   } else {
     const msg = cbmR.reason instanceof CalcAiError ? cbmR.reason.message : String(cbmR.reason);
