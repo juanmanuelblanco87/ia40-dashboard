@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { calcularImportacion, type CalcSupuestos, type CalcProducto, type TamanoEnvio } from "@/lib/importCalc";
+import { calcularImportacion, tamanoEnvioPorCbm, type CalcSupuestos, type CalcProducto, type TamanoEnvio } from "@/lib/importCalc";
 import { estimarArancel, estimarIva, estimarCbm, estimarPvpMercado, estimarPesoKg, CalcAiError } from "@/lib/calcAi";
 import { predecirCategoriaMeli, consultarCostosMeli } from "@/lib/meliApi";
 
@@ -27,6 +27,7 @@ function supuestosToCalc(row: any): CalcSupuestos {
     fleteLocalUsd: Number(row.flete_local_usd),
     manipuleoUsd: Number(row.manipuleo_usd),
     capacidadCbmContenedor: Number(row.capacidad_cbm_contenedor),
+    capacidad20ftM3: Number(row.capacidad_20ft_m3),
     envioChicoArs: Number(row.envio_chico_ars),
     envioMedianoArs: Number(row.envio_mediano_ars),
     envioGrandeArs: Number(row.envio_grande_ars),
@@ -133,12 +134,14 @@ export async function POST(req: Request) {
   if (producto.cbm_m3 == null) {
     try {
       const r = await estimarCbm(producto.nombre);
+      const tamanoEnvioAuto = r.m3 != null ? tamanoEnvioPorCbm(r.m3) : null;
       await query(
         `update calc_product_types set cbm_m3=$1, cbm_confianza=$2, cbm_razonamiento=$3,
-           cbm_status='found', cbm_fetched_at=now(), updated_at=now() where id=$4`,
-        [r.m3, r.confianza, r.razonamiento, productTypeId]
+           cbm_status='found', cbm_fetched_at=now(), tamano_envio=coalesce($4, tamano_envio), updated_at=now() where id=$5`,
+        [r.m3, r.confianza, r.razonamiento, tamanoEnvioAuto, productTypeId]
       );
       producto.cbm_m3 = r.m3;
+      if (tamanoEnvioAuto) producto.tamano_envio = tamanoEnvioAuto;
     } catch (err: any) {
       const msg = err instanceof CalcAiError ? err.message : String(err?.message ?? err);
       return NextResponse.json({ error: `No se pudo estimar el CBM: ${msg}` }, { status: 200 });
@@ -151,6 +154,17 @@ export async function POST(req: Request) {
   if (pvpArsManual != null && pvpArsManual > 0) {
     pvpMeliArsConIva = pvpArsManual;
     pvpFuente = "manual";
+    // Pedido explicito del usuario (21/07/2026): "una vez que se complete
+    // abajo el PVP MeLi entonces actualiza el PVP Mercado arriba" -- el PVP
+    // manual pasa a ser el nuevo PVP cacheado del tipo de producto (antes
+    // era solo un valor puntual para ESE calculo, sin tocar el catalogo).
+    await query(
+      `update calc_product_types set pvp_ars_estimado=$1, pvp_confianza='alta',
+         pvp_razonamiento='Cargado a mano por el usuario en Calcular.', pvp_status='found',
+         pvp_fetched_at=now(), updated_at=now() where id=$2`,
+      [pvpArsManual, productTypeId]
+    );
+    producto.pvp_ars_estimado = pvpArsManual;
   } else if (producto.pvp_ars_estimado != null) {
     pvpMeliArsConIva = producto.pvp_ars_estimado;
     pvpFuente = "cache";
