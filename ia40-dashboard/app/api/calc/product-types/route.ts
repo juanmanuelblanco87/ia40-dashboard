@@ -40,6 +40,8 @@ function toNumbers(row: any): ProductTypeRow {
     iva_pct: row.iva_pct != null ? Number(row.iva_pct) : null,
     trader_pct: Number(row.trader_pct ?? 0),
     tamano_envio: row.tamano_envio === "chico" || row.tamano_envio === "grande" ? row.tamano_envio : "mediano",
+    peso_kg: row.peso_kg != null ? Number(row.peso_kg) : null,
+    envio_meli_api_ars: row.envio_meli_api_ars != null ? Number(row.envio_meli_api_ars) : null,
     cbm_m3: row.cbm_m3 != null ? Number(row.cbm_m3) : null,
     pvp_ars_estimado: row.pvp_ars_estimado != null ? Number(row.pvp_ars_estimado) : null,
   };
