@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { estimarArancel, estimarIva, estimarCbm, estimarPvpMercado, estimarPesoKg, CalcAiError } from "@/lib/calcAi";
+import { tamanoEnvioPorCbm } from "@/lib/importCalc";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -63,10 +64,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       );
     } else if (field === "cbm") {
       const r = await estimarCbm(producto.nombre);
+      // Tamaño de envío auto-calculado por CBM (21/07/2026, pedido
+      // explicito del usuario) -- ver lib/importCalc.ts, tamanoEnvioPorCbm().
+      const tamanoEnvio = r.m3 != null ? tamanoEnvioPorCbm(r.m3) : null;
       await query(
         `update calc_product_types set cbm_m3=$1, cbm_confianza=$2, cbm_razonamiento=$3,
-           cbm_status='found', cbm_fetched_at=now(), updated_at=now() where id=$4`,
-        [r.m3, r.confianza, r.razonamiento, id]
+           cbm_status='found', cbm_fetched_at=now(), tamano_envio=coalesce($4, tamano_envio), updated_at=now() where id=$5`,
+        [r.m3, r.confianza, r.razonamiento, tamanoEnvio, id]
       );
     } else if (field === "pvp") {
       const r = await estimarPvpMercado(producto.nombre);
