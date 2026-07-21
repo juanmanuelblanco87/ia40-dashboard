@@ -192,6 +192,11 @@ create table if not exists calc_supuestos (
   iibb_pct numeric not null default 0.045,
   pads_pct numeric not null default 0.01,
   tasa_estadistica_pct numeric not null default 0.03,
+  -- Tope real en USD de la Tasa de Estadistica de Aduana (21/07/2026,
+  -- pedido explicito del usuario: "Aplica el tope"): sin este tope el
+  -- calculo la aplicaba como % puro sobre el CIF sin limite, lo cual no
+  -- refleja la normativa real (tiene un techo en USD).
+  tasa_estadistica_tope_usd numeric not null default 180,
   ley_25413_pct numeric not null default 0.01,
   seguro_usd_unidad numeric not null default 1.00,
   -- Costo de envio de Mercado Envios (20/07/2026, pedido explicito del
@@ -223,6 +228,11 @@ create table if not exists calc_supuestos (
   flete_local_usd numeric not null default 380,
   manipuleo_usd numeric not null default 250,
   capacidad_cbm_contenedor numeric not null default 64.6,
+  -- Capacidad util de un contenedor 20FT en m3, usada solo para mostrar
+  -- "Unidades por contenedor: 40HC / 20FT" en pantalla (21/07/2026, pedido
+  -- explicito del usuario) -- capacidad_cbm_contenedor de arriba sigue
+  -- siendo la referencia para el 40HC.
+  capacidad_20ft_m3 numeric not null default 28,
   -- Costo de envio de Mercado Envios (ARS con IVA) segun el tamaño del
   -- producto -- pedido explicito del usuario (20/07/2026): "productos
   -- chicos (8000 ar$) productos medianos 12000 productos grandes (silla
@@ -230,6 +240,10 @@ create table if not exists calc_supuestos (
   envio_chico_ars numeric not null default 8000,
   envio_mediano_ars numeric not null default 12000,
   envio_grande_ars numeric not null default 32000,
+  -- Fecha (segun el BCRA) de la ultima vez que se actualizo el tipo de
+  -- cambio via /api/calc/supuestos/refresh-tipo-cambio (21/07/2026) -- null
+  -- si nunca se uso ese boton (el tipo de cambio se sigue editando a mano).
+  tipo_cambio_fuente_fecha text,
   updated_at timestamptz not null default now(),
   check (id = 1)
 );
@@ -328,3 +342,37 @@ create table if not exists meli_oauth (
   check (id = 1)
 );
 insert into meli_oauth (id) values (1) on conflict (id) do nothing;
+
+-- Repositorio de escenarios guardados del Calculador de Importacion
+-- (21/07/2026, pedido explicito del usuario: "Hay que dejar un repositorio
+-- para guardar la simulacion de escenarios ya creados y que guarde todas
+-- las variables estaticas (dolar a ese momento, cbm, pvp etc.) y antes de
+-- guardarlo preguntar usuario para luego poder filtrar por usuario"). Cada
+-- fila es una FOTO completa de un calculo puntual (supuestos + producto +
+-- resultado, tal cual estaban en pantalla al momento de guardar) -- no una
+-- referencia viva: si despues cambia el tipo de cambio o el CBM del
+-- producto, los escenarios viejos no se ven afectados. Las columnas
+-- sueltas son solo para poder filtrar/listar rapido sin tener que parsear
+-- el JSON; el detalle completo vive en las 3 columnas jsonb.
+create table if not exists calc_scenarios (
+  id serial primary key,
+  usuario text not null,
+  product_type_id int references calc_product_types(id) on delete set null,
+  nombre_producto text not null,
+  fob_usd numeric not null,
+  pvp_meli_ars_con_iva numeric,
+  pvp_fuente text, -- 'manual' | 'cache' | 'ia'
+  tipo_cambio_ars numeric,
+  arancel_pct numeric,
+  iva_pct numeric,
+  cbm_m3 numeric,
+  tamano_envio text,
+  envio_fuente text, -- 'api' | 'tabla_fija'
+  margen_meli_pct numeric,
+  margen_distribucion_pct numeric,
+  supuestos_json jsonb not null,
+  product_type_json jsonb not null,
+  resultado_json jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists calc_scenarios_usuario_idx on calc_scenarios (usuario);
