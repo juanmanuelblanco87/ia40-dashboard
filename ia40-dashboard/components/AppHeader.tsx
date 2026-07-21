@@ -71,6 +71,15 @@ export default function AppHeader({ title, actions }: { title: string; actions?:
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
           <DolarBcra />
           {actions}
+          <button
+            className="app-header-nav-btn"
+            onClick={() => {
+              fetch("/api/logout", { method: "POST" }).finally(() => (window.location.href = "/login"));
+            }}
+            title="Cerrar sesión"
+          >
+            Salir
+          </button>
         </div>
       </div>
     </header>
