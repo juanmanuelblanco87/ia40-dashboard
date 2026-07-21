@@ -176,13 +176,15 @@ export async function POST(req: Request) {
     }
   }
 
-  // Costo de envio real via API publica de Mercado Libre (20/07/2026,
-  // pedido explicito del usuario: "como hacemos para que le pegue
-  // realmente a la api?"). Mejor esfuerzo: si cualquier paso falla (no
-  // hay categoria, no hay peso, la API no responde, etc.) se cae de vuelta
-  // a la tabla fija de tamano_envio -- el calculo NUNCA se rompe por esto.
-  // Ver lib/meliApi.ts para el detalle y la limitacion conocida (no se
-  // pudo probar la llamada en vivo esta sesion).
+  // Costo de envio real via API de Mercado Libre (20/07/2026, pedido
+  // explicito del usuario: "como hacemos para que le pegue realmente a la
+  // api?"), usando /users/$USER_ID/shipping_options/free (21/07/2026 --
+  // el endpoint que realmente calcula el envio, ver historial completo en
+  // lib/meliApi.ts). Mejor esfuerzo: si cualquier paso falla (no hay peso,
+  // no hay CBM, la API no responde, etc.) se cae de vuelta a la tabla fija
+  // de tamano_envio -- el calculo NUNCA se rompe por esto. La categoria de
+  // MELI ya no hace falta para el envio, se sigue prediciendo solo para
+  // mostrarla en el catalogo.
   let envioArsConIvaApi: number | null = null;
   let envioFuente: "api" | "tabla_fija" = "tabla_fija";
   try {
@@ -209,8 +211,8 @@ export async function POST(req: Request) {
         pesoKg = p.kg;
       }
     }
-    if (categoryId && pesoKg != null) {
-      const r = await consultarCostosMeli({ price: pvpMeliArsConIva, categoryId, billableWeightKg: pesoKg });
+    if (pesoKg != null && producto.cbm_m3 != null) {
+      const r = await consultarCostosMeli({ price: pvpMeliArsConIva, cbmM3: producto.cbm_m3, billableWeightKg: pesoKg });
       if (r.envioArs != null) {
         envioArsConIvaApi = r.envioArs;
         envioFuente = "api";
