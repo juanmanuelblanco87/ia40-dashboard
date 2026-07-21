@@ -1,27 +1,48 @@
 /**
- * Integracion con la API PUBLICA de Mercado Libre para estimar el costo
- * real de vender + enviar un producto (20/07/2026) -- pedido explicito del
+ * Integracion con la API de Mercado Libre para estimar el costo real de
+ * vender + enviar un producto (20/07/2026) -- pedido explicito del
  * usuario: "como hacemos para que le pegue realmente a la api?" (en vez de
  * la tabla fija editable de calc_supuestos).
  *
- * Dos llamadas encadenadas, ambas publicas y SIN autenticacion:
+ * HISTORIAL DE ESTE ARCHIVO (importante para no repetir el mismo error):
+ *   1) Primer intento: `sites/MLA/listing_prices` con `logistic_type=
+ *      fulfillment` -- devolvia 403 sin autenticacion (confirmado en
+ *      produccion 20/07/2026). Se armo el flujo OAuth completo para
+ *      autenticar como la cuenta real de Cobus/Icom Salud.
+ *   2) Con OAuth andando, `listing_prices` respondio 200 pero SIN 403 --
+ *      confirmado en produccion 21/07/2026 que este endpoint solo describe
+ *      la COMISION por vender (sale_fee_amount/percentage_fee), no el
+ *      costo de envio -- `fixed_fee` daba 0, no es el dato que buscamos
+ *      (la doc oficial "Costos por vender" lo confirma: es 100% sobre
+ *      fees de venta, no de envio).
+ *   3) Se encontro el endpoint correcto en la doc oficial ("Calculate
+ *      shipping costs & handling time" / "costos-de-envios"): el mismo que
+ *      usa el simulador web (mercadolibre.com.ar/simulador-de-costos) es
+ *      `GET /users/$USER_ID/shipping_options/free`, que acepta
+ *      price+dimensiones+logistic_type (sin necesitar un item publicado) y
+ *      devuelve el costo real de Mercado Envios. Es lo que usa esta
+ *      version del archivo.
+ *
+ * Dos llamadas encadenadas, la primera publica y sin auth, la segunda con
+ * OAuth de la cuenta real de Cobus:
  *   1. domain_discovery/search: predice la categoria de MELI a partir del
- *      nombre del producto (mismo predictor que usa MELI al publicar).
- *   2. listing_prices: dado precio + categoria + tipo de logistica/
- *      publicacion + peso facturable, devuelve la comision y el costo de
- *      envio real.
+ *      nombre del producto (solo para mostrarla en el catalogo, ya no hace
+ *      falta para calcular el envio).
+ *   2. users/$USER_ID/shipping_options/free: dado precio + dimensiones
+ *      (LxWxH + peso) + tipo de logistica/publicacion, devuelve el costo
+ *      real de Mercado Envios.
  *
  * Configuracion fija de Cobus confirmada con el usuario (20/07/2026):
  *   - Mercado Envios Full  -> logistic_type = "fulfillment"
  *   - Publicacion Clasica  -> listing_type_id = "gold_special"
  *
- * IMPORTANTE -- limitacion conocida y CONFIRMADA en produccion (20/07/2026):
- * `listing_prices` con `logistic_type=fulfillment` devuelve 403 sin
- * autenticacion -- el costo de Mercado Envios Full depende del contrato de
- * fulfillment de la cuenta real de Cobus, no es un dato publico generico
- * (a diferencia de `domain_discovery`, que si funciona sin auth). Por eso
- * este archivo tambien maneja el flujo OAuth de la cuenta de Mercado Libre
- * de Cobus (ver tabla `meli_oauth` + endpoints `app/api/calc/meli-oauth/*`):
+ * No tenemos el largo/ancho/alto real de cada producto (el catalogo solo
+ * guarda CBM en m3 y peso en kg) -- se aproxima con un cubo equivalente al
+ * CBM para poder mandar el parametro `dimensions` obligatorio. Es una
+ * aproximacion, no el dato exacto de la caja real.
+ *
+ * OAuth de la cuenta de Mercado Libre de Cobus (ver tabla `meli_oauth` +
+ * endpoints `app/api/calc/meli-oauth/*`):
  *   - `getAccessToken()` devuelve un access_token valido, refrescandolo
  *     automaticamente si esta vencido. Tira `MeliAuthError` si todavia no
  *     se autorizo la cuenta (el caller debe caer a la tabla fija en ese
@@ -33,9 +54,10 @@
  * Todo este modulo devuelve `null`/error en vez de tirar excepcion en
  * `consultarCostosMeli` -- el caller (app/api/calc/run/route.ts) SIEMPRE
  * tiene que poder caer de vuelta a la tabla fija de tamano_envio si esto no
- * funciona. Se guarda el JSON crudo de la respuesta (recortado) en
- * calc_product_types.envio_meli_api_razonamiento para poder auditar/ajustar
- * `extraerCostoEnvio()` si las claves no coinciden con la respuesta real.
+ * funciona. Se guarda el JSON crudo de la respuesta (recortado, con el
+ * largo total real antepuesto) en calc_product_types.envio_meli_api_razonamiento
+ * para poder auditar/ajustar `extraerCostoEnvio()` si las claves no
+ * coinciden con la respuesta real.
  */
 
 import { query } from "@/lib/db";
@@ -187,26 +209,27 @@ export async function predecirCategoriaMeli(nombreProducto: string): Promise<Cat
 }
 
 /** Busca de forma tolerante un costo de envio dentro de la respuesta de
- * listing_prices. Confirmado en produccion (21/07/2026, primera respuesta
- * real obtenida con OAuth) que este endpoint NO devuelve un nodo
- * "shipping" separado -- la doc oficial de MELI ("Costos por vender") solo
- * documenta esta forma de respuesta:
- *   { listing_fee_amount, listing_fee_details: {fixed_fee, gross_amount},
- *     sale_fee_amount, sale_fee_details: {financing_add_on_fee, fixed_fee,
- *     gross_amount, meli_percentage_fee, percentage_fee}, ... }
- * y la doc aclara explicitamente que "fixed_fee" varia segun logistic_type
- * + shipping_modes + billable_weight (por eso son obligatorios) -- es la
- * pieza mas probable para representar el costo de envio dentro de esta
- * llamada. Se dejan los candidatos viejos por si alguna categoria/config
- * distinta si devuelve un nodo shipping. */
+ * `/users/$USER_ID/shipping_options/free`. La doc oficial ("Calculate
+ * shipping costs & handling time") documenta la forma de respuesta del
+ * endpoint hermano `/items/$ITEM_ID/shipping_options` como
+ * `{ options: [ { cost, list_cost, ... } ] }` -- `options[0].cost` es el
+ * costo final (puede ser 0 si el comprador tiene envio gratis, que es el
+ * caso normal en Full) y `list_cost` es el costo de publicacion real sin
+ * aplicar ningun descuento/gratuidad -- por eso list_cost es el candidato
+ * mas representativo del costo real de Mercado Envios. Se dejan varios
+ * candidatos porque no se pudo confirmar en vivo la forma exacta de la
+ * variante `/free` (sin item_id) esta sesion. */
 function extraerCostoEnvio(data: any): number | null {
+  const opcion = Array.isArray(data?.options) ? data.options[0] : Array.isArray(data) ? data[0] : data;
   const candidatos = [
+    opcion?.list_cost,
+    opcion?.cost,
+    opcion?.base_cost,
+    data?.shipping_fee,
+    data?.list_cost,
+    data?.cost,
+    // Candidatos del endpoint viejo (listing_prices), se dejan por si acaso.
     data?.sale_fee_details?.fixed_fee,
-    data?.shipping?.list_cost,
-    data?.shipping?.cost,
-    data?.shipping?.user_cost,
-    data?.shipping_options?.[0]?.list_cost,
-    data?.shipping_options?.[0]?.cost,
   ];
   for (const c of candidatos) {
     if (typeof c === "number" && Number.isFinite(c) && c > 0) return c;
@@ -214,59 +237,91 @@ function extraerCostoEnvio(data: any): number | null {
   return null;
 }
 
-function extraerComision(data: any): number | null {
-  const v = data?.sale_fee_amount;
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
+/** Devuelve el ML user id (numerico) de la cuenta autenticada -- requerido
+ * para armar la URL de `/users/$USER_ID/shipping_options/free`. */
+async function obtenerUserId(accessToken: string): Promise<string> {
+  const resp = await fetch("https://api.mercadolibre.com/users/me", {
+    headers: { authorization: `Bearer ${accessToken}` },
+    signal: conTimeout(15_000),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`No se pudo obtener el usuario de Mercado Libre (${resp.status}): ${text.slice(0, 300)}`);
+  }
+  const data = JSON.parse(text);
+  if (!data?.id) throw new Error("La respuesta de /users/me no trajo un id de usuario.");
+  return String(data.id);
 }
 
 /**
- * Consulta el costo real de vender+enviar un producto en Mercado Libre
- * Argentina via `listing_prices`, con la configuracion fija de Cobus
- * (Full + Clasica). Requiere un access_token de la cuenta real de Cobus
- * (ver getAccessToken() -- `logistic_type=fulfillment` devuelve 403 sin
- * autenticacion, confirmado en produccion 20/07/2026). Nunca tira
+ * Consulta el costo real de envio de un producto en Mercado Libre
+ * Argentina via `/users/$USER_ID/shipping_options/free` (el mismo motor
+ * que usa https://www.mercadolibre.com.ar/simulador-de-costos), con la
+ * configuracion fija de Cobus (Full + Clasica). Requiere un access_token
+ * de la cuenta real de Cobus/Icom Salud (ver getAccessToken()). Nunca tira
  * excepcion: en caso de error devuelve `envioArs: null` + `error` para que
  * el caller pueda caer de vuelta a la tabla fija de calc_supuestos.
+ *
+ * No tenemos el largo/ancho/alto real del producto -- se aproxima con un
+ * cubo equivalente al CBM (m3) estimado por IA para armar el parametro
+ * `dimensions` (obligatorio en este endpoint junto con item_price).
  */
 export async function consultarCostosMeli(params: {
   price: number;
-  categoryId: string;
+  cbmM3: number;
   billableWeightKg: number;
 }): Promise<CostosMeliResult> {
-  const { price, categoryId, billableWeightKg } = params;
+  const { price, cbmM3, billableWeightKg } = params;
   try {
     const accessToken = await getAccessToken();
+    const sellerId = await obtenerUserId(accessToken);
+
+    const ladoCm = Math.max(1, Math.round(Math.cbrt(cbmM3 * 1_000_000)));
+    const pesoG = Math.max(1, Math.round(billableWeightKg * 1000));
+    const dimensions = `${ladoCm}x${ladoCm}x${ladoCm},${pesoG}`;
+
     const url =
-      `https://api.mercadolibre.com/sites/${ML_SITE}/listing_prices` +
-      `?price=${encodeURIComponent(price)}` +
-      `&category_id=${encodeURIComponent(categoryId)}` +
+      `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free` +
+      `?dimensions=${encodeURIComponent(dimensions)}` +
+      `&item_price=${encodeURIComponent(price)}` +
       `&listing_type_id=${LISTING_TYPE_ID}` +
+      `&mode=me2` +
+      `&condition=new` +
       `&logistic_type=${LOGISTIC_TYPE}` +
-      `&shipping_modes=me2` +
-      `&billable_weight=${encodeURIComponent(billableWeightKg)}`;
+      `&verbose=true`;
+
     const resp = await fetch(url, {
       headers: { authorization: `Bearer ${accessToken}` },
       signal: conTimeout(15_000),
     });
     const rawTexto = await resp.text();
     if (!resp.ok) {
-      return { envioArs: null, comisionArs: null, rawTexto: rawTexto.slice(0, 1800), error: `API ML respondio ${resp.status}` };
+      return {
+        envioArs: null,
+        comisionArs: null,
+        rawTexto: `[dimensions=${dimensions}] ${rawTexto.slice(0, 1800)}`,
+        error: `API ML respondio ${resp.status}`,
+      };
     }
     let data: any;
     try {
       data = JSON.parse(rawTexto);
     } catch {
-      return { envioArs: null, comisionArs: null, rawTexto: rawTexto.slice(0, 1800), error: "Respuesta de API ML no es JSON valido" };
+      return {
+        envioArs: null,
+        comisionArs: null,
+        rawTexto: `[dimensions=${dimensions}] ${rawTexto.slice(0, 1800)}`,
+        error: "Respuesta de API ML no es JSON valido",
+      };
     }
-    const row = Array.isArray(data) ? data[0] : data;
-    const rowJson = JSON.stringify(row);
+    const dataJson = JSON.stringify(data);
     return {
-      envioArs: extraerCostoEnvio(row),
-      comisionArs: extraerComision(row),
-      // Se antepone el largo REAL del JSON completo (antes de recortar) --
-      // asi podemos confirmar si el recorte es lo que tapa el dato, o si la
-      // respuesta de MELI genuinamente es mas corta de lo esperado.
-      rawTexto: `[largo total ${rowJson.length} caracteres] ${rowJson.slice(0, 3000)}`,
+      envioArs: extraerCostoEnvio(data),
+      comisionArs: null,
+      // Se antepone dimensions + el largo REAL del JSON completo (antes de
+      // recortar) -- asi podemos auditar que se mando y confirmar si el
+      // recorte tapa el dato o si la respuesta genuinamente no lo trae.
+      rawTexto: `[dimensions=${dimensions}] [largo total ${dataJson.length} caracteres] ${dataJson.slice(0, 3000)}`,
     };
   } catch (err: any) {
     return { envioArs: null, comisionArs: null, rawTexto: "", error: String(err?.message ?? err) };
