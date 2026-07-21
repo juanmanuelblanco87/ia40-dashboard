@@ -15,25 +15,37 @@
  *   - Mercado Envios Full  -> logistic_type = "fulfillment"
  *   - Publicacion Clasica  -> listing_type_id = "gold_special"
  *
- * IMPORTANTE -- limitacion conocida: no se pudo probar ninguna llamada en
- * vivo esta sesion (las herramientas de red del entorno de desarrollo
- * fallaron en cada intento, con y sin parametros, incluso contra APIs
- * ajenas a MELI). El parseo de la respuesta de listing_prices es
- * defensivo (prueba varias claves candidatas conocidas de la
- * documentacion publica de MELI) pero NO esta confirmado contra una
- * respuesta real. Por eso:
- *   - Todo este modulo devuelve `null`/error en vez de tirar excepcion --
- *     el caller (app/api/calc/run/route.ts) SIEMPRE tiene que poder caer
- *     de vuelta a la tabla fija de tamano_envio si esto no funciona.
- *   - Se guarda el JSON crudo de la respuesta (recortado) en
- *     calc_product_types.envio_meli_api_razonamiento para poder revisar a
- *     mano la primera vez que se use en produccion y ajustar
- *     `extraerCostoEnvio()` si las claves no coinciden.
+ * IMPORTANTE -- limitacion conocida y CONFIRMADA en produccion (20/07/2026):
+ * `listing_prices` con `logistic_type=fulfillment` devuelve 403 sin
+ * autenticacion -- el costo de Mercado Envios Full depende del contrato de
+ * fulfillment de la cuenta real de Cobus, no es un dato publico generico
+ * (a diferencia de `domain_discovery`, que si funciona sin auth). Por eso
+ * este archivo tambien maneja el flujo OAuth de la cuenta de Mercado Libre
+ * de Cobus (ver tabla `meli_oauth` + endpoints `app/api/calc/meli-oauth/*`):
+ *   - `getAccessToken()` devuelve un access_token valido, refrescandolo
+ *     automaticamente si esta vencido. Tira `MeliAuthError` si todavia no
+ *     se autorizo la cuenta (el caller debe caer a la tabla fija en ese
+ *     caso, igual que con cualquier otro error de esta integracion).
+ *   - Requiere las variables de entorno MELI_CLIENT_ID y
+ *     MELI_CLIENT_SECRET (de la app creada en developers.mercadolibre.com.ar
+ *     con la cuenta real de Cobus).
+ *
+ * Todo este modulo devuelve `null`/error en vez de tirar excepcion en
+ * `consultarCostosMeli` -- el caller (app/api/calc/run/route.ts) SIEMPRE
+ * tiene que poder caer de vuelta a la tabla fija de tamano_envio si esto no
+ * funciona. Se guarda el JSON crudo de la respuesta (recortado) en
+ * calc_product_types.envio_meli_api_razonamiento para poder auditar/ajustar
+ * `extraerCostoEnvio()` si las claves no coinciden con la respuesta real.
  */
+
+import { query } from "@/lib/db";
 
 const ML_SITE = "MLA";
 const LOGISTIC_TYPE = "fulfillment"; // Mercado Envios Full
 const LISTING_TYPE_ID = "gold_special"; // Publicacion Clasica
+const OAUTH_TOKEN_URL = "https://api.mercadolibre.com/oauth/token";
+
+export class MeliAuthError extends Error {}
 
 export interface CategoriaMeli {
   categoryId: string | null;
@@ -56,6 +68,103 @@ function conTimeout(ms: number): AbortSignal {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), ms);
   return controller.signal;
+}
+
+/**
+ * Guarda access_token + refresh_token + expiracion en la tabla meli_oauth
+ * (fila unica). ML rota el refresh_token en cada uso -- SIEMPRE hay que
+ * guardar el nuevo, el viejo deja de servir.
+ */
+async function guardarTokens(tokens: { access_token: string; refresh_token: string; expires_in: number }) {
+  const expiresAt = new Date(Date.now() + tokens.expires_in * 1000 - 60_000); // 1 min de margen
+  await query(
+    `insert into meli_oauth (id, access_token, refresh_token, expires_at, updated_at)
+       values (1, $1, $2, $3, now())
+     on conflict (id) do update set
+       access_token=$1, refresh_token=$2, expires_at=$3, updated_at=now()`,
+    [tokens.access_token, tokens.refresh_token, expiresAt.toISOString()]
+  );
+}
+
+/**
+ * Intercambia el `code` de la autorizacion OAuth por access_token +
+ * refresh_token, y los guarda. Se usa desde
+ * app/api/calc/meli-oauth/callback/route.ts (paso unico, manual, la
+ * primera vez que se conecta la cuenta).
+ */
+export async function intercambiarCodigoOAuth(code: string, redirectUri: string): Promise<void> {
+  const clientId = process.env.MELI_CLIENT_ID;
+  const clientSecret = process.env.MELI_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new MeliAuthError("Faltan MELI_CLIENT_ID / MELI_CLIENT_SECRET en las variables de entorno de Vercel.");
+  }
+  const resp = await fetch(OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    }),
+    signal: conTimeout(15_000),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new MeliAuthError(`Mercado Libre rechazo el intercambio de codigo (${resp.status}): ${text.slice(0, 300)}`);
+  }
+  const data = JSON.parse(text);
+  await guardarTokens({ access_token: data.access_token, refresh_token: data.refresh_token, expires_in: data.expires_in });
+}
+
+/** Refresca el access_token usando el refresh_token guardado. */
+async function refrescarAccessToken(refreshToken: string): Promise<string> {
+  const clientId = process.env.MELI_CLIENT_ID;
+  const clientSecret = process.env.MELI_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new MeliAuthError("Faltan MELI_CLIENT_ID / MELI_CLIENT_SECRET en las variables de entorno de Vercel.");
+  }
+  const resp = await fetch(OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+    }),
+    signal: conTimeout(15_000),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new MeliAuthError(`No se pudo refrescar el token de Mercado Libre (${resp.status}): ${text.slice(0, 300)}`);
+  }
+  const data = JSON.parse(text);
+  await guardarTokens({ access_token: data.access_token, refresh_token: data.refresh_token, expires_in: data.expires_in });
+  return data.access_token;
+}
+
+/**
+ * Devuelve un access_token valido para llamar a la API en nombre de la
+ * cuenta de Mercado Libre de Cobus, refrescandolo si esta vencido (o a
+ * punto de vencer). Tira MeliAuthError si todavia no se conecto ninguna
+ * cuenta (el caller debe caer a la tabla fija en ese caso, ver
+ * app/api/calc/run/route.ts).
+ */
+export async function getAccessToken(): Promise<string> {
+  const rows = await query<any>(`select * from meli_oauth where id=1`);
+  const row = rows[0];
+  if (!row?.refresh_token) {
+    throw new MeliAuthError(
+      "Todavia no se conecto ninguna cuenta de Mercado Libre. Entra a /api/calc/meli-oauth/authorize para autorizarla."
+    );
+  }
+  const expiresAt = row.expires_at ? new Date(row.expires_at).getTime() : 0;
+  if (row.access_token && expiresAt > Date.now()) {
+    return row.access_token;
+  }
+  return refrescarAccessToken(row.refresh_token);
 }
 
 /** Predice la categoria de Mercado Libre a partir del nombre del producto. */
@@ -102,10 +211,12 @@ function extraerComision(data: any): number | null {
 
 /**
  * Consulta el costo real de vender+enviar un producto en Mercado Libre
- * Argentina via la API publica `listing_prices`, con la configuracion fija
- * de Cobus (Full + Clasica). Nunca tira excepcion: en caso de error
- * devuelve `envioArs: null` + `error` para que el caller pueda caer de
- * vuelta a la tabla fija de calc_supuestos.
+ * Argentina via `listing_prices`, con la configuracion fija de Cobus
+ * (Full + Clasica). Requiere un access_token de la cuenta real de Cobus
+ * (ver getAccessToken() -- `logistic_type=fulfillment` devuelve 403 sin
+ * autenticacion, confirmado en produccion 20/07/2026). Nunca tira
+ * excepcion: en caso de error devuelve `envioArs: null` + `error` para que
+ * el caller pueda caer de vuelta a la tabla fija de calc_supuestos.
  */
 export async function consultarCostosMeli(params: {
   price: number;
@@ -114,6 +225,7 @@ export async function consultarCostosMeli(params: {
 }): Promise<CostosMeliResult> {
   const { price, categoryId, billableWeightKg } = params;
   try {
+    const accessToken = await getAccessToken();
     const url =
       `https://api.mercadolibre.com/sites/${ML_SITE}/listing_prices` +
       `?price=${encodeURIComponent(price)}` +
@@ -122,7 +234,10 @@ export async function consultarCostosMeli(params: {
       `&logistic_type=${LOGISTIC_TYPE}` +
       `&shipping_modes=me2` +
       `&billable_weight=${encodeURIComponent(billableWeightKg)}`;
-    const resp = await fetch(url, { signal: conTimeout(15_000) });
+    const resp = await fetch(url, {
+      headers: { authorization: `Bearer ${accessToken}` },
+      signal: conTimeout(15_000),
+    });
     const rawTexto = await resp.text();
     if (!resp.ok) {
       return { envioArs: null, comisionArs: null, rawTexto: rawTexto.slice(0, 500), error: `API ML respondio ${resp.status}` };
