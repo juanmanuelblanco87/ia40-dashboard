@@ -37,6 +37,11 @@ export interface CbmEstimado {
   confianza: Confianza;
   razonamiento: string;
 }
+export interface PesoEstimado {
+  kg: number | null;
+  confianza: Confianza;
+  razonamiento: string;
+}
 export interface FleteEstimado {
   usd: number | null;
   confianza: Confianza;
@@ -233,6 +238,30 @@ Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes
   const { parsed } = parseNumeroConFallback(text, "cbm_m3");
   const m3 = typeof parsed.cbm_m3 === "number" && Number.isFinite(parsed.cbm_m3) && parsed.cbm_m3 > 0 ? parsed.cbm_m3 : null;
   return { m3, confianza: parseConfianza(parsed.confianza), razonamiento: String(parsed.razonamiento ?? "") };
+}
+
+/**
+ * Estima el peso facturable (kg) de UNA unidad del producto en su
+ * embalaje de exportacion -- lo usa la API de Mercado Libre
+ * (`billable_weight`, ver lib/meliApi.ts) para calcular el costo real de
+ * Mercado Envios (20/07/2026, pedido explicito del usuario). Es el mayor
+ * entre el peso real y el peso volumetrico segun la formula de MELI.
+ */
+export async function estimarPesoKg(nombreProducto: string): Promise<PesoEstimado> {
+  const prompt = `Sos un especialista en logistica de comercio exterior y envios domesticos en Argentina.
+
+¿Cuál es el peso facturable aproximado (en kg) para UN unidad del siguiente producto, ya embalado para su envío final al comprador dentro de Argentina (no el embalaje de exportación en contenedor, sino la caja individual de venta)?
+- Producto: ${nombreProducto}
+
+El "peso facturable" que usa Mercado Envíos es el MAYOR entre el peso real de la caja y el peso volumétrico (largo x ancho x alto en cm, dividido por un factor volumétrico típico de 5000 o 6000 según el transportista). Buscá fichas técnicas o listings de productos similares para estimar el peso real y las dimensiones de la caja, calculá el peso volumétrico, y devolvé el mayor de los dos.
+
+Respondé SOLO con un JSON valido, sin backticks, sin markdown y sin texto antes o despues, con este formato exacto:
+{"peso_kg": number (peso facturable en kg, ej 4.5), "confianza": "alta"|"media"|"baja", "razonamiento": "explicacion breve en 1-2 oraciones: peso real y volumetrico estimados, y cual de los dos uso"}`;
+
+  const text = await callOpenAI(prompt);
+  const { parsed } = parseNumeroConFallback(text, "peso_kg");
+  const kg = typeof parsed.peso_kg === "number" && Number.isFinite(parsed.peso_kg) && parsed.peso_kg > 0 ? parsed.peso_kg : null;
+  return { kg, confianza: parseConfianza(parsed.confianza), razonamiento: String(parsed.razonamiento ?? "") };
 }
 
 /**
