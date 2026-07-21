@@ -27,6 +27,7 @@ function toNumbers(row: any) {
     fleteLocalUsd: Number(row.flete_local_usd),
     manipuleoUsd: Number(row.manipuleo_usd),
     capacidadCbmContenedor: Number(row.capacidad_cbm_contenedor),
+    capacidad20ftM3: Number(row.capacidad_20ft_m3),
     // Costo de envio de Mercado Envios por tamaño (20/07/2026, ver
     // docs/PROYECTO.md): solo aplica si el PVP supera umbralBajoValorArs.
     envioChicoArs: Number(row.envio_chico_ars),
@@ -77,6 +78,7 @@ export async function PATCH(req: Request) {
        flete_maritimo_usd=$12, forwarder_usd=$13, despachante_usd=$14, thc_usd=$15,
        flete_local_usd=$16, manipuleo_usd=$17, capacidad_cbm_contenedor=$18,
        envio_chico_ars=$19, envio_mediano_ars=$20, envio_grande_ars=$21,
+       capacidad_20ft_m3=$22,
        updated_at=now()
      where id=1`,
     [
@@ -101,6 +103,7 @@ export async function PATCH(req: Request) {
       Number(next.envioChicoArs),
       Number(next.envioMedianoArs),
       Number(next.envioGrandeArs),
+      Number(next.capacidad20ftM3),
     ]
   );
 
