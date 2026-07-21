@@ -1121,6 +1121,60 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
     Variables): `AUTH_USERS` (ej. `{"icom":"2026"}`) y
     `AUTH_SESSION_TOKEN` (cualquier string largo al azar).
 
+## 10.6 Mejoras del Calculador: tamaño por CBM, unidades por contenedor, PVP persistente y repositorio de escenarios (21/07/2026)
+
+Cuatro pedidos explícitos del usuario en la misma tanda, todos sobre
+`app/calculo-importacion/page.tsx` y el motor de cálculo:
+
+- **Tamaño de envío automático según CBM** (`lib/importCalc.ts`,
+  `tamanoEnvioPorCbm()`): reemplaza la elección manual de tamaño (chico /
+  mediano / grande) por una regla fija sobre el CBM del producto —
+  `< 0,05 m³ = chico`, `0,05–0,12 m³ = mediano`, `> 0,12 m³ = grande`. Se
+  aplica automáticamente cada vez que se estima o recalcula el CBM por IA
+  (alta de producto, botón 🔄 CBM, y el "safety net" dentro de
+  `/api/calc/run` cuando todavía no hay CBM cacheado). El campo sigue
+  siendo editable a mano en "Editar" por si el usuario quiere forzar otro
+  tamaño para un caso puntual.
+
+- **Unidades por contenedor (40HC y 20FT)**: nuevo supuesto
+  `capacidad20ftM3` (además del ya existente `capacidadCbmContenedor`, que
+  representa el 40HC) — editable en Supuestos generales. La página
+  calcula `Math.floor(capacidad / cbmProducto)` para cada tipo de
+  contenedor y lo muestra en una barra informativa junto al resto de datos
+  del producto ("Unidades por contenedor: 40HC: X un · 20FT: Y un"). Es
+  puramente un cálculo de UI, no se guarda en la base por producto.
+
+- **PVP manual persiste como PVP cacheado**: antes, cargar un PVP a mano
+  en "Calcular" era un valor de un solo uso (no tocaba
+  `calc_product_types.pvp_ars_estimado`). Pedido explícito del usuario:
+  si carga el PVP MeLi a mano, eso debe actualizar el PVP de mercado
+  cacheado (mostrado arriba, en la ficha del producto) — si no carga nada,
+  se sigue usando el cacheado existente o, si no hay ninguno, se estima
+  por IA como antes. `app/api/calc/run/route.ts` ahora hace un `update
+  calc_product_types set pvp_ars_estimado=...` cuando `pvpArsManual` viene
+  en el body.
+
+- **Repositorio de escenarios guardados**: botón "💾 Guardar escenario" en
+  el panel de resultados — al tocarlo pide (con un `prompt()`) quién
+  guarda el escenario, y manda una foto completa del cálculo (supuestos +
+  producto + resultado, tal cual están en pantalla en ese momento) a
+  `POST /api/calc/scenarios`. Nueva tabla `calc_scenarios` (ver
+  `sql/schema.sql`): cada fila es una foto fija, no una referencia — si
+  después cambia el tipo de cambio o el CBM del producto, los escenarios
+  viejos guardados no se ven afectados (es el punto: poder comparar qué
+  hubiera dado el cálculo en cada momento). Nuevo panel "Historial de
+  escenarios" debajo de los resultados, con un filtro por usuario
+  (`GET /api/calc/scenarios?usuario=X`) y botón de borrado por fila
+  (`DELETE /api/calc/scenarios/:id`). El campo "usuario" acá es solo una
+  etiqueta de texto libre para filtrar — no tiene relación con las
+  credenciales compartidas del Portal de acceso (sección 10.5).
+
+- **Migración SQL pendiente** (correr en Neon antes de usar estas 4
+  mejoras en producción): ver `sql/migration_20260721_escenarios.sql`
+  (agrega `capacidad_20ft_m3`, `tasa_estadistica_tope_usd` y
+  `tipo_cambio_fuente_fecha` a `calc_supuestos` si todavía no estaban, y
+  crea la tabla `calc_scenarios`).
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -1156,6 +1210,8 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
 | `/api/bcra/tipo-cambio` | GET | Dólar oficial mayorista del BCRA para mostrar en el header (informativo, ver sección 10.5). |
 | `/api/login` | POST | `{usuario, contrasena}` — valida contra `AUTH_USERS` y guarda la cookie de sesión (ver sección 10.5, Portal de acceso). |
 | `/api/logout` | POST | Borra la cookie de sesión. |
+| `/api/calc/scenarios` | GET/POST | Lista escenarios guardados, con filtro opcional `?usuario=` (GET) / guarda una foto completa de un cálculo ya corrido (POST, ver sección 10.6). |
+| `/api/calc/scenarios/:id` | DELETE | Borra un escenario guardado puntual. |
 
 ## 12. Variables de entorno
 
