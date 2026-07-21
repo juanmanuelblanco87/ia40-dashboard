@@ -894,7 +894,9 @@ export default function CalculoImportacionPage() {
               <strong>API Mercado Libre (envío):</strong> estado = {selected.envio_meli_api_status}
               {selected.envio_meli_api_ars != null && ` — último costo encontrado: $${fmtNumber(selected.envio_meli_api_ars)}`}
               {selected.envio_meli_api_razonamiento && (
-                <div style={{ marginTop: 4, wordBreak: "break-all" }}>{selected.envio_meli_api_razonamiento.slice(0, 300)}</div>
+                // 1500 (antes 300) -- con 300 se cortaba justo antes del campo
+                // sale_fee_details.fixed_fee, que es lo que necesitamos ver.
+                <div style={{ marginTop: 4, wordBreak: "break-all" }}>{selected.envio_meli_api_razonamiento.slice(0, 1500)}</div>
               )}
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
