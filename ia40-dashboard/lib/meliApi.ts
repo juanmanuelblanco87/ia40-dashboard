@@ -187,11 +187,21 @@ export async function predecirCategoriaMeli(nombreProducto: string): Promise<Cat
 }
 
 /** Busca de forma tolerante un costo de envio dentro de la respuesta de
- * listing_prices -- se prueban varias rutas candidatas conocidas de la
- * documentacion publica de MELI, porque no se pudo confirmar la forma
- * exacta del JSON en vivo esta sesion. */
+ * listing_prices. Confirmado en produccion (21/07/2026, primera respuesta
+ * real obtenida con OAuth) que este endpoint NO devuelve un nodo
+ * "shipping" separado -- la doc oficial de MELI ("Costos por vender") solo
+ * documenta esta forma de respuesta:
+ *   { listing_fee_amount, listing_fee_details: {fixed_fee, gross_amount},
+ *     sale_fee_amount, sale_fee_details: {financing_add_on_fee, fixed_fee,
+ *     gross_amount, meli_percentage_fee, percentage_fee}, ... }
+ * y la doc aclara explicitamente que "fixed_fee" varia segun logistic_type
+ * + shipping_modes + billable_weight (por eso son obligatorios) -- es la
+ * pieza mas probable para representar el costo de envio dentro de esta
+ * llamada. Se dejan los candidatos viejos por si alguna categoria/config
+ * distinta si devuelve un nodo shipping. */
 function extraerCostoEnvio(data: any): number | null {
   const candidatos = [
+    data?.sale_fee_details?.fixed_fee,
     data?.shipping?.list_cost,
     data?.shipping?.cost,
     data?.shipping?.user_cost,
@@ -240,19 +250,21 @@ export async function consultarCostosMeli(params: {
     });
     const rawTexto = await resp.text();
     if (!resp.ok) {
-      return { envioArs: null, comisionArs: null, rawTexto: rawTexto.slice(0, 500), error: `API ML respondio ${resp.status}` };
+      return { envioArs: null, comisionArs: null, rawTexto: rawTexto.slice(0, 1800), error: `API ML respondio ${resp.status}` };
     }
     let data: any;
     try {
       data = JSON.parse(rawTexto);
     } catch {
-      return { envioArs: null, comisionArs: null, rawTexto: rawTexto.slice(0, 500), error: "Respuesta de API ML no es JSON valido" };
+      return { envioArs: null, comisionArs: null, rawTexto: rawTexto.slice(0, 1800), error: "Respuesta de API ML no es JSON valido" };
     }
     const row = Array.isArray(data) ? data[0] : data;
     return {
       envioArs: extraerCostoEnvio(row),
       comisionArs: extraerComision(row),
-      rawTexto: JSON.stringify(row).slice(0, 500),
+      // 1800 chars (antes 500) -- el campo que buscamos (sale_fee_details.fixed_fee)
+      // quedaba fuera del recorte anterior, tapando el diagnostico.
+      rawTexto: JSON.stringify(row).slice(0, 1800),
     };
   } catch (err: any) {
     return { envioArs: null, comisionArs: null, rawTexto: "", error: String(err?.message ?? err) };
