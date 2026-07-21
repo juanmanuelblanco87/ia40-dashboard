@@ -76,14 +76,18 @@ export interface CalcProducto {
    * que el costo real de MeLi se define por una tabla de tamaño, no por un
    * monto libre por producto. */
   tamanoEnvio: TamanoEnvio;
-  /** Costo de envio (ARS con IVA) obtenido en vivo de la API publica de
-   * Mercado Libre (ver lib/meliApi.ts, 20/07/2026) para ESTE calculo
-   * puntual. Si viene definido, reemplaza a la tabla fija por tamaño
-   * (envioChicoArs/envioMedianoArs/envioGrandeArs) -- pero el Fee de bajo
-   * valor sigue aplicando igual si el PVP no llega al umbral, sin importar
-   * este valor. undefined/null = usar la tabla fija (comportamiento
+  /** Costo de envio obtenido en vivo de la API de Mercado Libre
+   * (`/users/$USER_ID/shipping_options/free`, ver lib/meliApi.ts) para
+   * ESTE calculo puntual -- a diferencia de la tabla fija editable
+   * (envioChicoArs/envioMedianoArs/envioGrandeArs, que se carga CON IVA),
+   * este valor viene SIN IVA (confirmado por el usuario 21/07/2026: el
+   * costo que factura MeLi por Mercado Envios se factura neto, con el IVA
+   * discriminado aparte -- por eso NO hay que volver a sacarle el IVA acá).
+   * Si viene definido, reemplaza a la tabla fija por tamaño -- pero el Fee
+   * de bajo valor sigue aplicando igual si el PVP no llega al umbral, sin
+   * importar este valor. undefined/null = usar la tabla fija (comportamiento
    * anterior, sirve de respaldo si la API no responde). */
-  envioArsConIvaApi?: number | null;
+  envioArsNetoApi?: number | null;
 }
 
 export interface CalcInput {
@@ -186,19 +190,27 @@ export function calcularImportacion(input: CalcInput): CalcResult {
   // (chico/mediano/grande). Nunca es realmente "gratis" para el vendedor.
   const envioPorTamanoAplica = pvpMeliArsConIva >= supuestos.umbralBajoValorArs;
   // Prioridad: API de Mercado Libre (si se pudo consultar para este
-  // calculo) > tabla fija por tamaño (respaldo). Ver CalcProducto.envioArsConIvaApi.
-  const envioPorTamanoArsConIva =
-    producto.envioArsConIvaApi != null
-      ? producto.envioArsConIvaApi
-      : producto.tamanoEnvio === "chico"
-      ? supuestos.envioChicoArs
-      : producto.tamanoEnvio === "grande"
-      ? supuestos.envioGrandeArs
-      : supuestos.envioMedianoArs;
+  // calculo) > tabla fija por tamaño (respaldo). Ver CalcProducto.envioArsNetoApi.
+  // OJO: la API ya devuelve el costo SIN IVA, la tabla fija se carga CON
+  // IVA -- por eso cada una sigue un camino distinto para llegar al neto
+  // (21/07/2026, corregido tras confirmar con el usuario que dividir el
+  // valor de la API por (1+IVA) de nuevo lo estaba subestimando).
+  let envioNetoMeliArs = 0;
+  if (envioPorTamanoAplica) {
+    if (producto.envioArsNetoApi != null) {
+      envioNetoMeliArs = producto.envioArsNetoApi;
+    } else {
+      const envioTablaArsConIva =
+        producto.tamanoEnvio === "chico"
+          ? supuestos.envioChicoArs
+          : producto.tamanoEnvio === "grande"
+          ? supuestos.envioGrandeArs
+          : supuestos.envioMedianoArs;
+      envioNetoMeliArs = envioTablaArsConIva / (1 + producto.ivaPct);
+    }
+  }
   const pvpMeliNeto = pvpMeliArsConIva / (1 + producto.ivaPct);
   const comisionMlArs = pvpMeliNeto * supuestos.comisionMlPct;
-  const envioConIvaMeli = envioPorTamanoAplica ? envioPorTamanoArsConIva : 0;
-  const envioNetoMeliArs = envioConIvaMeli / (1 + producto.ivaPct);
   const iibbMeliArs = pvpMeliNeto * supuestos.iibbPct;
   // PADS se calcula sobre el PVP CON IVA (no sobre el neto) -- verificado
   // contra la planilla.
