@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { calcularImportacion, type CalcSupuestos, type CalcProducto, type TamanoEnvio } from "@/lib/importCalc";
-import { estimarArancel, estimarIva, estimarCbm, estimarPvpMercado, CalcAiError } from "@/lib/calcAi";
+import { estimarArancel, estimarIva, estimarCbm, estimarPvpMercado, estimarPesoKg, CalcAiError } from "@/lib/calcAi";
+import { predecirCategoriaMeli, consultarCostosMeli } from "@/lib/meliApi";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -44,6 +45,8 @@ function productoRowToNumbers(row: any) {
     tamano_envio: esTamanoEnvioValido(row.tamano_envio) ? row.tamano_envio : "mediano",
     cbm_m3: row.cbm_m3 != null ? Number(row.cbm_m3) : null,
     pvp_ars_estimado: row.pvp_ars_estimado != null ? Number(row.pvp_ars_estimado) : null,
+    peso_kg: row.peso_kg != null ? Number(row.peso_kg) : null,
+    envio_meli_api_ars: row.envio_meli_api_ars != null ? Number(row.envio_meli_api_ars) : null,
   };
 }
 
@@ -173,12 +176,68 @@ export async function POST(req: Request) {
     }
   }
 
+  // Costo de envio real via API publica de Mercado Libre (20/07/2026,
+  // pedido explicito del usuario: "como hacemos para que le pegue
+  // realmente a la api?"). Mejor esfuerzo: si cualquier paso falla (no
+  // hay categoria, no hay peso, la API no responde, etc.) se cae de vuelta
+  // a la tabla fija de tamano_envio -- el calculo NUNCA se rompe por esto.
+  // Ver lib/meliApi.ts para el detalle y la limitacion conocida (no se
+  // pudo probar la llamada en vivo esta sesion).
+  let envioArsConIvaApi: number | null = null;
+  let envioFuente: "api" | "tabla_fija" = "tabla_fija";
+  try {
+    let categoryId: string | null = producto.ml_category_id ?? null;
+    if (!categoryId) {
+      const cat = await predecirCategoriaMeli(producto.nombre);
+      categoryId = cat.categoryId;
+      if (categoryId) {
+        await query(
+          `update calc_product_types set ml_category_id=$1, ml_category_nombre=$2, updated_at=now() where id=$3`,
+          [categoryId, cat.categoryNombre, productTypeId]
+        );
+      }
+    }
+    let pesoKg: number | null = producto.peso_kg ?? null;
+    if (pesoKg == null) {
+      const p = await estimarPesoKg(producto.nombre);
+      if (p.kg != null) {
+        await query(
+          `update calc_product_types set peso_kg=$1, peso_confianza=$2, peso_razonamiento=$3,
+             peso_status='found', peso_fetched_at=now(), updated_at=now() where id=$4`,
+          [p.kg, p.confianza, p.razonamiento, productTypeId]
+        );
+        pesoKg = p.kg;
+      }
+    }
+    if (categoryId && pesoKg != null) {
+      const r = await consultarCostosMeli({ price: pvpMeliArsConIva, categoryId, billableWeightKg: pesoKg });
+      if (r.envioArs != null) {
+        envioArsConIvaApi = r.envioArs;
+        envioFuente = "api";
+        await query(
+          `update calc_product_types set envio_meli_api_ars=$1, envio_meli_api_status='found',
+             envio_meli_api_razonamiento=$2, envio_meli_api_fetched_at=now(), updated_at=now() where id=$3`,
+          [r.envioArs, r.rawTexto, productTypeId]
+        );
+      } else {
+        await query(
+          `update calc_product_types set envio_meli_api_status='error', envio_meli_api_razonamiento=$1,
+             envio_meli_api_fetched_at=now(), updated_at=now() where id=$2`,
+          [r.error ?? r.rawTexto ?? "sin datos", productTypeId]
+        );
+      }
+    }
+  } catch {
+    // best-effort: nunca bloquear el calculo por esto, se cae a la tabla fija.
+  }
+
   const calcProducto: CalcProducto = {
     arancelPct: producto.arancel_pct ?? 0,
     ivaPct: producto.iva_pct ?? 0.21,
     traderPct: producto.trader_pct,
     cbmM3: producto.cbm_m3 ?? 0,
     tamanoEnvio: producto.tamano_envio,
+    envioArsConIvaApi,
   };
 
   const resultado = calcularImportacion({
@@ -192,6 +251,7 @@ export async function POST(req: Request) {
     productType: producto,
     supuestos,
     pvpFuente,
+    envioFuente,
     resultado,
   });
 }
