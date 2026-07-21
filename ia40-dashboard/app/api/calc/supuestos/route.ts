@@ -10,6 +10,7 @@ function toNumbers(row: any) {
     iibbPct: Number(row.iibb_pct),
     padsPct: Number(row.pads_pct),
     tasaEstadisticaPct: Number(row.tasa_estadistica_pct),
+    tasaEstadisticaTopeUsd: Number(row.tasa_estadistica_tope_usd),
     ley25413Pct: Number(row.ley_25413_pct),
     seguroUsdUnidad: Number(row.seguro_usd_unidad),
     feeBajoTicketArs: Number(row.fee_bajo_ticket_ars),
@@ -31,6 +32,11 @@ function toNumbers(row: any) {
     envioChicoArs: Number(row.envio_chico_ars),
     envioMedianoArs: Number(row.envio_mediano_ars),
     envioGrandeArs: Number(row.envio_grande_ars),
+    // Fecha (segun el BCRA) de la ultima vez que se actualizo el tipo de
+    // cambio via /api/calc/supuestos/refresh-tipo-cambio (21/07/2026) --
+    // null si todavia nunca se uso ese boton (el tipo de cambio se sigue
+    // pudiendo editar a mano en cualquier momento).
+    tipoCambioFuenteFecha: (row.tipo_cambio_fuente_fecha as string | null) ?? null,
   };
 }
 
@@ -66,11 +72,11 @@ export async function PATCH(req: Request) {
   await query(
     `update calc_supuestos set
        tipo_cambio_ars=$1, comision_ml_pct=$2, iibb_pct=$3, pads_pct=$4,
-       tasa_estadistica_pct=$5, ley_25413_pct=$6, seguro_usd_unidad=$7,
-       fee_bajo_ticket_ars=$8, umbral_bajo_valor_ars=$9, descuento_distribucion_pct=$10,
-       flete_maritimo_usd=$11, forwarder_usd=$12, despachante_usd=$13, thc_usd=$14,
-       flete_local_usd=$15, manipuleo_usd=$16, capacidad_cbm_contenedor=$17,
-       envio_chico_ars=$18, envio_mediano_ars=$19, envio_grande_ars=$20,
+       tasa_estadistica_pct=$5, tasa_estadistica_tope_usd=$6, ley_25413_pct=$7, seguro_usd_unidad=$8,
+       fee_bajo_ticket_ars=$9, umbral_bajo_valor_ars=$10, descuento_distribucion_pct=$11,
+       flete_maritimo_usd=$12, forwarder_usd=$13, despachante_usd=$14, thc_usd=$15,
+       flete_local_usd=$16, manipuleo_usd=$17, capacidad_cbm_contenedor=$18,
+       envio_chico_ars=$19, envio_mediano_ars=$20, envio_grande_ars=$21,
        updated_at=now()
      where id=1`,
     [
@@ -79,6 +85,7 @@ export async function PATCH(req: Request) {
       Number(next.iibbPct),
       Number(next.padsPct),
       Number(next.tasaEstadisticaPct),
+      Number(next.tasaEstadisticaTopeUsd),
       Number(next.ley25413Pct),
       Number(next.seguroUsdUnidad),
       Number(next.feeBajoTicketArs),
