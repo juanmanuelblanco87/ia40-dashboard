@@ -10,6 +10,8 @@ function toNumbers(row: any) {
     iva_pct: row.iva_pct != null ? Number(row.iva_pct) : null,
     trader_pct: Number(row.trader_pct ?? 0),
     tamano_envio: row.tamano_envio === "chico" || row.tamano_envio === "grande" ? row.tamano_envio : "mediano",
+    peso_kg: row.peso_kg != null ? Number(row.peso_kg) : null,
+    envio_meli_api_ars: row.envio_meli_api_ars != null ? Number(row.envio_meli_api_ars) : null,
     cbm_m3: row.cbm_m3 != null ? Number(row.cbm_m3) : null,
     pvp_ars_estimado: row.pvp_ars_estimado != null ? Number(row.pvp_ars_estimado) : null,
   };
@@ -68,6 +70,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const pvpStatus = body.pvpArsEstimado !== undefined ? "found" : cur.pvp_status;
   const pvpRazonamiento = body.pvpArsEstimado !== undefined ? "(editado a mano)" : cur.pvp_razonamiento;
 
+  // Peso facturable (kg) -- usado por la integracion con la API de
+  // Mercado Libre (ver lib/meliApi.ts, 20/07/2026). Editable a mano igual
+  // que arancel/IVA/CBM.
+  const pesoKg = body.pesoKg !== undefined ? Number(body.pesoKg) : cur.peso_kg;
+  const pesoStatus = body.pesoKg !== undefined ? "found" : cur.peso_status;
+  const pesoRazonamiento = body.pesoKg !== undefined ? "(editado a mano)" : cur.peso_razonamiento;
+
   const updated = await query<any>(
     `update calc_product_types set
        nombre=$1, ncm_code=$2, trader_pct=$3, tamano_envio=$4,
@@ -75,8 +84,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
        iva_pct=$8, iva_status=$9, iva_razonamiento=$10,
        cbm_m3=$11, cbm_status=$12, cbm_razonamiento=$13,
        pvp_ars_estimado=$14, pvp_status=$15, pvp_razonamiento=$16,
+       peso_kg=$17, peso_status=$18, peso_razonamiento=$19,
        updated_at=now()
-     where id=$17
+     where id=$20
      returning *`,
     [
       nombre,
@@ -95,6 +105,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       pvpArsEstimado,
       pvpStatus,
       pvpRazonamiento,
+      pesoKg,
+      pesoStatus,
+      pesoRazonamiento,
       id,
     ]
   );
