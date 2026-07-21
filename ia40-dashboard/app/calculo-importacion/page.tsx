@@ -89,6 +89,7 @@ interface Supuestos {
   fleteLocalUsd: number;
   manipuleoUsd: number;
   capacidadCbmContenedor: number;
+  capacidad20ftM3: number;
   envioChicoArs: number;
   envioMedianoArs: number;
   envioGrandeArs: number;
@@ -133,6 +134,28 @@ interface RunResult {
     distribucion: CalcCanal;
   };
   error?: string;
+}
+
+/** Repositorio de escenarios guardados (21/07/2026) -- ver app/api/calc/scenarios/route.ts */
+interface Escenario {
+  id: number;
+  usuario: string;
+  nombreProducto: string;
+  fobUsd: number;
+  pvpMeliArsConIva: number | null;
+  pvpFuente: string | null;
+  tipoCambioArs: number | null;
+  arancelPct: number | null;
+  ivaPct: number | null;
+  cbmM3: number | null;
+  tamanoEnvio: string | null;
+  envioFuente: string | null;
+  margenMeliPct: number | null;
+  margenDistribucionPct: number | null;
+  supuestos: any;
+  productType: any;
+  resultado: any;
+  createdAt: string;
 }
 
 const CONFIANZA_COLOR: Record<string, string> = {
@@ -205,6 +228,10 @@ export default function CalculoImportacionPage() {
 
   const [meliConectado, setMeliConectado] = useState<boolean | null>(null);
   const [meliOauthMsg, setMeliOauthMsg] = useState<string | null>(null);
+  const [escenarios, setEscenarios] = useState<Escenario[]>([]);
+  const [usuariosEscenarios, setUsuariosEscenarios] = useState<string[]>([]);
+  const [filtroUsuarioEscenarios, setFiltroUsuarioEscenarios] = useState("");
+  const [guardandoEscenario, setGuardandoEscenario] = useState(false);
 
   const selected = productTypes.find((p) => p.id === selectedId) ?? null;
 
@@ -240,6 +267,64 @@ export default function CalculoImportacionPage() {
   };
 
   useEffect(reloadMeliOauthStatus, []);
+
+  const reloadEscenarios = (usuario?: string) => {
+    const qs = usuario ? `?usuario=${encodeURIComponent(usuario)}` : "";
+    fetch(`/api/calc/scenarios${qs}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setEscenarios(d.escenarios ?? []);
+        setUsuariosEscenarios(d.usuarios ?? []);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => reloadEscenarios(), []);
+
+  const guardarEscenario = () => {
+    if (!resultado || guardandoEscenario) return;
+    const usuario = window.prompt("¿Quién guarda este escenario? (para poder filtrarlo después)");
+    if (!usuario || !usuario.trim()) return;
+    setGuardandoEscenario(true);
+    fetch("/api/calc/scenarios", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        usuario: usuario.trim(),
+        productTypeId: resultado.productType.id,
+        nombreProducto: resultado.productType.nombre,
+        fobUsd: Number(fobUsd),
+        pvpFuente: resultado.pvpFuente,
+        envioFuente: resultado.envioFuente,
+        supuestos: resultado.supuestos,
+        productType: resultado.productType,
+        resultado: resultado.resultado,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.error) {
+          alert(`No se pudo guardar el escenario: ${d.error}`);
+          return;
+        }
+        reloadEscenarios(filtroUsuarioEscenarios || undefined);
+      })
+      .catch(() => alert("No se pudo guardar el escenario. Proba de nuevo."))
+      .finally(() => setGuardandoEscenario(false));
+  };
+
+  const borrarEscenario = (id: number) => {
+    const ok = window.confirm("¿Borrar este escenario guardado? Esta acción no se puede deshacer.");
+    if (!ok) return;
+    fetch(`/api/calc/scenarios/${id}`, { method: "DELETE" })
+      .then(() => reloadEscenarios(filtroUsuarioEscenarios || undefined))
+      .catch(() => alert("No se pudo borrar. Proba de nuevo."));
+  };
+
+  const filtrarEscenariosPorUsuario = (usuario: string) => {
+    setFiltroUsuarioEscenarios(usuario);
+    reloadEscenarios(usuario || undefined);
+  };
 
   // Mensaje de resultado del flujo OAuth (20/07/2026): Mercado Libre vuelve
   // aca con ?meli_oauth=ok|error&msg=... despues de /api/calc/meli-oauth/callback.
@@ -416,6 +501,7 @@ export default function CalculoImportacionPage() {
       fleteLocalUsd: String(supuestos.fleteLocalUsd),
       manipuleoUsd: String(supuestos.manipuleoUsd),
       capacidadCbmContenedor: String(supuestos.capacidadCbmContenedor),
+      capacidad20ftM3: String(supuestos.capacidad20ftM3),
       envioChicoArs: String(supuestos.envioChicoArs),
       envioMedianoArs: String(supuestos.envioMedianoArs),
       envioGrandeArs: String(supuestos.envioGrandeArs),
@@ -448,6 +534,7 @@ export default function CalculoImportacionPage() {
         fleteLocalUsd: Number(supuestosForm.fleteLocalUsd),
         manipuleoUsd: Number(supuestosForm.manipuleoUsd),
         capacidadCbmContenedor: Number(supuestosForm.capacidadCbmContenedor),
+        capacidad20ftM3: Number(supuestosForm.capacidad20ftM3),
         envioChicoArs: Number(supuestosForm.envioChicoArs),
         envioMedianoArs: Number(supuestosForm.envioMedianoArs),
         envioGrandeArs: Number(supuestosForm.envioGrandeArs),
@@ -644,9 +731,21 @@ export default function CalculoImportacionPage() {
                 </strong>
                 {" "}
                 <span style={{ color: "var(--muted)", fontSize: 11.5 }}>
-                  (tabla fija{selected.envio_meli_api_status === "found" ? " — última consulta API: OK" : ""})
+                  (según CBM{selected.envio_meli_api_status === "found" ? " — última consulta API: OK" : ""})
                 </span>
               </div>
+              {selected.cbm_m3 != null && selected.cbm_m3 > 0 && supuestos && (
+                <div>
+                  <span style={{ color: "var(--muted)" }}>Unidades por contenedor: </span>
+                  <strong>
+                    40HC: {Math.floor(supuestos.capacidadCbmContenedor / selected.cbm_m3)} un
+                  </strong>
+                  {" · "}
+                  <strong>
+                    20FT: {Math.floor(supuestos.capacidad20ftM3 / selected.cbm_m3)} un
+                  </strong>
+                </div>
+              )}
               <div>
                 <span style={{ color: "var(--muted)" }}>Peso facturable: </span>
                 <strong>{selected.peso_kg != null ? `${selected.peso_kg} kg` : "—"}</strong>
@@ -701,7 +800,17 @@ export default function CalculoImportacionPage() {
         {resultado && !resultado.error && (
           <>
             <div className="panel">
-              <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 4 }}>Costo Nacionalizado</h1>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <h1 style={{ fontSize: 15, margin: 0 }}>Costo Nacionalizado</h1>
+                <button
+                  onClick={guardarEscenario}
+                  disabled={guardandoEscenario}
+                  style={{ fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }}
+                >
+                  {guardandoEscenario && <Spinner />}
+                  💾 Guardar escenario
+                </button>
+              </div>
               <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>
                 PVP de MeLi usado en este cálculo: ${fmtNumber(resultado.resultado.meli.pvpConIva)}{" "}
                 {resultado.pvpFuente === "manual" && "(cargado a mano)"}
@@ -781,6 +890,69 @@ export default function CalculoImportacionPage() {
             </div>
           </>
         )}
+
+        <div className="panel">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+            <h1 style={{ fontSize: 15, margin: 0 }}>Historial de escenarios</h1>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label style={{ fontSize: 12, color: "var(--muted)" }}>Usuario:</label>
+              <select
+                value={filtroUsuarioEscenarios}
+                onChange={(e) => filtrarEscenariosPorUsuario(e.target.value)}
+                style={{ fontSize: 12.5 }}
+              >
+                <option value="">Todos</option>
+                {usuariosEscenarios.map((u) => (
+                  <option key={u} value={u}>
+                    {u}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {escenarios.length === 0 ? (
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>Todavía no hay escenarios guardados.</div>
+          ) : (
+            <table className="admin-table" style={{ fontSize: 12.5 }}>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Usuario</th>
+                  <th>Producto</th>
+                  <th style={{ textAlign: "right" }}>FOB</th>
+                  <th style={{ textAlign: "right" }}>PVP MeLi</th>
+                  <th style={{ textAlign: "right" }}>T. cambio</th>
+                  <th style={{ textAlign: "right" }}>CBM</th>
+                  <th>Envío</th>
+                  <th style={{ textAlign: "right" }}>Margen MeLi</th>
+                  <th style={{ textAlign: "right" }}>Margen Distr.</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {escenarios.map((esc) => (
+                  <tr key={esc.id}>
+                    <td>{new Date(esc.createdAt).toLocaleDateString("es-AR")}</td>
+                    <td>{esc.usuario}</td>
+                    <td>{esc.nombreProducto}</td>
+                    <td style={{ textAlign: "right" }}>US$ {fmtUsd(esc.fobUsd)}</td>
+                    <td style={{ textAlign: "right" }}>{esc.pvpMeliArsConIva != null ? `$${fmtNumber(esc.pvpMeliArsConIva)}` : "—"}</td>
+                    <td style={{ textAlign: "right" }}>{esc.tipoCambioArs != null ? fmtNumber(esc.tipoCambioArs) : "—"}</td>
+                    <td style={{ textAlign: "right" }}>{esc.cbmM3 != null ? esc.cbmM3 : "—"}</td>
+                    <td>{esc.envioFuente === "api" ? "API" : "tabla fija"}</td>
+                    <td style={{ textAlign: "right" }}>{esc.margenMeliPct != null ? fmtPct(esc.margenMeliPct) : "—"}</td>
+                    <td style={{ textAlign: "right" }}>{esc.margenDistribucionPct != null ? fmtPct(esc.margenDistribucionPct) : "—"}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <button onClick={() => borrarEscenario(esc.id)} style={{ fontSize: 11.5 }}>
+                        Borrar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
 
       {showEditar && selected && editForm && (
@@ -1019,7 +1191,8 @@ export default function CalculoImportacionPage() {
                   <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{supuestos.fleteRazonamiento}</div>
                 )}
               </div>
-              <Campo label="Capacidad contenedor (CBM)" value={supuestosForm.capacidadCbmContenedor} onChange={(v) => setSupuestosForm({ ...supuestosForm, capacidadCbmContenedor: v })} />
+              <Campo label="Capacidad contenedor 40HC (CBM)" value={supuestosForm.capacidadCbmContenedor} onChange={(v) => setSupuestosForm({ ...supuestosForm, capacidadCbmContenedor: v })} />
+              <Campo label="Capacidad contenedor 20FT (CBM)" value={supuestosForm.capacidad20ftM3} onChange={(v) => setSupuestosForm({ ...supuestosForm, capacidad20ftM3: v })} />
             </div>
             <div className="row" style={{ marginTop: 10 }}>
               <Campo label="Forwarder (USD)" value={supuestosForm.forwarderUsd} onChange={(v) => setSupuestosForm({ ...supuestosForm, forwarderUsd: v })} />
