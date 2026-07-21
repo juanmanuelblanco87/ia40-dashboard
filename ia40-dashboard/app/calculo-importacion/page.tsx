@@ -200,6 +200,9 @@ export default function CalculoImportacionPage() {
   const [guardandoSupuestos, setGuardandoSupuestos] = useState(false);
   const [refrescandoFlete, setRefrescandoFlete] = useState(false);
 
+  const [meliConectado, setMeliConectado] = useState<boolean | null>(null);
+  const [meliOauthMsg, setMeliOauthMsg] = useState<string | null>(null);
+
   const selected = productTypes.find((p) => p.id === selectedId) ?? null;
 
   const reloadProductTypes = () => {
@@ -225,6 +228,30 @@ export default function CalculoImportacionPage() {
   };
 
   useEffect(reloadSupuestos, []);
+
+  const reloadMeliOauthStatus = () => {
+    fetch("/api/calc/meli-oauth/status")
+      .then((r) => r.json())
+      .then((d) => setMeliConectado(!!d.conectado))
+      .catch(() => setMeliConectado(false));
+  };
+
+  useEffect(reloadMeliOauthStatus, []);
+
+  // Mensaje de resultado del flujo OAuth (20/07/2026): Mercado Libre vuelve
+  // aca con ?meli_oauth=ok|error&msg=... despues de /api/calc/meli-oauth/callback.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const resultado = params.get("meli_oauth");
+    if (!resultado) return;
+    if (resultado === "ok") {
+      setMeliOauthMsg("✓ Cuenta de Mercado Libre conectada correctamente.");
+      reloadMeliOauthStatus();
+    } else {
+      setMeliOauthMsg(`No se pudo conectar la cuenta de Mercado Libre: ${params.get("msg") ?? "error desconocido"}`);
+    }
+    window.history.replaceState({}, "", "/calculo-importacion");
+  }, []);
 
   const crearTipoProducto = () => {
     const nombre = nuevoNombre.trim();
@@ -467,10 +494,25 @@ export default function CalculoImportacionPage() {
         <div className="panel">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
             <h1 style={{ fontSize: 15, margin: 0 }}>Tipo de producto</h1>
-            <button onClick={abrirSupuestos} disabled={!supuestos} style={{ fontSize: 12 }}>
-              ⚙️ Supuestos generales
-            </button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {meliConectado === false && (
+                <button onClick={() => (window.location.href = "/api/calc/meli-oauth/authorize")} style={{ fontSize: 12 }}>
+                  🔗 Conectar cuenta de Mercado Libre
+                </button>
+              )}
+              {meliConectado === true && (
+                <span style={{ fontSize: 11.5, color: "var(--muted)" }}>🟢 Mercado Libre conectado</span>
+              )}
+              <button onClick={abrirSupuestos} disabled={!supuestos} style={{ fontSize: 12 }}>
+                ⚙️ Supuestos generales
+              </button>
+            </div>
           </div>
+          {meliOauthMsg && (
+            <div style={{ fontSize: 12, color: meliOauthMsg.startsWith("✓") ? "#2fa84f" : "#d93a3a", marginBottom: 8 }}>
+              {meliOauthMsg}
+            </div>
+          )}
           <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 12 }}>
             Catálogo abierto: creá cualquier tipo de producto que necesites (no está atado a las categorías del
             dashboard). Arancel, IVA y CBM se estiman con IA la primera vez y quedan guardados.
