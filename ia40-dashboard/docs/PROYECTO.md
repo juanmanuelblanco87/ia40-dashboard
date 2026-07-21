@@ -959,6 +959,46 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
     queda como mejora futura si se quiere una integración real con esa
     API una vez se puedan probar las llamadas end-to-end.
 
+- **Integración (20/07/2026) — costo de envío real vía la API pública de
+  Mercado Libre:** el usuario pidió explícitamente "como hacemos para que
+  le pegue realmente a la api?" en vez de depender solo de la tabla fija
+  chico/mediano/grande. Config confirmada con el usuario: Mercado Envíos
+  **Full** (`logistic_type=fulfillment`) + Publicación **Clásica**
+  (`listing_type_id=gold_special`). Implementación (`lib/meliApi.ts`):
+  - `predecirCategoriaMeli(nombre)`: llama a
+    `GET /sites/MLA/domain_discovery/search?q=...` (pública, sin auth) para
+    predecir la categoría de MELI a partir del nombre del tipo de
+    producto, y la cachea en `calc_product_types.ml_category_id` /
+    `ml_category_nombre`.
+  - `consultarCostosMeli({price, categoryId, billableWeightKg})`: llama a
+    `GET /sites/MLA/listing_prices` con esos parámetros + `shipping_modes=me2`
+    y devuelve el costo de envío real. El peso facturable
+    (`calc_product_types.peso_kg`) se estima por IA igual que arancel/IVA/CBM
+    (`estimarPesoKg` en `lib/calcAi.ts`).
+  - `/api/calc/run` intenta esta consulta en cada cálculo (prediciendo
+    categoría/peso si faltan y cacheándolos); si CUALQUIER paso falla (no
+    hay categoría, no hay peso, la API no responde, JSON inesperado), cae
+    automáticamente a la tabla fija de `tamano_envio` -- el cálculo nunca
+    se rompe por esto. La respuesta de `/api/calc/run` incluye
+    `envioFuente: "api" | "tabla_fija"` y el frontend lo muestra
+    explícitamente ("Costo de envío usado: dato real de la API de Mercado
+    Libre ✓" o "tabla fija").
+  - **Limitación importante, léer antes de confiar en el resultado:**
+    no se pudo probar NINGUNA llamada en vivo a esta API durante la sesión
+    en que se escribió este código (las herramientas de red del entorno de
+    desarrollo devolvían respuestas vacías o timeout incluso contra APIs
+    ajenas a MELI, ver detalle en el historial de la conversación del
+    20/07/2026). El parseo de `listing_prices` en `extraerCostoEnvio()`
+    prueba varias claves candidatas (`shipping.list_cost`, `shipping.cost`,
+    etc.) basadas en la documentación pública, pero NO están confirmadas
+    contra una respuesta real. La primera vez que se use en producción,
+    revisar `calc_product_types.envio_meli_api_status` /
+    `envio_meli_api_razonamiento` (guarda el JSON crudo devuelto o el
+    error) para confirmar si encontró el campo correcto -- si
+    `envioFuente` sigue devolviendo `"tabla_fija"` siempre, lo más probable
+    es que `extraerCostoEnvio()` necesite ajustarse a la forma real del
+    JSON.
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -985,7 +1025,7 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
 | `/api/calc/product-types/:id/refresh` | POST | `?field=arancel\|iva\|cbm\|pvp` — fuerza una nueva consulta a la IA para un solo campo puntual de un tipo de producto. |
 | `/api/calc/supuestos` | GET/PATCH | Lee (y crea si no existe) / edita la fila única de Supuestos generales del Calculador de Importación. |
 | `/api/calc/supuestos/refresh-flete` | POST | Fuerza una nueva consulta a la IA para el costo de flete marítimo internacional (China → Buenos Aires, contenedor 40HQ). |
-| `/api/calc/run` | POST | `{productTypeId, fobUsd, pvpArsManual?}` — corre el cálculo completo (Costo Nacionalizado + margen MeLi/Distribución) para un tipo de producto y un FOB dados; ver sección 10.3 para la prioridad de resolución del PVP. |
+| `/api/calc/run` | POST | `{productTypeId, fobUsd, pvpArsManual?}` — corre el cálculo completo (Costo Nacionalizado + margen MeLi/Distribución) para un tipo de producto y un FOB dados; ver sección 10.3 para la prioridad de resolución del PVP y del costo de envío (API de MeLi vs tabla fija). |
 
 ## 12. Variables de entorno
 
