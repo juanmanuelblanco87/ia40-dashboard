@@ -30,6 +30,21 @@
 
 export type TamanoEnvio = "chico" | "mediano" | "grande";
 
+/**
+ * Deriva el tamaño de envío (Mercado Envíos) a partir del CBM del producto
+ * -- pedido explícito del usuario (21/07/2026): "si <0,05cbm = pequeño;
+ * entre 0,05 y 0,12 = mediano; >0,12 = grande". Se aplica automáticamente
+ * cada vez que el CBM se (re)estima por IA (ver app/api/calc/product-types
+ * y su endpoint /refresh?field=cbm) -- si el usuario edita el tamaño a
+ * mano en el modal de "Editar" después, esa elección manual se respeta
+ * (no se vuelve a pisar hasta la próxima vez que cambie el CBM).
+ */
+export function tamanoEnvioPorCbm(cbmM3: number): TamanoEnvio {
+  if (cbmM3 < 0.05) return "chico";
+  if (cbmM3 <= 0.12) return "mediano";
+  return "grande";
+}
+
 export interface CalcSupuestos {
   tipoCambioArs: number;
   comisionMlPct: number;
@@ -61,7 +76,14 @@ export interface CalcSupuestos {
   thcUsd: number;
   fleteLocalUsd: number;
   manipuleoUsd: number;
+  /** Capacidad util (m3) de un contenedor 40HC/40HQ -- usada para el costo
+   * fijo por CBM (ver mas abajo) y para "unidades por contenedor" en el
+   * frontend (21/07/2026, pedido explicito del usuario). */
   capacidadCbmContenedor: number;
+  /** Capacidad util (m3) de un contenedor 20FT -- solo se usa para mostrar
+   * "unidades por contenedor" en el frontend, no afecta el costo logistico
+   * (ese sigue calculado sobre el 40HC). */
+  capacidad20ftM3: number;
   /** Costo de envio de Mercado Envios (ARS, CON IVA) segun el tamaño del
    * producto, cuando el PVP con IVA es MAYOR O IGUAL a umbralBajoValorArs --
    * pedido explicito del usuario (20/07/2026): "productos chicos (8000 ar$)
