@@ -1034,6 +1034,54 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
     Variables); y clickear "🔗 Conectar cuenta de Mercado Libre" una vez en
     el Calculador para autorizar.
 
+- **Corrección (21/07/2026) — endpoint real del costo de envío:** con
+  OAuth funcionando, `listing_prices` respondió 200 pero se confirmó en
+  producción que ese endpoint sólo describe la COMISIÓN por vender
+  (`sale_fee_amount` / `sale_fee_details.fixed_fee` -- este último dio 0,
+  no es el costo de envío). El endpoint correcto (el mismo que usa
+  https://www.mercadolibre.com.ar/simulador-de-costos) es
+  `GET /users/$USER_ID/shipping_options/free`, confirmado en producción:
+  dado `item_price` + `dimensions` (aproximadas con un cubo equivalente al
+  CBM, ya que no se guardan L×A×H reales) + `logistic_type=fulfillment` +
+  `listing_type_id=gold_special`, devuelve
+  `coverage.all_country.list_cost` -- para la silla de ruedas de prueba dio
+  **$33.570**, muy cerca de la estimación manual del usuario ($32.000 para
+  "grande"). `lib/meliApi.ts` → `consultarCostosMeli()` y
+  `extraerCostoEnvio()` se reescribieron para usar este endpoint.
+  - **Fix de IVA (21/07/2026):** el costo que devuelve la API viene SIN
+    IVA (a diferencia de la tabla fija editable, que se carga CON IVA) --
+    el motor de cálculo dividía este valor por (1+IVA) igual que a la
+    tabla fija, subestimando el costo real. `CalcProducto.envioArsNetoApi`
+    (antes `envioArsConIvaApi`) ahora se usa directo como neto en
+    `lib/importCalc.ts`, sin la división extra.
+
+- **Tope de la Tasa de Estadística (21/07/2026):** comparado contra una
+  calculadora pública de costos de importación, se detectó que la Tasa de
+  Estadística de Aduana (3% sobre CIF) tiene un tope máximo en USD (la
+  calculadora pública usa USD 180) que el motor no aplicaba. Se agregó
+  `CalcSupuestos.tasaEstadisticaTopeUsd` (editable en "Supuestos
+  generales", default 180) y `lib/importCalc.ts` ahora calcula
+  `Math.min(cifUsd * tasaEstadisticaPct, tasaEstadisticaTopeUsd)`. No
+  se agregaron las demás percepciones que muestra esa calculadora pública
+  (IVA adicional 20%, Percepción Ganancias 6%, IIBB/SIRPEI 2.5%) -- pedido
+  explícito del usuario: son recuperables como crédito fiscal para
+  Responsable Inscripto, así que el calculador sigue mostrando el costo
+  NETO real (post-recuperación), no el desembolso bruto en el momento del
+  despacho.
+
+- **Tipo de cambio automático vía API del BCRA (21/07/2026):** pedido
+  explícito del usuario ("veamos de integrar a la api de BCRA para el
+  tipo de cambio parece super sencilla"). Nuevo archivo `lib/bcra.ts` →
+  `obtenerTipoCambioOficialBcra()`: llama a
+  `GET https://api.bcra.gob.ar/estadisticascambiarias/v1.0/Cotizaciones/USD`
+  (API de Estadísticas Cambiarias, sin autenticación, confirmada en vivo:
+  devuelve `results[].detalle[].tipoCotizacion`, ej. `1389.50` con fecha
+  `2026-05-21`). Nuevo endpoint `POST /api/calc/supuestos/refresh-tipo-cambio`
+  y botón 🔄 al lado del campo "Tipo de cambio" en Supuestos generales.
+  Solo corre cuando el usuario aprieta el botón -- el tipo de cambio sigue
+  siendo editable a mano en cualquier momento (pedido explícito: "es un
+  valor bastante oscilante").
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -1064,6 +1112,8 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
 | `/api/calc/meli-oauth/authorize` | GET | Redirige a la pantalla de login/autorización de Mercado Libre (paso 1 del OAuth). |
 | `/api/calc/meli-oauth/callback` | GET | Recibe el `code` de Mercado Libre, lo cambia por tokens y los guarda (paso 2 del OAuth). |
 | `/api/calc/meli-oauth/status` | GET | `{conectado, expiresAt, updatedAt}` — si hay una cuenta de Mercado Libre conectada. |
+| `/api/calc/meli-webhook` | GET/POST | Receptor de notificaciones (webhooks) de Mercado Libre — requerido por ML al tildar "Seleccionar Todo" en Tópicos al crear la app OAuth. Por ahora solo loguea y responde `{ok:true}`, no procesa nada. |
+| `/api/calc/supuestos/refresh-tipo-cambio` | POST | Trae el dólar oficial más reciente de la API del BCRA (Estadísticas Cambiarias) y actualiza el Tipo de cambio de Supuestos generales. |
 
 ## 12. Variables de entorno
 
