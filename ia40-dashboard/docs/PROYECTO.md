@@ -999,6 +999,41 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
     es que `extraerCostoEnvio()` necesite ajustarse a la forma real del
     JSON.
 
+- **Integración (20/07/2026) — OAuth de Mercado Libre, confirmado
+  necesario en producción:** al probar la integración de arriba contra
+  producción, `listing_prices` con `logistic_type=fulfillment` devolvió
+  **403** -- confirma que el costo de Mercado Envíos Full depende del
+  contrato real de fulfillment de la cuenta de Cobus, no es un dato
+  público genérico (a diferencia de `domain_discovery`, que sí funcionó
+  sin auth: predijo bien "Sillas de Ruedas" para el producto de prueba).
+  El usuario pidió avanzar con el registro OAuth completo. Implementado:
+  - Tabla `meli_oauth` (fila única, `sql/schema.sql`): guarda
+    `access_token` / `refresh_token` / `expires_at` de la cuenta real de
+    Mercado Libre de Cobus. Las credenciales de la app (`MELI_CLIENT_ID` /
+    `MELI_CLIENT_SECRET`) NO se guardan en la base, viven como variables de
+    entorno en Vercel.
+  - `GET /api/calc/meli-oauth/authorize`: redirige a la pantalla de login/
+    autorización de Mercado Libre.
+  - `GET /api/calc/meli-oauth/callback`: recibe el `code`, lo cambia por
+    tokens (`lib/meliApi.ts` → `intercambiarCodigoOAuth()`) y los guarda;
+    vuelve a `/calculo-importacion?meli_oauth=ok|error`.
+  - `GET /api/calc/meli-oauth/status`: si hay `refresh_token` guardado, se
+    considera "conectada" (usado por el botón "🔗 Conectar cuenta de
+    Mercado Libre" / indicador "🟢 Mercado Libre conectado" en el frontend).
+  - `getAccessToken()` en `lib/meliApi.ts`: devuelve el access_token
+    vigente, refrescándolo automáticamente (Mercado Libre ROTA el
+    refresh_token en cada uso -- siempre se guarda el nuevo). Si todavía no
+    se conectó ninguna cuenta, tira `MeliAuthError` y `consultarCostosMeli`
+    lo captura como cualquier otro error -- cae a la tabla fija, no rompe
+    el cálculo.
+  - **Setup pendiente del lado del usuario** (una sola vez): crear una app
+    en developers.mercadolibre.com.ar con la cuenta real de Mercado Libre
+    de Cobus, con Redirect URI EXACTO
+    `https://ia40-dashboard-hztm.vercel.app/api/calc/meli-oauth/callback`;
+    cargar `MELI_CLIENT_ID` y `MELI_CLIENT_SECRET` en Vercel (Environment
+    Variables); y clickear "🔗 Conectar cuenta de Mercado Libre" una vez en
+    el Calculador para autorizar.
+
 ## 11. Endpoints API
 
 | Endpoint | Método | Qué hace |
@@ -1026,6 +1061,9 @@ en el header compartido (`components/AppHeader.tsx`, extraído de
 | `/api/calc/supuestos` | GET/PATCH | Lee (y crea si no existe) / edita la fila única de Supuestos generales del Calculador de Importación. |
 | `/api/calc/supuestos/refresh-flete` | POST | Fuerza una nueva consulta a la IA para el costo de flete marítimo internacional (China → Buenos Aires, contenedor 40HQ). |
 | `/api/calc/run` | POST | `{productTypeId, fobUsd, pvpArsManual?}` — corre el cálculo completo (Costo Nacionalizado + margen MeLi/Distribución) para un tipo de producto y un FOB dados; ver sección 10.3 para la prioridad de resolución del PVP y del costo de envío (API de MeLi vs tabla fija). |
+| `/api/calc/meli-oauth/authorize` | GET | Redirige a la pantalla de login/autorización de Mercado Libre (paso 1 del OAuth). |
+| `/api/calc/meli-oauth/callback` | GET | Recibe el `code` de Mercado Libre, lo cambia por tokens y los guarda (paso 2 del OAuth). |
+| `/api/calc/meli-oauth/status` | GET | `{conectado, expiresAt, updatedAt}` — si hay una cuenta de Mercado Libre conectada. |
 
 ## 12. Variables de entorno
 
@@ -1046,6 +1084,8 @@ como único mecanismo de auth). Lista real de variables usadas en el código:
 | `SIEVE_BATCH_LIMIT` | `app/api/sieve/route.ts` | Cuántas combinaciones marca+modelo procesa el tamizador por click (default 100). |
 | `SIEVE_CONCURRENCY` | `app/api/sieve/route.ts` | Cuántas de esas combinaciones procesa en paralelo (default 10). |
 | `SIEVE_TIME_BUDGET_MS` | `app/api/sieve/route.ts` | Presupuesto de tiempo total del request antes de cortar el lote y devolver un resumen parcial (default 260000 = 260s). |
+| `MELI_CLIENT_ID` | `lib/meliApi.ts`, `app/api/calc/meli-oauth/*` | Client ID de la app creada en developers.mercadolibre.com.ar con la cuenta real de Mercado Libre de Cobus (Calculador de Importación, sección 10.3). |
+| `MELI_CLIENT_SECRET` | `lib/meliApi.ts` | Client Secret de esa misma app -- usado para intercambiar/refrescar tokens OAuth. Nunca se expone al frontend. |
 
 ## 13. Frontend
 
