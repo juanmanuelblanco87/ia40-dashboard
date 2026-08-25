@@ -56,11 +56,13 @@ export default function LoginPage() {
         alignItems: "center",
         justifyContent: "center",
         background: "var(--header-bg, #025f5b)",
+        padding: 20,
+        boxSizing: "border-box",
       }}
     >
       <div
         className="panel"
-        style={{ width: 320, textAlign: "center", margin: 0 }}
+        style={{ width: "100%", maxWidth: 320, textAlign: "center", margin: 0 }}
         onKeyDown={(e) => {
           if (e.key === "Enter") submit();
         }}

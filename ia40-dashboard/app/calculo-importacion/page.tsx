@@ -602,9 +602,9 @@ export default function CalculoImportacionPage() {
       />
       <div className="container">
         <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexWrap: "wrap", gap: 8 }}>
             <h1 style={{ fontSize: 15, margin: 0 }}>Tipo de producto</h1>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               {meliConectado === false && (
                 <button onClick={() => (window.location.href = "/api/calc/meli-oauth/authorize")} style={{ fontSize: 12 }}>
                   🔗 Conectar cuenta de Mercado Libre
@@ -800,7 +800,7 @@ export default function CalculoImportacionPage() {
         {resultado && !resultado.error && (
           <>
             <div className="panel">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexWrap: "wrap", gap: 8 }}>
                 <h1 style={{ fontSize: 15, margin: 0 }}>Costo Nacionalizado</h1>
                 <button
                   onClick={guardarEscenario}
@@ -820,6 +820,7 @@ export default function CalculoImportacionPage() {
               <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>
                 Costo de envío usado: {resultado.envioFuente === "api" ? "dato real de la API de Mercado Libre ✓" : "tabla fija (editable en Supuestos generales)"}
               </div>
+              <div className="table-scroll">
               <table className="admin-table" style={{ fontSize: 13 }}>
                 <tbody>
                   <tr>
@@ -873,14 +874,15 @@ export default function CalculoImportacionPage() {
                   </tr>
                 </tbody>
               </table>
+              </div>
             </div>
 
-            <div className="row">
-              <div style={{ flex: 1, minWidth: 320 }} className="panel">
+            <div className="stack-row">
+              <div className="panel">
                 <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 12 }}>Vendiendo por MeLi</h1>
                 <CanalTable canal={resultado.resultado.meli} showMeliDetalle />
               </div>
-              <div style={{ flex: 1, minWidth: 320 }} className="panel">
+              <div className="panel">
                 <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 12 }}>Vendiendo a Distribución</h1>
                 <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>
                   PVP = PVP MeLi × (1 − {fmtPct(resultado.supuestos.descuentoDistribucionPct)})
@@ -913,6 +915,7 @@ export default function CalculoImportacionPage() {
           {escenarios.length === 0 ? (
             <div style={{ color: "var(--muted)", fontSize: 13 }}>Todavía no hay escenarios guardados.</div>
           ) : (
+            <div className="table-scroll">
             <table className="admin-table" style={{ fontSize: 12.5 }}>
               <thead>
                 <tr>
@@ -951,6 +954,7 @@ export default function CalculoImportacionPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
@@ -1229,6 +1233,7 @@ function Campo({ label, value, onChange }: { label: string; value: string; onCha
 
 function CanalTable({ canal, showMeliDetalle }: { canal: CalcCanal; showMeliDetalle: boolean }) {
   return (
+    <div className="table-scroll">
     <table className="admin-table" style={{ fontSize: 13 }}>
       <tbody>
         <tr>
@@ -1283,5 +1288,6 @@ function CanalTable({ canal, showMeliDetalle }: { canal: CalcCanal; showMeliDeta
         </tr>
       </tbody>
     </table>
+    </div>
   );
 }
