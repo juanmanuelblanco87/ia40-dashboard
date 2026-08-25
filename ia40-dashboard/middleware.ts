@@ -36,6 +36,10 @@ import type { NextRequest } from "next/server";
  *     de autorizar -- si quedara atras del gate, se rompe la conexion.
  *   - /api/calc/meli-webhook: Mercado Libre manda notificaciones ahi
  *     directamente.
+ *   - /api/meli-price-proxy: lo llama OTRO proyecto de Icom Salud
+ *     (panel-icom-salud, servidor a servidor) -- no lleva la cookie de
+ *     este login, se protege con su propio secreto compartido
+ *     (MELI_PROXY_SECRET, ver ese route.ts).
  *   - archivos estaticos (imagenes, _next, etc.) -- si no, ni el logo de
  *     la propia pantalla de login cargaria.
  */
@@ -60,6 +64,6 @@ export const config = {
   // directamente, y cualquier archivo estatico (cualquier ruta con un
   // "." -- imagenes, _next/static, etc.).
   matcher: [
-    "/((?!login|api/login|api/sync|api/sync-images|api/calc/meli-oauth|api/calc/meli-webhook|.*\\..*).*)",
+    "/((?!login|api/login|api/sync|api/sync-images|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|.*\\..*).*)",
   ],
 };
