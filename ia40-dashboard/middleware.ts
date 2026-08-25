@@ -42,10 +42,42 @@ import type { NextRequest } from "next/server";
  *     (MELI_PROXY_SECRET, ver ese route.ts).
  *   - archivos estaticos (imagenes, _next, etc.) -- si no, ni el logo de
  *     la propia pantalla de login cargaria.
+ *
+ * Auto-login desde panel-icom-salud (25/08/2026, "Quedo un doble
+ * ingreso, quita el 2do en importaciones"): panel-icom-salud YA exige
+ * su propio login antes de mostrar este proyecto en un iframe (sólo
+ * Admin/Gerente, roles firmados de verdad -- ver
+ * loadImportacionesLogin() ahí) -- pedir ACÁ un 2do usuario/contraseña
+ * compartido es redundante. En vez de sacar la protección de este
+ * proyecto (quedaría accesible sin login a cualquiera que tenga la URL,
+ * entre por el panel o no), panel-icom-salud manda un token PROPIO y
+ * SEPARADO (`PANEL_ACCESS_TOKEN` -- nunca AUTH_SESSION_TOKEN ni una
+ * contraseña real) como query param `?panelAuth=` la primera vez que
+ * crea el iframe -- si coincide, esto loguea sola la MISMA cookie de
+ * siempre y redirige a la URL limpia (el token no queda en la barra de
+ * direcciones). Variable de entorno nueva: PANEL_ACCESS_TOKEN (mismo
+ * valor configurado en panel-icom-salud, ver api/importaciones-token.js
+ * ahí -- ese endpoint sólo lo entrega a quien ya pasó SU login).
  */
 export function middleware(req: NextRequest) {
   const expected = process.env.AUTH_SESSION_TOKEN;
   if (!expected) return NextResponse.next();
+
+  const panelToken = req.nextUrl.searchParams.get("panelAuth");
+  if (panelToken && process.env.PANEL_ACCESS_TOKEN && panelToken === process.env.PANEL_ACCESS_TOKEN) {
+    const limpia = req.nextUrl.clone();
+    limpia.searchParams.delete("panelAuth");
+    const res = NextResponse.redirect(limpia);
+    // sameSite:"none" (a diferencia de "lax" en api/login/route.ts) --
+    // acá SÍ hace falta: esta cookie tiene que viajar en pedidos hechos
+    // DESDE ADENTRO de un iframe cross-origin (panel-icom-salud), no
+    // sólo en una navegación de nivel superior. Sigue dependiendo de
+    // que el navegador acepte cookies de terceros en absoluto -- si
+    // Safari/Firefox con protección anti-tracking estricta la bloquean
+    // igual, este auto-login no persiste y hay que revisarlo en vivo.
+    res.cookies.set("icom_auth", expected, { httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: 60 * 60 * 24 * 30 });
+    return res;
+  }
 
   const cookie = req.cookies.get("icom_auth")?.value;
   if (cookie === expected) return NextResponse.next();
