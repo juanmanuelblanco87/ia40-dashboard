@@ -42,17 +42,29 @@ export interface PrecioItemResult {
 
 /** Prueba primero /items/{id} (publicación puntual); si da 404
  * (típico cuando el link era de producto de catálogo, no de un
- * ítem), reintenta con /products/{id} (API de Catálogo, estructura de
- * respuesta distinta -- el precio vive en buy_box_winner.price cuando
- * hay un "ganador" activo). Nunca tira excepción por un precio no
- * encontrado -- MeliAuthError (cuenta no conectada) sí se deja
- * propagar, el caller la maneja. */
+ * ítem), reintenta como producto de catálogo. Nunca tira excepción por
+ * un precio no encontrado -- MeliAuthError (cuenta no conectada) sí se
+ * deja propagar, el caller la maneja.
+ *
+ * 25/08/2026 (bug reportado con captura: "no funciona traer el precio
+ * de mercado Libre y es incorrecto que el producto no tenga precio" --
+ * el usuario confirmó que el producto SÍ tenía vendedor activo en la
+ * web real): la primera versión de esta función leía
+ * `buy_box_winner.price` de GET /products/{id} para el caso de
+ * catálogo -- confirmado en vivo con el modo ?debug=1 de
+ * app/api/meli-price-proxy/route.ts que ese campo viene `null` en la
+ * práctica (al menos para este producto, con esta cuenta), aunque el
+ * producto SÍ tenía 2 vendedores activos con precio real. El dato
+ * correcto sale de GET /products/{id}/items?status=active -- la misma
+ * lista de "ítems que compiten por este producto" que arma la página
+ * pública -- de ahí se toma el precio más bajo entre los activos (no
+ * asumir que el primero del array es el ganador; más robusto tomar el
+ * mínimo real). */
 export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResult> {
   const accessToken = await getAccessToken(); // puede tirar MeliAuthError, se propaga
+  const headers = { authorization: `Bearer ${accessToken}` };
 
-  const resp = await fetch(`https://api.mercadolibre.com/items/${idMeli}`, {
-    headers: { authorization: `Bearer ${accessToken}` },
-  });
+  const resp = await fetch(`https://api.mercadolibre.com/items/${idMeli}`, { headers });
   if (resp.ok) {
     const data = await resp.json();
     if (typeof data.price === "number" && data.price > 0) {
@@ -60,17 +72,25 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     }
   }
 
-  const resp2 = await fetch(`https://api.mercadolibre.com/products/${idMeli}`, {
-    headers: { authorization: `Bearer ${accessToken}` },
-  });
-  if (resp2.ok) {
-    const data2 = await resp2.json();
-    const precio = data2?.buy_box_winner?.price;
-    if (typeof precio === "number" && precio > 0) {
-      return { precio: Math.round(precio), titulo: data2.name ?? null, metodo: "meli-api" };
-    }
-    return { precio: null, error: "Este producto de MercadoLibre no tiene ningún vendedor activo con precio (buy_box vacío)." };
+  const [respProducto, respItemsActivos] = await Promise.all([
+    fetch(`https://api.mercadolibre.com/products/${idMeli}`, { headers }),
+    fetch(`https://api.mercadolibre.com/products/${idMeli}/items?status=active`, { headers }),
+  ]);
+
+  if (!respProducto.ok && !respItemsActivos.ok) {
+    return { precio: null, error: `Mercado Libre no encontró ${idMeli} (probado como ítem y como producto de catálogo).` };
   }
 
-  return { precio: null, error: `Mercado Libre no encontró ${idMeli} (probado como ítem y como producto de catálogo).` };
+  const titulo = respProducto.ok ? ((await respProducto.json())?.name ?? null) : null;
+
+  if (respItemsActivos.ok) {
+    const dataItems = await respItemsActivos.json();
+    const activos: any[] = (dataItems?.results || []).filter((r: any) => typeof r?.price === "number" && r.price > 0);
+    if (activos.length) {
+      const masBarato = activos.reduce((min, r) => (r.price < min.price ? r : min), activos[0]);
+      return { precio: Math.round(masBarato.price), titulo, metodo: "meli-api" };
+    }
+  }
+
+  return { precio: null, error: "Este producto de MercadoLibre no tiene ningún vendedor activo con precio en este momento." };
 }

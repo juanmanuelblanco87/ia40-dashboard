@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { MeliAuthError, getAccessToken } from "@/lib/meliApi";
+import { MeliAuthError } from "@/lib/meliApi";
 import { extraerIdMeli, obtenerPrecioItem } from "@/lib/meliItemPrice";
 
 export const dynamic = "force-dynamic";
@@ -51,37 +51,6 @@ export async function GET(req: Request) {
       { ok: false, error: "Falta ?url= (link de MercadoLibre) o ?id= (ej. MLA123456789) válido." },
       { status: 400 }
     );
-  }
-
-  // 25/08/2026 (bug reportado: "no funciona traer el precio... es
-  // incorrecto que el producto no tenga precio" -- el usuario confirma
-  // que SÍ tiene vendedor activo en la web real): modo debug TEMPORAL
-  // para ver la respuesta CRUDA de Mercado Libre y diagnosticar sin
-  // acceso a los logs de Vercel desde acá -- mismo secreto de siempre,
-  // no agrega ninguna superficie nueva de acceso. Sacar una vez
-  // resuelto el bug real (ver lib/meliItemPrice.ts).
-  if (url.searchParams.get("debug") === "1") {
-    try {
-      const accessToken = await getAccessToken();
-      const [respItem, respProduct, respProductItems] = await Promise.all([
-        fetch(`https://api.mercadolibre.com/items/${idMeli}`, { headers: { authorization: `Bearer ${accessToken}` } }),
-        fetch(`https://api.mercadolibre.com/products/${idMeli}`, { headers: { authorization: `Bearer ${accessToken}` } }),
-        fetch(`https://api.mercadolibre.com/products/${idMeli}/items?status=active`, { headers: { authorization: `Bearer ${accessToken}` } }),
-      ]);
-      const [dataItem, dataProduct, dataProductItems] = await Promise.all([
-        respItem.json().catch((e) => ({ __parseError: String(e) })),
-        respProduct.json().catch((e) => ({ __parseError: String(e) })),
-        respProductItems.json().catch((e) => ({ __parseError: String(e) })),
-      ]);
-      return NextResponse.json({
-        ok: true, debug: true, idMeli,
-        items: { status: respItem.status, body: dataItem },
-        products: { status: respProduct.status, body: dataProduct },
-        productItems: { status: respProductItems.status, body: dataProductItems },
-      });
-    } catch (err: any) {
-      return NextResponse.json({ ok: false, debug: true, error: String(err?.message ?? err) }, { status: 500 });
-    }
   }
 
   try {
