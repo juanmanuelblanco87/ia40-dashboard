@@ -63,18 +63,21 @@ export async function GET(req: Request) {
   if (url.searchParams.get("debug") === "1") {
     try {
       const accessToken = await getAccessToken();
-      const [respItem, respProduct] = await Promise.all([
+      const [respItem, respProduct, respProductItems] = await Promise.all([
         fetch(`https://api.mercadolibre.com/items/${idMeli}`, { headers: { authorization: `Bearer ${accessToken}` } }),
         fetch(`https://api.mercadolibre.com/products/${idMeli}`, { headers: { authorization: `Bearer ${accessToken}` } }),
+        fetch(`https://api.mercadolibre.com/products/${idMeli}/items?status=active`, { headers: { authorization: `Bearer ${accessToken}` } }),
       ]);
-      const [dataItem, dataProduct] = await Promise.all([
+      const [dataItem, dataProduct, dataProductItems] = await Promise.all([
         respItem.json().catch((e) => ({ __parseError: String(e) })),
         respProduct.json().catch((e) => ({ __parseError: String(e) })),
+        respProductItems.json().catch((e) => ({ __parseError: String(e) })),
       ]);
       return NextResponse.json({
         ok: true, debug: true, idMeli,
         items: { status: respItem.status, body: dataItem },
         products: { status: respProduct.status, body: dataProduct },
+        productItems: { status: respProductItems.status, body: dataProductItems },
       });
     } catch (err: any) {
       return NextResponse.json({ ok: false, debug: true, error: String(err?.message ?? err) }, { status: 500 });
