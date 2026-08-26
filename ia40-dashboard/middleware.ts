@@ -83,23 +83,33 @@ import type { NextRequest } from "next/server";
  * panelAuth válido se deja pasar la request ACTUAL directo (sin
  * redirect de por medio) -- la cookie se sigue intentando guardar,
  * como ayuda para navegación futura en navegadores que sí la acepten,
- * pero YA NO hace falta que persista para que ESTA carga funcione. */
+ * pero YA NO hace falta que persista para que ESTA carga funcione.
+ *
+ * 26/08/2026 (2da vuelta, "ingreso pero no carga nada de info"): la
+ * carga inicial ya no dependía de la cookie, pero los ~15 fetch()
+ * sueltos que hace la app DESPUÉS (categorías, datos, etc., todos a
+ * /api/*) sí dependían pura y exclusivamente de que el navegador
+ * mandara esa cookie solo -- bloqueada, esos pedidos volvían 401 y la
+ * pantalla quedaba vacía aunque la página en sí hubiera cargado bien.
+ * Se agrega un header propio (x-panel-auth) como alternativa a la
+ * cookie en CUALQUIER request, no sólo la inicial -- ver
+ * app/layout.tsx (PANEL_AUTH_BOOTSTRAP), que guarda el token de
+ * panelAuth en sessionStorage (del propio iframe, no depende de la
+ * política de cookies de terceros) y parchea window.fetch una sola
+ * vez para mandar ese header en TODO pedido. */
 export function middleware(req: NextRequest) {
   const expected = process.env.AUTH_SESSION_TOKEN;
   if (!expected) return NextResponse.next();
 
-  const panelToken = req.nextUrl.searchParams.get("panelAuth");
-  if (panelToken && process.env.PANEL_ACCESS_TOKEN && panelToken === process.env.PANEL_ACCESS_TOKEN) {
+  const panelAccessToken = process.env.PANEL_ACCESS_TOKEN;
+  const panelToken = req.nextUrl.searchParams.get("panelAuth") || req.headers.get("x-panel-auth");
+  if (panelToken && panelAccessToken && panelToken === panelAccessToken) {
     const res = NextResponse.next();
     // sameSite:"none" (a diferencia de "lax" en api/login/route.ts) --
-    // acá SÍ hace falta: esta cookie tiene que viajar en pedidos hechos
-    // DESDE ADENTRO de un iframe cross-origin (panel-icom-salud), no
-    // sólo en una navegación de nivel superior. Sigue dependiendo de
-    // que el navegador acepte cookies de terceros en absoluto -- si no
-    // las acepta, esta carga puntual funciona igual (ver comentario de
-    // arriba), pero una navegación interna a otra ruta (ej. clickear
-    // "Cálculo de Importación") SÍ la va a necesitar, porque esa
-    // request no vuelve a llevar panelAuth.
+    // esta cookie sigue siendo un plus para navegadores que sí aceptan
+    // cookies de terceros (ej. clickear "Cálculo de Importación", una
+    // navegación de página completa que no pasa por window.fetch
+    // parcheado) -- pero ya ninguna carga depende de que persista.
     res.cookies.set("icom_auth", expected, { httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: 60 * 60 * 24 * 30 });
     return res;
   }
