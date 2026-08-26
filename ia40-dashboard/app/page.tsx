@@ -197,8 +197,16 @@ function SegmentoPieChart({ rows, last12Label }: { rows: ShareRow[]; last12Label
               dataKey="fob"
               nameKey="key"
               cx="50%"
-              cy="50%"
-              outerRadius={100}
+              cy="45%"
+              // 26/08/2026 ("se rompen los graficos" en mobile): esto era
+              // outerRadius={100} (fijo, en px) -- en un .pie-wrap angosto
+              // (celular) un circulo de 200px de diametro no entraba junto
+              // con la leyenda de abajo, y los % quedaban superpuestos
+              // sobre el propio circulo. Con "%" en vez de un numero fijo,
+              // recharts lo calcula en base al ancho/alto REAL del
+              // contenedor (que .pie-wrap ya achica en mobile via CSS) --
+              // se achica solo con la pantalla, sin superponerse.
+              outerRadius="70%"
               label={(entry: any) => `${Number(entry.fobPct ?? 0).toFixed(0)}%`}
             >
               {rows.map((r) => (
@@ -206,7 +214,7 @@ function SegmentoPieChart({ rows, last12Label }: { rows: ShareRow[]; last12Label
               ))}
             </Pie>
             <Tooltip formatter={(value: any) => fmtNumber(Number(value))} />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Legend wrapperStyle={{ fontSize: 11, lineHeight: "16px" }} />
           </PieChart>
         </ResponsiveContainer>
         </div>
@@ -792,6 +800,21 @@ export default function Home() {
   const [meses, setMeses] = useState<string[]>([]);
   const [groupBy, setGroupBy] = useState<"marca" | "modelo" | "proveedor">("marca");
   const [metric, setMetric] = useState<"total_fob_dolars" | "total_unidades">("total_fob_dolars");
+  // 26/08/2026 ("mejorá la UX mobile de Importaciones -- tantos filtros
+  // tirados ahi, el tamizador con tanta relevancia arriba"): en mobile,
+  // lo prioritario es Categoria + Meses y despues el volumen/FOB de esa
+  // seleccion (KPIs) -- el resto de los filtros (Marca/Importador/
+  // Modelo/Color/Segmento/Agrupar por/Metrica) y las herramientas de
+  // mantenimiento de datos (Tamizar categoria/Completar PVP, uso
+  // esporadico, no de cada visita) quedan colapsados por default SOLO
+  // en mobile -- en desktop siguen abiertos como siempre (hay lugar de
+  // sobra). Lazy init: sólo se evalúa una vez, al montar.
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState<boolean>(
+    () => typeof window === "undefined" || window.innerWidth > 640
+  );
+  const [herramientasAbiertas, setHerramientasAbiertas] = useState<boolean>(
+    () => typeof window === "undefined" || window.innerWidth > 640
+  );
   const [series, setSeries] = useState<SeriesPoint[]>([]);
   const [options, setOptions] = useState<{ marca: string; modelo: string }[]>([]);
   const [importerOptions, setImporterOptions] = useState<string[]>([]);
@@ -1158,6 +1181,16 @@ export default function Home() {
     () => Array.from(new Set(series.map((s) => s.period))).sort().reverse(),
     [series]
   );
+  // Cuenta de filtros "extra" (los que quedan colapsados detrás de "Más
+  // filtros") con algo elegido -- se muestra en el propio botón para que,
+  // aunque esté cerrado, no se pierda de vista que hay un filtro activo
+  // ahí adentro.
+  const filtrosExtraActivos =
+    (marcas.length > 0 ? 1 : 0) +
+    (importadores.length > 0 ? 1 : 0) +
+    (modelosSel.length > 0 ? 1 : 0) +
+    (colores.length > 0 ? 1 : 0) +
+    (segmentos.length > 0 ? 1 : 0);
 
   // Los meses seleccionados solo filtran lo que se ve en el grafico/tabla;
   // los totales de "ultimo mes"/"ultimos 12 meses" siempre usan la serie
@@ -1297,12 +1330,23 @@ export default function Home() {
       />
       <div className="container">
       <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 14, paddingBottom: 14 }}>
-        <div style={{ fontSize: 13, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
-          <span>Datos sincronizados desde Cobus Group</span>
-          {syncOk === true && <span title="Sincronización OK" style={{ color: "#2fa84f" }}>✓</span>}
-          {syncOk === false && <span title="No se pudo cargar la información" style={{ color: "#d93a3a" }}>⚠️</span>}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 13, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+            <span>Datos sincronizados desde Cobus Group</span>
+            {syncOk === true && <span title="Sincronización OK" style={{ color: "#2fa84f" }}>✓</span>}
+            {syncOk === false && <span title="No se pudo cargar la información" style={{ color: "#d93a3a" }}>⚠️</span>}
+          </div>
+          <button
+            type="button"
+            onClick={() => setHerramientasAbiertas((v) => !v)}
+            style={{ fontSize: 12, padding: "5px 10px", color: "var(--muted)" }}
+          >
+            {herramientasAbiertas ? "Ocultar herramientas ▴" : "Herramientas de datos ▾"}
+          </button>
         </div>
 
+        {herramientasAbiertas && (
+        <>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <button onClick={runSieve} disabled={sieving || !slug}>
             {sieving ? "🔎 Tamizando..." : "🔎 Tamizar categoría"}
@@ -1485,106 +1529,133 @@ export default function Home() {
             )}
           </div>
         )}
+        </>
+        )}
       </div>
 
-      <div className="panel row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
-        <div className="filter-field">
-          <label>Categoria</label>
-          <select
-            style={{ width: "100%" }}
-            value={slug}
-            onChange={(e) => {
-              setSlug(e.target.value);
-              setMarcas([]);
-              setModelosSel([]);
-              setMeses([]);
-              setImportadores([]);
-              setColores([]);
-              setSegmentos(DEFAULT_SEGMENTO_FILTER[e.target.value] ?? []);
-            }}
+      <div className="panel">
+        {/* 26/08/2026 ("Lo principal es: Selector de categoria / mes, y
+            luego ver rapidamente el volumen y fob de esa categoria /
+            periodo de tiempo"): Categoria y Meses quedan SIEMPRE
+            visibles, arriba de todo -- son los 2 controles que de verdad
+            se usan en cada visita. El resto (Marca/Importador/Modelo/
+            Color/Segmento + Agrupar por/Metrica) son refinamientos que
+            se tocan rara vez -- quedan colapsados por default en mobile
+            (ver filtrosAbiertos) para no enterrar Categoria/Meses/KPIs
+            bajo 9 selectores apilados de punta a punta de la pantalla. */}
+        <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
+          <div className="filter-field">
+            <label>Categoria</label>
+            <select
+              style={{ width: "100%" }}
+              value={slug}
+              onChange={(e) => {
+                setSlug(e.target.value);
+                setMarcas([]);
+                setModelosSel([]);
+                setMeses([]);
+                setImportadores([]);
+                setColores([]);
+                setSegmentos(DEFAULT_SEGMENTO_FILTER[e.target.value] ?? []);
+              }}
+            >
+              {categories.map((c) => (
+                <option key={c.slug} value={c.slug}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="filter-field">
+            <MultiSelectDropdown
+              label="Meses"
+              options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
+              selected={meses}
+              onChange={setMeses}
+              placeholder="Todos"
+              searchable={false}
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setFiltrosAbiertos((v) => !v)}
+            style={{ fontSize: 12, padding: "9px 12px", color: "var(--muted)", alignSelf: "center" }}
           >
-            {categories.map((c) => (
-              <option key={c.slug} value={c.slug}>{c.name}</option>
-            ))}
-          </select>
+            {filtrosAbiertos
+              ? "Menos filtros ▴"
+              : `Más filtros ▾${filtrosExtraActivos > 0 ? ` (${filtrosExtraActivos})` : ""}`}
+          </button>
         </div>
 
-        <div className="filter-field">
-          <MultiSelectDropdown
-            label="Marca"
-            options={marcaOptions.map((m) => ({ value: m, label: m }))}
-            selected={marcas}
-            onChange={setMarcas}
-            placeholder="Todas"
-          />
-        </div>
+        {filtrosAbiertos && (
+          <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16, marginTop: 16 }}>
+            <div className="filter-field">
+              <MultiSelectDropdown
+                label="Marca"
+                options={marcaOptions.map((m) => ({ value: m, label: m }))}
+                selected={marcas}
+                onChange={setMarcas}
+                placeholder="Todas"
+              />
+            </div>
 
-        <div className="filter-field">
-          <MultiSelectDropdown
-            label="Importador"
-            options={importerOptions.map((p) => ({ value: p, label: p }))}
-            selected={importadores}
-            onChange={setImportadores}
-            placeholder="Todos"
-          />
-        </div>
+            <div className="filter-field">
+              <MultiSelectDropdown
+                label="Importador"
+                options={importerOptions.map((p) => ({ value: p, label: p }))}
+                selected={importadores}
+                onChange={setImportadores}
+                placeholder="Todos"
+              />
+            </div>
 
-        <div className="filter-field">
-          <MultiSelectDropdown
-            label="Modelo"
-            options={modelos.map((m) => ({ value: m, label: m }))}
-            selected={modelosSel}
-            onChange={setModelosSel}
-            placeholder="Todos"
-          />
-        </div>
+            <div className="filter-field">
+              <MultiSelectDropdown
+                label="Modelo"
+                options={modelos.map((m) => ({ value: m, label: m }))}
+                selected={modelosSel}
+                onChange={setModelosSel}
+                placeholder="Todos"
+              />
+            </div>
 
-        <div className="filter-field">
-          <MultiSelectDropdown
-            label="Color"
-            options={colorOptions.map((c) => ({ value: c, label: c }))}
-            selected={colores}
-            onChange={setColores}
-            placeholder="Todos"
-          />
-        </div>
+            <div className="filter-field">
+              <MultiSelectDropdown
+                label="Color"
+                options={colorOptions.map((c) => ({ value: c, label: c }))}
+                selected={colores}
+                onChange={setColores}
+                placeholder="Todos"
+              />
+            </div>
 
-        <div className="filter-field">
-          <MultiSelectDropdown
-            label="Segmento"
-            options={segmentoOptions.map((s) => ({ value: s, label: s }))}
-            selected={segmentos}
-            onChange={setSegmentos}
-            placeholder="Todos"
-          />
-        </div>
+            <div className="filter-field">
+              <MultiSelectDropdown
+                label="Segmento"
+                options={segmentoOptions.map((s) => ({ value: s, label: s }))}
+                selected={segmentos}
+                onChange={setSegmentos}
+                placeholder="Todos"
+              />
+            </div>
 
-        <div className="filter-field">
-          <MultiSelectDropdown
-            label="Meses"
-            options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
-            selected={meses}
-            onChange={setMeses}
-            placeholder="Todos"
-            searchable={false}
-          />
-        </div>
-
-        <div className="filter-field">
-          <label>Agrupar por</label>
-          <select style={{ width: "100%" }} value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
-            <option value="marca">Marca</option>
-            <option value="modelo">Modelo</option>
-            <option value="proveedor">Proveedor</option>
-          </select>
-        </div>
-        <div className="filter-field">
-          <label>Metrica</label>
-          <select style={{ width: "100%" }} value={metric} onChange={(e) => setMetric(e.target.value as any)}>
-            <option value="total_fob_dolars">FOB USD</option>
-            <option value="total_unidades">Unidades</option>
-          </select>
-        </div>
+            <div className="filter-field">
+              <label>Agrupar por</label>
+              <select style={{ width: "100%" }} value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
+                <option value="marca">Marca</option>
+                <option value="modelo">Modelo</option>
+                <option value="proveedor">Proveedor</option>
+              </select>
+            </div>
+            <div className="filter-field">
+              <label>Metrica</label>
+              <select style={{ width: "100%" }} value={metric} onChange={(e) => setMetric(e.target.value as any)}>
+                <option value="total_fob_dolars">FOB USD</option>
+                <option value="total_unidades">Unidades</option>
+              </select>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="kpi-row">

@@ -252,8 +252,13 @@ label {
   .chart-wrap {
     height: 260px;
   }
+  /* 26/08/2026 ("se rompen los graficos"): antes 220px, muy poca altura
+     para un circulo + su leyenda debajo sin pisarse (el radio del
+     circulo ahora es responsive -- ver outerRadius="70%" en
+     SegmentoPieChart -- pero igual necesita este espacio extra para que
+     la leyenda entre cómoda). */
   .pie-wrap {
-    height: 220px;
+    height: 280px;
   }
 }
 

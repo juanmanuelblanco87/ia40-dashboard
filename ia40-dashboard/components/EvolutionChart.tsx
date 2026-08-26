@@ -164,9 +164,24 @@ export default function EvolutionChart({ data, groupBy, metric, topN = 9, pinned
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+      <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 24 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e8e7e2" />
-        <XAxis dataKey="period" stroke="#999999" tickFormatter={formatPeriod} tick={{ fontSize: 10 }} />
+        {/* 26/08/2026 ("se rompen los graficos" en mobile): con ~19 meses
+            de historial, las etiquetas horizontales del eje se pisaban
+            entre si en una pantalla angosta (recharts no se salta
+            ninguna por default). Inclinadas ocupan mucho menos ancho por
+            etiqueta -- entran comodas tanto en mobile como en desktop,
+            sin necesitar detectar el ancho real por JS. */}
+        <XAxis
+          dataKey="period"
+          stroke="#999999"
+          tickFormatter={formatPeriod}
+          tick={{ fontSize: 10 }}
+          angle={-40}
+          textAnchor="end"
+          height={48}
+          interval="preserveStartEnd"
+        />
         <YAxis stroke="#999999" tickFormatter={(v) => fmtCompact(Number(v))} tick={{ fontSize: 11 }} width={44} />
         <Tooltip
           contentStyle={{ background: "#ffffff", border: "1px solid #e8e7e2", borderRadius: 8 }}
