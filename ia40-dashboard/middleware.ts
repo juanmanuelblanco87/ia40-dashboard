@@ -64,28 +64,42 @@ import type { NextRequest } from "next/server";
  * entre por el panel o no), panel-icom-salud manda un token PROPIO y
  * SEPARADO (`PANEL_ACCESS_TOKEN` -- nunca AUTH_SESSION_TOKEN ni una
  * contraseña real) como query param `?panelAuth=` la primera vez que
- * crea el iframe -- si coincide, esto loguea sola la MISMA cookie de
- * siempre y redirige a la URL limpia (el token no queda en la barra de
- * direcciones). Variable de entorno nueva: PANEL_ACCESS_TOKEN (mismo
- * valor configurado en panel-icom-salud, ver api/importaciones-token.js
- * ahí -- ese endpoint sólo lo entrega a quien ya pasó SU login).
- */
+ * crea el iframe -- si coincide, esto deja pasar la request Y de paso
+ * intenta guardar la MISMA cookie de siempre. Variable de entorno
+ * nueva: PANEL_ACCESS_TOKEN (mismo valor configurado en
+ * panel-icom-salud, ver api/importaciones-token.js ahí -- ese endpoint
+ * sólo lo entrega a quien ya pasó SU login).
+ *
+ * 26/08/2026 ("en mobile me sigue pidiendo usuario y pass, probé 3
+ * veces"): ANTES, con panelAuth válido, esto hacía un redirect a la
+ * URL limpia (sacando el token) Y RECIÉN AHÍ dependía de que la cookie
+ * ya hubiera quedado guardada para la request SIGUIENTE (la del
+ * redirect). En un iframe cross-origin en mobile, el navegador puede
+ * bloquear esa cookie como "de terceros" -- la respuesta manda
+ * Set-Cookie igual, pero el navegador la descarta silenciosamente. La
+ * request del redirect llegaba entonces SIN cookie ni panelAuth (el
+ * redirect se lo sacó) -- ningún dato para autenticar, pantalla de
+ * login de nuevo, sin importar cuántas veces se reintentara. Fix: con
+ * panelAuth válido se deja pasar la request ACTUAL directo (sin
+ * redirect de por medio) -- la cookie se sigue intentando guardar,
+ * como ayuda para navegación futura en navegadores que sí la acepten,
+ * pero YA NO hace falta que persista para que ESTA carga funcione. */
 export function middleware(req: NextRequest) {
   const expected = process.env.AUTH_SESSION_TOKEN;
   if (!expected) return NextResponse.next();
 
   const panelToken = req.nextUrl.searchParams.get("panelAuth");
   if (panelToken && process.env.PANEL_ACCESS_TOKEN && panelToken === process.env.PANEL_ACCESS_TOKEN) {
-    const limpia = req.nextUrl.clone();
-    limpia.searchParams.delete("panelAuth");
-    const res = NextResponse.redirect(limpia);
+    const res = NextResponse.next();
     // sameSite:"none" (a diferencia de "lax" en api/login/route.ts) --
     // acá SÍ hace falta: esta cookie tiene que viajar en pedidos hechos
     // DESDE ADENTRO de un iframe cross-origin (panel-icom-salud), no
     // sólo en una navegación de nivel superior. Sigue dependiendo de
-    // que el navegador acepte cookies de terceros en absoluto -- si
-    // Safari/Firefox con protección anti-tracking estricta la bloquean
-    // igual, este auto-login no persiste y hay que revisarlo en vivo.
+    // que el navegador acepte cookies de terceros en absoluto -- si no
+    // las acepta, esta carga puntual funciona igual (ver comentario de
+    // arriba), pero una navegación interna a otra ruta (ej. clickear
+    // "Cálculo de Importación") SÍ la va a necesitar, porque esa
+    // request no vuelve a llevar panelAuth.
     res.cookies.set("icom_auth", expected, { httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: 60 * 60 * 24 * 30 });
     return res;
   }
