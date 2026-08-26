@@ -1222,22 +1222,39 @@ export default function Home() {
     [series, periodInfo]
   );
 
-  // ---- Share por Importador y por Marca, ultimos 12 meses moviles ----
+  // ---- Share por Importador/Marca/Modelo/Segmento: por default ultimos 12
+  // meses moviles, pero si el usuario eligio mes(es) puntuales en el
+  // selector de arriba (`meses`), respetan ESE filtro en vez de ignorarlo
+  // -- antes quedaban siempre fijos en "ultimos 12 meses" pasara lo que
+  // pasara en el selector (26/08/2026, "si en el selector de meses solo
+  // elijo Julio deberia mostrarme los datos de julio"). Los totales de
+  // encabezado (Ultimo mes / Ultimos 12 meses, mas arriba) siguen
+  // ignorando este filtro a proposito -- esos representan un periodo fijo
+  // por definicion, no "lo que este mirando ahora en la tabla". ----
+  const sharePeriodSet = useMemo(
+    () => (meses.length > 0 ? new Set(meses) : periodInfo.last12Set),
+    [meses, periodInfo]
+  );
+  const shareLabel = useMemo(() => {
+    if (meses.length === 0) return `Ultimos ${totals.last12Count || 12} meses moviles`;
+    if (meses.length === 1) return formatPeriod(meses[0]);
+    return `${meses.length} meses seleccionados`;
+  }, [meses, totals.last12Count]);
   const shareByImporter = useMemo(
-    () => computeShareTable(series, periodInfo.last12Set, "proveedor"),
-    [series, periodInfo]
+    () => computeShareTable(series, sharePeriodSet, "proveedor"),
+    [series, sharePeriodSet]
   );
   const shareByBrand = useMemo(
-    () => computeShareTable(series, periodInfo.last12Set, "marca"),
-    [series, periodInfo]
+    () => computeShareTable(series, sharePeriodSet, "marca"),
+    [series, sharePeriodSet]
   );
   const shareByModel = useMemo(
-    () => computeShareByModel(series, periodInfo.last12Set),
-    [series, periodInfo]
+    () => computeShareByModel(series, sharePeriodSet),
+    [series, sharePeriodSet]
   );
   const shareBySegmento = useMemo(
-    () => computeShareTable(series, periodInfo.last12Set, "segmento"),
-    [series, periodInfo]
+    () => computeShareTable(series, sharePeriodSet, "segmento"),
+    [series, sharePeriodSet]
   );
 
   const imageStatusFor = (marca: string, modelo: string) =>
@@ -1631,18 +1648,18 @@ export default function Home() {
         <ShareTable
           title="Share por Importador"
           rows={shareByImporter}
-          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+          last12Label={shareLabel}
         />
         <ShareTable
           title="Share por Marca"
           rows={shareByBrand}
-          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+          last12Label={shareLabel}
         />
       </div>
 
       <ModelShareTable
         rows={shareByModel}
-        last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+        last12Label={shareLabel}
         imageStatus={imageStatusFor}
         onViewImage={(marca, modelo, segmento) => setViewingModel({ marca, modelo, segmento })}
         pvpEntry={pvpEntryFor}
@@ -1673,13 +1690,13 @@ export default function Home() {
       <div className="stack-row">
         <SegmentoPieChart
           rows={shareBySegmento}
-          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+          last12Label={shareLabel}
         />
         <ShareTable
           title="Share por Segmento"
           nameLabel="Segmento"
           rows={shareBySegmento}
-          last12Label={`Ultimos ${totals.last12Count || 12} meses moviles`}
+          last12Label={shareLabel}
         />
       </div>
 
