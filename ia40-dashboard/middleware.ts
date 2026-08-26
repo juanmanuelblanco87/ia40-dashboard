@@ -40,6 +40,17 @@ import type { NextRequest } from "next/server";
  *     (panel-icom-salud, servidor a servidor) -- no lleva la cookie de
  *     este login, se protege con su propio secreto compartido
  *     (MELI_PROXY_SECRET, ver ese route.ts).
+ *   - /api/token: lo llama refresh_token.py, un script que corre en una
+ *     PC (Programador de tareas de Windows, cada ~10 min) para mantener
+ *     actualizado el token de IA40/Cobus -- tampoco lleva la cookie de
+ *     este login, se protege con SU propio secreto (TOKEN_UPDATE_SECRET,
+ *     ver ese route.ts). 26/08/2026 ("me sigue pidiendo el login viejo"
+ *     no, esto era otra cosa -- "el modulo de importaciones devuelve
+ *     vacio"): faltaba acá desde que se agregó este middleware
+ *     (21/07/2026) -- por eso ningún token nuevo se guardaba desde
+ *     entonces, sin importar qué TOKEN_UPDATE_SECRET tuviera el script:
+ *     el middleware lo rechazaba con 401 ANTES de que la ruta llegara a
+ *     chequear ese secreto.
  *   - archivos estaticos (imagenes, _next, etc.) -- si no, ni el logo de
  *     la propia pantalla de login cargaria.
  *
@@ -96,6 +107,6 @@ export const config = {
   // directamente, y cualquier archivo estatico (cualquier ruta con un
   // "." -- imagenes, _next/static, etc.).
   matcher: [
-    "/((?!login|api/login|api/sync|api/sync-images|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|.*\\..*).*)",
+    "/((?!login|api/login|api/sync|api/sync-images|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|api/token|.*\\..*).*)",
   ],
 };
