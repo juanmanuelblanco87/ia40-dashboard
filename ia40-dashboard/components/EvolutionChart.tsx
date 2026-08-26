@@ -76,6 +76,7 @@ export function fmtCompact(n: number): string {
 }
 
 const OTROS_KEY = "Otros";
+const TOTAL_KEY = "__total__";
 
 /**
  * Pivotea la serie plana (una fila por mes+dimension) a un formato apto para
@@ -126,6 +127,13 @@ function pivot(
       const key = restKeys.has(rawKey) ? OTROS_KEY : rawKey;
       row[key] = (row[key] ?? 0) + Number(d[metric]);
     }
+    // 26/08/2026 ("coloca una linea de 'totales' para ver la evolucion
+    // real de la categoria"): suma de TODAS las series del mes, top N +
+    // "Otros" incluido -- osea la categoria entera, no solo el recorte
+    // que se grafica por separado. Nombre con "__" para no chocar con
+    // un key real (marca/modelo/proveedor) que se llame igual por
+    // casualidad.
+    row[TOTAL_KEY] = keys.reduce((acc, key) => acc + (Number(row[key]) || 0), 0);
     return row;
   });
 
@@ -200,6 +208,20 @@ export default function EvolutionChart({ data, groupBy, metric, topN = 9, pinned
             strokeDasharray={key === OTROS_KEY ? "4 3" : undefined}
           />
         ))}
+        {/* 26/08/2026 ("coloca una linea de 'totales' para ver la
+            evolucion real de la categoria"): suma de TODAS las series de
+            arriba (top N + "Otros") mes a mes -- la categoria entera, no
+            sólo el recorte de marcas/proveedores que se grafica por
+            separado. Más gruesa y en el navy de marca (--accent) para
+            que se lea como la línea de referencia, no una marca más. */}
+        <Line
+          type="monotone"
+          dataKey={TOTAL_KEY}
+          name="Total"
+          stroke="#1a3d70"
+          strokeWidth={3}
+          dot={false}
+        />
       </LineChart>
     </ResponsiveContainer>
   );
