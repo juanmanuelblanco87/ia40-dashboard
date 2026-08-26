@@ -91,7 +91,13 @@ export default function AppHeader({ title, actions }: { title: string; actions?:
           título + acciones, sin fondo navy ni logo. */}
       <div className="app-header-inner">
         <div className="app-header-title">{title}</div>
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
+        {/* 26/08/2026 ("permite moverse hacia los costados"): a este grupo
+            le faltaba flexWrap -- en mobile, "USD oficial" + "Cálculo de
+            Importación" + "Salir" (3 items) no entraban en una sola
+            línea y el que sobraba (Salir, el último) se salía del
+            header en vez de bajar a una 2da línea -- eso era lo que
+            arrastraba TODA la página hacia el costado. */}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <DolarBcra />
           {actions}
           {!embebido && (
