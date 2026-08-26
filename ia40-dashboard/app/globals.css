@@ -1,12 +1,24 @@
+/* 26/08/2026 ("estos colores no conversan... curaduría de colores"):
+   este proyecto tenía su propia identidad teal (#025f5b), sin relación
+   con el resto del panel de Icom Salud (navy #1a3d70, el mismo color
+   del sidebar/header de icom_panel_unificado.html y de
+   panel-icom-salud en general -- ver ICOM_PIE_COLORS/DASH_PALETTE
+   ahí). Referencia visual que dio el usuario: la pantalla "Ventas en
+   Vivo" de ese panel (navy dominante, fondo blanco/crema, un solo
+   acento verde para estados positivos -- "azul - verde", nunca verde
+   como color dominante de un header). El resto de la hoja de estilos
+   (.panel, .admin-table, .filter-field, .kpi-row, etc.) ya lee estas
+   variables, así que cambiarlas acá corrige la mayoría del look de un
+   solo lugar. */
 :root {
-  --bg: #eef3f1;
+  --bg: #f7f6f2;
   --panel: #ffffff;
-  --border: #e1e8e5;
-  --text: #17332e;
-  --muted: #6d7e79;
-  --accent: #025f5b;
-  --accent-light: #94ba0e;
-  --header-bg: #025f5b;
+  --border: #e8e7e2;
+  --text: #222222;
+  --muted: #999999;
+  --accent: #1a3d70;
+  --accent-light: #1baf7a;
+  --header-bg: #1a3d70;
   --shadow: 0 1px 2px rgba(16, 24, 22, 0.06), 0 4px 14px rgba(16, 24, 22, 0.06);
 }
 * { box-sizing: border-box; }

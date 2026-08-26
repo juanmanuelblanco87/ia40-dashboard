@@ -184,7 +184,7 @@ function ConfianzaDot({ confianza, razonamiento }: { confianza: string | null; r
         borderRadius: "50%",
         display: "inline-block",
         marginLeft: 5,
-        background: CONFIANZA_COLOR[confianza] ?? "#6d7e79",
+        background: CONFIANZA_COLOR[confianza] ?? "#999999",
       }}
     />
   );

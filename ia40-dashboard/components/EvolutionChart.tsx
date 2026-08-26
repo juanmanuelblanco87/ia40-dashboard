@@ -132,12 +132,19 @@ function pivot(
   return { rows, keys, periods };
 }
 
-// Paleta oscurecida a proposito respecto de la version original (pensada
-// para fondo oscuro): sobre el fondo blanco del nuevo diseño (marca Icom
-// Salud) los tonos pastel originales tenian bajo contraste.
+// 26/08/2026 ("curaduría de colores... azul - verde"): reemplazada por
+// la misma paleta categórica ya establecida en el resto del panel de
+// Icom Salud (ver DASH_PALETTE en icom_panel_unificado.html) -- azul/
+// naranja/verde-azulado/ámbar más una variante más oscura de cada uno
+// (incluido el navy de marca #1a3d70). La versión anterior mezclaba
+// magenta (#e0397a), violeta (#9b30d9) y rojo (#d93a3a) -- ninguno con
+// relación a la identidad de color del resto de la app, y el rojo en
+// particular se confunde con estados de error/peligro. 9no color
+// (#4a6fa5, azul grisáceo) agregado para no repetir ninguno de los 8
+// ya usados en DASH_PALETTE con `topN` en 9.
 const COLORS = [
-  "#2f6fe0", "#e8722f", "#1f9e63", "#e0397a", "#9b30d9", "#c99400",
-  "#1aa8c9", "#d93a3a", "#5aa62f",
+  "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#1a3d70", "#0e7d5c",
+  "#a8760a", "#b8491f", "#4a6fa5",
 ];
 const OTROS_COLOR = "#8a95a0";
 
@@ -158,11 +165,11 @@ export default function EvolutionChart({ data, groupBy, metric, topN = 9, pinned
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e1e8e5" />
-        <XAxis dataKey="period" stroke="#6d7e79" tickFormatter={formatPeriod} tick={{ fontSize: 10 }} />
-        <YAxis stroke="#6d7e79" tickFormatter={(v) => fmtCompact(Number(v))} tick={{ fontSize: 11 }} width={44} />
+        <CartesianGrid strokeDasharray="3 3" stroke="#e8e7e2" />
+        <XAxis dataKey="period" stroke="#999999" tickFormatter={formatPeriod} tick={{ fontSize: 10 }} />
+        <YAxis stroke="#999999" tickFormatter={(v) => fmtCompact(Number(v))} tick={{ fontSize: 11 }} width={44} />
         <Tooltip
-          contentStyle={{ background: "#ffffff", border: "1px solid #e1e8e5", borderRadius: 8 }}
+          contentStyle={{ background: "#ffffff", border: "1px solid #e8e7e2", borderRadius: 8 }}
           labelFormatter={(label) => formatPeriod(String(label))}
           formatter={(value: any) => fmtNumber(Number(value))}
         />

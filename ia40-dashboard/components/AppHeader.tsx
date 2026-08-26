@@ -58,8 +58,16 @@ export default function AppHeader({ title, actions }: { title: string; actions?:
             explicito del usuario, 20/07/2026) -- util como "volver al
             inicio" rapido sin tener que usar el boton de refresh del
             navegador. */}
+        {/* 26/08/2026 ("curaduría de colores"): el header pasó de fondo
+            teal a navy (ver globals.css) -- el logo viejo tenía el
+            fondo teal HORNEADO en el PNG (no era transparente), así
+            que hubiera quedado un rectángulo teal pegado dentro del
+            header navy. Este archivo nuevo es el mismo logo con el
+            fondo hecho transparente (chroma-key sobre el teal plano
+            original) -- se ve igual que el logo del resto del panel
+            de Icom Salud sobre su sidebar navy. */}
         <img
-          src="/logo-icomsalud-teal.png"
+          src="/logo-icomsalud-transparente.png"
           alt="Icom Salud"
           className="app-header-logo"
           onClick={() => window.location.reload()}

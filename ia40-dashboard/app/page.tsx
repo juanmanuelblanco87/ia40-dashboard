@@ -1462,7 +1462,7 @@ export default function Home() {
 
       <div className="panel row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
         <div className="filter-field">
-          <label>🦽 Categoria</label>
+          <label>Categoria</label>
           <select
             style={{ width: "100%" }}
             value={slug}
@@ -1484,7 +1484,7 @@ export default function Home() {
 
         <div className="filter-field">
           <MultiSelectDropdown
-            label="🏷️ Marca"
+            label="Marca"
             options={marcaOptions.map((m) => ({ value: m, label: m }))}
             selected={marcas}
             onChange={setMarcas}
@@ -1494,7 +1494,7 @@ export default function Home() {
 
         <div className="filter-field">
           <MultiSelectDropdown
-            label="🚚 Importador"
+            label="Importador"
             options={importerOptions.map((p) => ({ value: p, label: p }))}
             selected={importadores}
             onChange={setImportadores}
@@ -1504,7 +1504,7 @@ export default function Home() {
 
         <div className="filter-field">
           <MultiSelectDropdown
-            label="📦 Modelo"
+            label="Modelo"
             options={modelos.map((m) => ({ value: m, label: m }))}
             selected={modelosSel}
             onChange={setModelosSel}
@@ -1514,7 +1514,7 @@ export default function Home() {
 
         <div className="filter-field">
           <MultiSelectDropdown
-            label="🎨 Color"
+            label="Color"
             options={colorOptions.map((c) => ({ value: c, label: c }))}
             selected={colores}
             onChange={setColores}
@@ -1524,7 +1524,7 @@ export default function Home() {
 
         <div className="filter-field">
           <MultiSelectDropdown
-            label="🗂️ Segmento"
+            label="Segmento"
             options={segmentoOptions.map((s) => ({ value: s, label: s }))}
             selected={segmentos}
             onChange={setSegmentos}
@@ -1534,7 +1534,7 @@ export default function Home() {
 
         <div className="filter-field">
           <MultiSelectDropdown
-            label="🗓️ Meses"
+            label="Meses"
             options={mesOptions.map((p) => ({ value: p, label: formatPeriod(p) }))}
             selected={meses}
             onChange={setMeses}
@@ -1544,7 +1544,7 @@ export default function Home() {
         </div>
 
         <div className="filter-field">
-          <label>🔀 Agrupar por</label>
+          <label>Agrupar por</label>
           <select style={{ width: "100%" }} value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
             <option value="marca">Marca</option>
             <option value="modelo">Modelo</option>
@@ -1552,7 +1552,7 @@ export default function Home() {
           </select>
         </div>
         <div className="filter-field">
-          <label>📊 Metrica</label>
+          <label>Metrica</label>
           <select style={{ width: "100%" }} value={metric} onChange={(e) => setMetric(e.target.value as any)}>
             <option value="total_fob_dolars">FOB USD</option>
             <option value="total_unidades">Unidades</option>
@@ -1576,7 +1576,12 @@ export default function Home() {
           </div>
         </div>
         <div className="panel" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <div className="kpi-icon">🗓️</div>
+          {/* 26/08/2026 ("icono repetido"): antes 🗓️ (calendario con
+              cuadrícula) -- al lado de 📅 (calendario simple) de la
+              tarjeta de arriba, se leían como el mismo ícono repetido.
+              📈 distingue de verdad "un mes puntual" de "acumulado en
+              el tiempo". */}
+          <div className="kpi-icon">📈</div>
           <div>
             <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 6 }}>
               Ultimos {totals.last12Count || 12} meses
