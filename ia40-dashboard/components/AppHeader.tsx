@@ -38,11 +38,11 @@ function DolarBcra() {
   if (valor == null) return null;
   return (
     <div
-      style={{ fontSize: 12.5, color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap" }}
+      style={{ fontSize: 12.5, color: "var(--muted)", whiteSpace: "nowrap" }}
       title={fecha ? `Dólar oficial mayorista (BCRA, Com. A 3500) del ${fecha}` : "Dólar oficial mayorista (BCRA, Com. A 3500)"}
     >
       USD oficial:{" "}
-      <strong>
+      <strong style={{ color: "var(--accent)" }}>
         ${valor.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </strong>
     </div>
@@ -52,29 +52,17 @@ function DolarBcra() {
 export default function AppHeader({ title, actions }: { title: string; actions?: ReactNode }) {
   return (
     <header className="app-header">
+      {/* 26/08/2026 ("dejala similar a la de gestion de talentos, quita
+          el logo... queda repetido con el general de la app"): este
+          modulo vive embebido en un iframe dentro del panel principal
+          (icom_panel_unificado.html), que ya tiene su PROPIO header con
+          el logo de Icom Salud arriba de todo -- tenerlo acá también
+          era literalmente el mismo logo 2 veces en pantalla. Gestión de
+          Talento (el otro módulo embebido de la misma forma) nunca tuvo
+          logo propio por esta misma razón -- se saca acá para que
+          quede igual de consistente, header blanco simple con
+          título + acciones, sin fondo navy ni logo. */}
       <div className="app-header-inner">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        {/* Click en el logo = refresh completo de la pagina (pedido
-            explicito del usuario, 20/07/2026) -- util como "volver al
-            inicio" rapido sin tener que usar el boton de refresh del
-            navegador. */}
-        {/* 26/08/2026 ("curaduría de colores"): el header pasó de fondo
-            teal a navy (ver globals.css) -- el logo viejo tenía el
-            fondo teal HORNEADO en el PNG (no era transparente), así
-            que hubiera quedado un rectángulo teal pegado dentro del
-            header navy. Este archivo nuevo es el mismo logo con el
-            fondo hecho transparente (chroma-key sobre el teal plano
-            original) -- se ve igual que el logo del resto del panel
-            de Icom Salud sobre su sidebar navy. */}
-        <img
-          src="/logo-icomsalud-transparente.png"
-          alt="Icom Salud"
-          className="app-header-logo"
-          onClick={() => window.location.reload()}
-          title="Actualizar página"
-          style={{ cursor: "pointer" }}
-        />
-        <div style={{ width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.25)" }} />
         <div className="app-header-title">{title}</div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
           <DolarBcra />

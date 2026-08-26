@@ -35,9 +35,16 @@ body {
    para que el texto no quede demasiado estirado en monitores gigantes. */
 .container { max-width: min(1600px, 96vw); margin: 0 auto; padding: 0 24px 40px; }
 
+/* 26/08/2026 ("dejala similar a la de gestion de talentos, quita el
+   logo... queda repetido con el general de la app"): header blanco con
+   borde inferior (antes fondo navy + logo propio) -- mismo criterio
+   que ya usa Gestión de Talento (otro módulo embebido de la misma
+   forma dentro de icom_panel_unificado.html, que ya trae SU PROPIO
+   header con el logo arriba de todo). */
 .app-header {
-  background: var(--header-bg);
-  padding: 16px 24px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 24px;
   margin-bottom: 24px;
 }
 .app-header-inner {
@@ -50,33 +57,30 @@ body {
   gap: 16px;
 }
 .app-header-title {
-  color: #fff;
-  font-size: 19px;
+  color: var(--accent);
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.2px;
 }
 
 /* Boton de navegacion entre el Modulo de Importaciones y el Calculador de
-   Importacion (20/07/2026, ver components/AppHeader.tsx) -- estilo propio
-   porque el boton global (fondo blanco) no se lee bien sobre el header
-   oscuro. */
+   Importacion (20/07/2026, ver components/AppHeader.tsx). */
 .app-header-nav-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 16px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  font-size: 13.5px;
+  padding: 7px 14px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 13px;
   font-weight: 600;
   text-decoration: none;
   white-space: nowrap;
 }
 .app-header-nav-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
-  border-color: rgba(255, 255, 255, 0.6);
+  background: var(--bg);
+  border-color: var(--accent);
 }
 
 /* Spinner de carga (20/07/2026) -- usado en el Calculador de Importacion
@@ -157,12 +161,6 @@ label {
    Responsive
    ============================================================ */
 
-.app-header-logo {
-  height: 66px;
-  width: auto;
-  flex-shrink: 0;
-}
-
 /* Filtros: por defecto ancho fijo (desktop). En pantallas medianas pasan a
    ocupar ~45% (2 por fila) y en celulares angostos, 100% (1 por fila). */
 .filter-field {
@@ -236,10 +234,7 @@ label {
     padding: 10px 12px;
   }
   .app-header-title {
-    font-size: 16px;
-  }
-  .app-header-logo {
-    height: 40px;
+    font-size: 14.5px;
   }
   .filter-field {
     flex: 1 1 100%;
@@ -274,8 +269,5 @@ label {
   }
   .app-header {
     padding: 6px 12px;
-  }
-  .app-header-logo {
-    height: 34px;
   }
 }
