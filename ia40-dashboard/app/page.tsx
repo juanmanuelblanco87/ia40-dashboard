@@ -14,27 +14,37 @@ import { segmentosValidos } from "@/lib/segmentos";
 // ver lib/segmentos.ts) se asigna un color de forma deterministica desde
 // SEGMENTO_PALETTE en base al nombre del segmento -- asi ningun segmento
 // queda sin color asignado (bug anterior: todo caia a un gris de fallback).
+//
+// 26/08/2026 ("REALINEA"): igual que en components/EvolutionChart.tsx,
+// esta paleta mezclaba violeta (#9b30d9, #7d5ba6), rojo (#d93a3a, choca
+// con estados de error) y magenta (#e0507a) -- sin relacion con la
+// familia azul/naranja/verde-azulado/ambar del resto del panel de Icom
+// Salud. Los 6 colores de SEGMENTO_COLORS se realinean a esos mismos
+// tonos ya establecidos (usuario confirmo que se puede tocar el mapa
+// fijo, no solo el fallback por hash) -- los cambios de color afectan
+// como se ve cada segmento en los graficos, pero no cambian ningun
+// dato ni logica de negocio.
 const SEGMENTO_COLORS: Record<string, string> = {
-  "Silla Estándar": "#2f6fe0",
-  "Silla Ultra Livianas": "#1f9e63",
-  "Sillas Infantiles": "#e8722f",
-  "Silla Postural": "#9b30d9",
-  "Silla Activa y Deportivas": "#d93a3a",
-  "Silla de Traslado": "#1aa8c9",
+  "Silla Estándar": "#2a78d6",
+  "Silla Ultra Livianas": "#1baf7a",
+  "Sillas Infantiles": "#eb6834",
+  "Silla Postural": "#1a3d70",
+  "Silla Activa y Deportivas": "#a8760a",
+  "Silla de Traslado": "#0e7d5c",
 };
 const SEGMENTO_PALETTE = [
-  "#2f6fe0",
-  "#1f9e63",
-  "#e8722f",
-  "#9b30d9",
-  "#d93a3a",
-  "#1aa8c9",
-  "#c9a227",
-  "#5f6b7a",
-  "#e0507a",
+  "#2a78d6",
+  "#1baf7a",
+  "#eb6834",
+  "#1a3d70",
+  "#a8760a",
+  "#0e7d5c",
+  "#eda100",
+  "#4a6fa5",
+  "#b8491f",
   "#3ab795",
   "#f2994a",
-  "#7d5ba6",
+  "#6fa8dc",
 ];
 function colorForSegmento(key: string): string {
   const fijo = SEGMENTO_COLORS[key];
