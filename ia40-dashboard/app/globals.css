@@ -22,6 +22,20 @@
   --shadow: 0 1px 2px rgba(16, 24, 22, 0.06), 0 4px 14px rgba(16, 24, 22, 0.06);
 }
 * { box-sizing: border-box; }
+/* 26/08/2026 ("permite moverse hacia los costados, sensación de
+   inestabilidad -- corrígelo como Ventas en Vivo, que no lo permite"):
+   ese otro pane nunca tuvo este problema no porque tenga una regla
+   defensiva -- ahí simplemente ningún elemento supera nunca el ancho
+   de la pantalla. Acá, en cambio, con tantos componentes (filtros,
+   tablas anchas, gráficos con ejes rotados) es fácil que alguno se
+   pase por un pixel de más en algún breakpoint puntual, y sin esta
+   regla eso mueve TODA la página hacia el costado. El contenido
+   ancho a propósito (.table-scroll, tablas con overflow-x:auto)
+   sigue scrolleando igual, DENTRO de su propio contenedor -- esto
+   sólo evita que un desborde puntual arrastre la página entera. */
+html, body {
+  overflow-x: hidden;
+}
 body {
   margin: 0;
   background: var(--bg);

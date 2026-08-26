@@ -49,7 +49,34 @@ function DolarBcra() {
   );
 }
 
+// 26/08/2026 ("el boton Salir ya no tiene sentido aca"): con el login
+// unificado, entrar via panel-icom-salud ya NO pasa por el login propio
+// de este proyecto (ver middleware.ts, panelAuth) -- el usuario nunca
+// "inició sesión ACÁ" en un sentido que tenga algo que cerrar. Clickear
+// "Salir" llamaba a /api/logout (borra la cookie icom_auth de ESTE
+// proyecto, que ni se usó para entrar) y redirigía a /login -- ese
+// formulario aparecía flotando adentro del iframe, desconectado del
+// "Cerrar sesión" real (el del panel, en su sidebar). Se oculta el
+// botón cuando se detecta que la página corre embebida en un iframe
+// (window.self !== window.top) -- en el acceso standalone (visitar
+// ia40-dashboard-hztm.vercel.app directo, con SU PROPIO login real) el
+// botón sigue ahí, ese caso sí tiene una sesión propia que cerrar.
+function useEmbebidoEnIframe(): boolean {
+  const [embebido, setEmbebido] = useState(false);
+  useEffect(() => {
+    try {
+      setEmbebido(window.self !== window.top);
+    } catch {
+      // Un cross-origin estricto puede tirar al comparar -- si pasa,
+      // es casi seguro que SÍ está embebido (un top-level nunca tira acá).
+      setEmbebido(true);
+    }
+  }, []);
+  return embebido;
+}
+
 export default function AppHeader({ title, actions }: { title: string; actions?: ReactNode }) {
+  const embebido = useEmbebidoEnIframe();
   return (
     <header className="app-header">
       {/* 26/08/2026 ("dejala similar a la de gestion de talentos, quita
@@ -67,15 +94,17 @@ export default function AppHeader({ title, actions }: { title: string; actions?:
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
           <DolarBcra />
           {actions}
-          <button
-            className="app-header-nav-btn"
-            onClick={() => {
-              fetch("/api/logout", { method: "POST" }).finally(() => (window.location.href = "/login"));
-            }}
-            title="Cerrar sesión"
-          >
-            Salir
-          </button>
+          {!embebido && (
+            <button
+              className="app-header-nav-btn"
+              onClick={() => {
+                fetch("/api/logout", { method: "POST" }).finally(() => (window.location.href = "/login"));
+              }}
+              title="Cerrar sesión"
+            >
+              Salir
+            </button>
+          )}
         </div>
       </div>
     </header>
