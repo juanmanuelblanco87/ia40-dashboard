@@ -136,8 +136,13 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
   // trae ninguna foto (pictures:[]). No es un caso raro -- pasa. El
   // fallback (más abajo, cuando se resuelve un vendedor puntual) pide
   // /items/{id} de ESE vendedor, que sí suele traer fotos propias.
+  // 27/08/2026 (2do intento -- pictures venía [] para este producto):
+  // description_pictures es OTRO array del mismo /products/{id}, no
+  // probado hasta ahora -- a veces trae fotos aunque pictures esté
+  // vacío.
   const imagenProducto: string | null =
-    dataProducto?.pictures?.[0]?.secure_url || dataProducto?.pictures?.[0]?.url || null;
+    dataProducto?.pictures?.[0]?.secure_url || dataProducto?.pictures?.[0]?.url ||
+    dataProducto?.description_pictures?.[0]?.secure_url || dataProducto?.description_pictures?.[0]?.url || null;
 
   // Ganador de la buybox: se sigue el id hasta /items/{id} -- cuando
   // SÍ viene poblado (no siempre, ver comentario de arriba), es la
@@ -183,24 +188,24 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
         for (const candidato of ordenParaFoto) {
           if (!candidato.item_id) continue;
           try {
-            const respFoto = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`, { headers });
-            if (!respFoto.ok) {
-              // 27/08/2026 (diagnóstico temporal, 4ta vuelta -- el
-              // usuario señaló que nunca se leyó el CUERPO del 403,
-              // sólo el status code, y que un ítem de catálogo puede
-              // tener una forma reducida distinta a la "clásica"
-              // (sin pictures) -- puede que el 403 real explique POR
-              // QUÉ, o que sea otra causa (rate limit, permisos).
-              // Sacar una vez confirmado.
-              const cuerpo = await respFoto.text().catch(() => null);
-              console.log("[meliItemPrice] diag-imagen4", candidato.item_id, respFoto.status, cuerpo);
-              continue;
+            let respFoto = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`, { headers });
+            // 27/08/2026 (diagnóstico confirmado -- el cuerpo del 403
+            // real es {"error":"access_denied",...}): hipótesis -- el
+            // token autenticado (de NUESTRA cuenta vendedora) se lo
+            // niega por ser una publicación de OTRO vendedor (posible
+            // medida anti-scraping entre competidores), mientras que
+            // una consulta pública/anónima (la misma que ve cualquier
+            // comprador en la web) podría no tener esa restricción.
+            // Se reintenta sin el header de autorización sólo en ese
+            // caso puntual.
+            if (respFoto.status === 403) {
+              const anon = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`);
+              console.log("[meliItemPrice] diag-imagen5", candidato.item_id, "reintento anónimo, status:", anon.status);
+              respFoto = anon;
             }
+            if (!respFoto.ok) continue;
             const dataFoto = await respFoto.json();
             const foto = dataFoto.pictures?.[0]?.secure_url || dataFoto.pictures?.[0]?.url || dataFoto.thumbnail || null;
-            if (!foto) {
-              console.log("[meliItemPrice] diag-imagen4", candidato.item_id, "200 pero sin foto -- keys:", JSON.stringify(Object.keys(dataFoto)), "pictures:", JSON.stringify(dataFoto.pictures));
-            }
             if (foto) { imagenElegido = foto; break; }
           } catch (e) {
             continue; // timeout/red -- se prueba el siguiente, nunca rompe la respuesta de precio
