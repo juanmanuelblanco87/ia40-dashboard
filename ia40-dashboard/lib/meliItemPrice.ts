@@ -22,14 +22,37 @@
 import { getAccessToken } from "@/lib/meliApi";
 
 /** Extrae el id de MeLi (MLA123456789) de una URL de producto/ítem
- * real -- ambos formatos vistos en uso: ".../p/MLA36197464" (página
- * de PRODUCTO, catálogo agregado de varios vendedores) y
- * ".../MLA-123456789-..." (página de un ÍTEM/publicación puntual).
- * Cada uno usa un endpoint distinto de la API (ver obtenerPrecioItem). */
+ * real -- 3 formatos vistos en uso: ".../p/MLA36197464" (página de
+ * PRODUCTO, catálogo agregado de varios vendedores), ".../up/
+ * MLAU3559050907" (página de producto de catálogo "unificado", nota
+ * el prefijo MLAU en vez de MLA) y ".../MLA-123456789-..." (página de
+ * un ÍTEM/publicación puntual). Cada uno usa un endpoint distinto de
+ * la API (ver obtenerPrecioItem).
+ *
+ * 27/08/2026 (bug reportado, "funcionaba ayer... URL con /up/
+ * MLAU3559050907 y wid=MLA2571695282 en la query de tracking del
+ * buscador de MercadoLibre"): el formato /up/MLAU... no estaba
+ * contemplado, así que caía siempre al fallback genérico MLA-?\d{6,},
+ * que corría sobre la URL COMPLETA -- incluida la query string. Esa
+ * URL real trae "wid=MLA2571695282" (el id de un widget de resultados
+ * de búsqueda, sin relación con el producto) en la query, y el
+ * fallback lo tomaba por error en vez del id real del producto
+ * (MLAU3559050907, en el path). Fix: 1) reconocer /up/MLAU..., 2)
+ * limitar el fallback genérico a sólo el PATH de la URL (nunca query
+ * ni fragment) -- un id de producto real siempre vive en el path,
+ * nunca en un parámetro de tracking. */
 export function extraerIdMeli(url: string): string | null {
-  const m = url.match(/\/p\/(MLA\d+)/i) || url.match(/MLA-?(\d{6,})/i);
-  if (!m) return null;
-  const raw = m[1].toUpperCase();
+  const up = url.match(/\/up\/(MLAU?\d+)/i);
+  if (up) return up[1].toUpperCase();
+
+  const p = url.match(/\/p\/(MLA\d+)/i);
+  if (p) return p[1].toUpperCase();
+
+  let pathname = url;
+  try { pathname = new URL(url).pathname; } catch (e) { /* URL rara -- se sigue con el string completo, mismo comportamiento de antes */ }
+  const generico = pathname.match(/MLA-?(\d{6,})/i);
+  if (!generico) return null;
+  const raw = generico[1].toUpperCase();
   return raw.startsWith("MLA") ? raw : `MLA${raw}`;
 }
 
