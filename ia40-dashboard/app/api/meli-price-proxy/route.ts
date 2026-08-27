@@ -56,7 +56,11 @@ export async function GET(req: Request) {
   try {
     const resultado = await obtenerPrecioItem(idMeli);
     if (resultado.precio == null) {
-      return NextResponse.json({ ok: false, error: resultado.error || "No se pudo encontrar el precio." });
+      // 27/08/2026: se manda el título igual en el caso de error (ej.
+      // "varios vendedores con precios distintos") -- sirve para que
+      // el caller confirme que el producto identificado es el
+      // correcto, aunque no haya un precio único que devolver.
+      return NextResponse.json({ ok: false, error: resultado.error || "No se pudo encontrar el precio.", titulo: resultado.titulo ?? null });
     }
     return NextResponse.json({ ok: true, precio: resultado.precio, titulo: resultado.titulo ?? null, metodo: resultado.metodo });
   } catch (err: any) {

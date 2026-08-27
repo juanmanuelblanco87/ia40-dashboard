@@ -110,10 +110,34 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     const dataItems = await respItemsActivos.json();
     const activos: any[] = (dataItems?.results || []).filter((r: any) => typeof r?.price === "number" && r.price > 0);
     if (activos.length) {
-      const masBarato = activos.reduce((min, r) => (r.price < min.price ? r : min), activos[0]);
-      return { precio: Math.round(masBarato.price), titulo, metodo: "meli-api" };
+      const precios = activos.map((r) => r.price);
+      const min = Math.min(...precios);
+      const max = Math.max(...precios);
+      // 27/08/2026 (bug reportado, "esta mal 30.000... chequea la
+      // web": la página real mostraba $49.999 como precio principal,
+      // pero este producto tenía OTRO vendedor activo ofreciéndolo a
+      // $30.000 -- un precio real, no un error de datos, pero no el
+      // que la página le muestra a un comprador por default). Ya se
+      // probó antes leer `buy_box_winner.price` de GET /products/{id}
+      // (viene null en la práctica, ver comentario más arriba) y
+      // tomar el MÍNIMO a ciegas entre vendedores activos (el bug de
+      // este mismo caso) -- ninguno de los 2 identifica de forma
+      // confiable "el" precio que un comprador ve. Cuando hay más de
+      // un precio activo distinto, no se puede elegir uno solo sin
+      // ambigüedad -- se devuelve null + el rango en el mensaje,
+      // mismo criterio que ya usa la heurística de texto de
+      // alquileres-scrape.js ("revisá, no se garantiza"): nunca se
+      // inventa un número.
+      if (min === max) {
+        return { precio: Math.round(min), titulo, metodo: "meli-api" };
+      }
+      return {
+        precio: null,
+        titulo,
+        error: `Este producto tiene ${activos.length} vendedores activos con precios distintos (entre $${Math.round(min).toLocaleString("es-AR")} y $${Math.round(max).toLocaleString("es-AR")}) -- no se puede elegir uno solo automáticamente. Revisá la página real y cargá el precio a mano.`,
+      };
     }
   }
 
-  return { precio: null, error: "Este producto de MercadoLibre no tiene ningún vendedor activo con precio en este momento." };
+  return { precio: null, titulo, error: "Este producto de MercadoLibre no tiene ningún vendedor activo con precio en este momento." };
 }
