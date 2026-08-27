@@ -216,9 +216,14 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               if (foto) { imagenElegido = foto; break; }
             }
 
-            // Endpoint 1: búsqueda pública por id -- no requiere ser
-            // el dueño de la publicación.
-            const respBusqueda = await fetch(`https://api.mercadolibre.com/sites/MLA/search?ids=${candidato.item_id}`);
+            // Endpoint 1: búsqueda pública por id -- confirmado que
+            // SIN el header de autorización da 403 igual (ver
+            // diag-imagen7, mismo bloqueo de tráfico anónimo que ya se
+            // vio en otros endpoints esta sesión) -- se prueba CON el
+            // mismo token que sí funciona para /items/{id} y
+            // /products/{id}, por si el endpoint acepta auth aunque no
+            // la exija.
+            const respBusqueda = await fetch(`https://api.mercadolibre.com/sites/MLA/search?ids=${candidato.item_id}`, { headers });
             let fotoBusqueda: string | null = null;
             if (respBusqueda.ok) {
               const dataBusqueda = await respBusqueda.json();
@@ -227,8 +232,9 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               if (fotoBusqueda) { imagenElegido = fotoBusqueda; break; }
             }
 
-            // Endpoint 2: sub-recurso público sólo de imágenes.
-            const respFotos = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}/pictures`);
+            // Endpoint 2: sub-recurso de imágenes -- mismo criterio,
+            // se prueba con el token también.
+            const respFotos = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}/pictures`, { headers });
             let fotoSub: string | null = null;
             if (respFotos.ok) {
               const dataFotos = await respFotos.json();
