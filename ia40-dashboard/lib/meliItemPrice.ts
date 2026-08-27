@@ -59,6 +59,9 @@ export function extraerIdMeli(url: string): string | null {
 export interface PrecioItemResult {
   precio: number | null;
   titulo?: string | null;
+  // 27/08/2026 ("trae una imagen del producto miniatura"): la primer
+  // foto del ítem/producto, para mostrar como miniatura en Alquileres.
+  imagen?: string | null;
   metodo?: string;
   error?: string;
 }
@@ -106,7 +109,8 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
   if (resp.ok) {
     const data = await resp.json();
     if (typeof data.price === "number" && data.price > 0) {
-      return { precio: Math.round(data.price), titulo: data.title ?? null, metodo: "meli-api" };
+      const imagen = data.pictures?.[0]?.secure_url || data.pictures?.[0]?.url || data.thumbnail || null;
+      return { precio: Math.round(data.price), titulo: data.title ?? null, imagen, metodo: "meli-api" };
     }
   }
 
@@ -121,6 +125,11 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
 
   const dataProducto = respProducto.ok ? await respProducto.json().catch(() => null) : null;
   const titulo = dataProducto?.name ?? null;
+  // La foto del PRODUCTO de catálogo (no de un vendedor puntual) --
+  // es la misma para cualquiera de los vendedores activos, así que no
+  // hace falta resolverla de nuevo por cada rama de abajo.
+  const imagen: string | null =
+    dataProducto?.pictures?.[0]?.secure_url || dataProducto?.pictures?.[0]?.url || null;
 
   // Ganador de la buybox: se sigue el id hasta /items/{id} -- cuando
   // SÍ viene poblado (no siempre, ver comentario de arriba), es la
@@ -132,7 +141,8 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     if (respGanador.ok) {
       const dataGanador = await respGanador.json();
       if (typeof dataGanador.price === "number" && dataGanador.price > 0) {
-        return { precio: Math.round(dataGanador.price), titulo: dataGanador.title ?? titulo, metodo: "meli-api" };
+        const imagenGanador = dataGanador.pictures?.[0]?.secure_url || dataGanador.pictures?.[0]?.url || dataGanador.thumbnail || imagen;
+        return { precio: Math.round(dataGanador.price), titulo: dataGanador.title ?? titulo, imagen: imagenGanador, metodo: "meli-api" };
       }
     }
   }
@@ -147,6 +157,7 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       return {
         precio: Math.round(elegido.price),
         titulo,
+        imagen,
         // Sin tienda oficial de por medio, el número es más arriesgado
         // (podría ser un vendedor no verificado con precio raro) --
         // metodo distinto para que el caller lo marque como menor
@@ -156,5 +167,5 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     }
   }
 
-  return { precio: null, titulo, error: "Este producto de MercadoLibre no tiene ningún vendedor activo con precio en este momento." };
+  return { precio: null, titulo, imagen, error: "Este producto de MercadoLibre no tiene ningún vendedor activo con precio en este momento." };
 }
