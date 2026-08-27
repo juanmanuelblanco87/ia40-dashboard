@@ -175,7 +175,21 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
         if (respElegido.ok) {
           const dataElegido = await respElegido.json();
           imagenElegido = dataElegido.pictures?.[0]?.secure_url || dataElegido.pictures?.[0]?.url || dataElegido.thumbnail || null;
+          // 27/08/2026 (diagnóstico temporal, 2da vuelta -- "sigue
+          // vacía" después del fallback): confirmar si el fetch del
+          // vendedor elegido siquiera se hizo, si respondió ok, y qué
+          // trae. Sacar una vez confirmado.
+          console.log("[meliItemPrice] diag-imagen2", elegido.item_id, JSON.stringify({
+            respElegidoOk: respElegido.ok,
+            imagenResuelta: imagenElegido,
+            picturesKeys: dataElegido.pictures ? dataElegido.pictures.slice(0, 1) : null,
+            thumbnail: dataElegido.thumbnail ?? null,
+          }));
+        } else {
+          console.log("[meliItemPrice] diag-imagen2", elegido.item_id, "fetch NO ok, status:", respElegido.status);
         }
+      } else {
+        console.log("[meliItemPrice] diag-imagen2 -- no entro al fallback:", JSON.stringify({ imagenProducto, elegidoItemId: elegido.item_id ?? null }));
       }
       return {
         precio: Math.round(elegido.price),
