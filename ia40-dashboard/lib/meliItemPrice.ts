@@ -128,17 +128,16 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
   // La foto del PRODUCTO de catálogo (no de un vendedor puntual) --
   // es la misma para cualquiera de los vendedores activos, así que no
   // hace falta resolverla de nuevo por cada rama de abajo.
-  const imagen: string | null =
+  //
+  // 27/08/2026 (diagnóstico confirmado, "por algún motivo en este sku
+  // falla la imagen" -- MLAU2712281290): pictures NO viene vacío por un
+  // nombre de campo mal asumido (secure_url/url son correctos) -- para
+  // ESTE producto de catálogo, GET /products/{id} directamente no
+  // trae ninguna foto (pictures:[]). No es un caso raro -- pasa. El
+  // fallback (más abajo, cuando se resuelve un vendedor puntual) pide
+  // /items/{id} de ESE vendedor, que sí suele traer fotos propias.
+  const imagenProducto: string | null =
     dataProducto?.pictures?.[0]?.secure_url || dataProducto?.pictures?.[0]?.url || null;
-  // 27/08/2026 (diagnóstico temporal, "por algún motivo en este sku
-  // falla la imagen" -- MLAU2712281290): nunca se confirmó la forma
-  // real de un elemento de pictures[], sólo se asumió secure_url/url
-  // por analogía con /items/{id}. Loguea el array completo (recortado)
-  // para esta cuenta -- sacar una vez confirmado el campo real.
-  console.log("[meliItemPrice] diag-imagen", idMeli, JSON.stringify({
-    imagenResuelta: imagen,
-    pictures: (dataProducto?.pictures || []).slice(0, 2),
-  }));
 
   // Ganador de la buybox: se sigue el id hasta /items/{id} -- cuando
   // SÍ viene poblado (no siempre, ver comentario de arriba), es la
@@ -150,7 +149,7 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     if (respGanador.ok) {
       const dataGanador = await respGanador.json();
       if (typeof dataGanador.price === "number" && dataGanador.price > 0) {
-        const imagenGanador = dataGanador.pictures?.[0]?.secure_url || dataGanador.pictures?.[0]?.url || dataGanador.thumbnail || imagen;
+        const imagenGanador = dataGanador.pictures?.[0]?.secure_url || dataGanador.pictures?.[0]?.url || dataGanador.thumbnail || imagenProducto;
         return { precio: Math.round(dataGanador.price), titulo: dataGanador.title ?? titulo, imagen: imagenGanador, metodo: "meli-api" };
       }
     }
@@ -163,10 +162,25 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       const oficiales = activos.filter((r) => r.official_store_id != null);
       const candidatos = oficiales.length ? oficiales : activos;
       const elegido = candidatos.reduce((min, r) => (r.price < min.price ? r : min), candidatos[0]);
+      // 27/08/2026 ("por algún motivo en este sku falla la imagen"):
+      // /products/{id}/items?status=active no trae pictures en el
+      // resumen de cada vendedor (confirmado, ver comentario de
+      // imagenProducto más arriba) -- si el producto de catálogo
+      // tampoco tenía foto propia, se pide el detalle completo del
+      // vendedor elegido (mismo /items/{id} que ya se usa para el
+      // ganador de la buybox) sólo para sacarle la foto.
+      let imagenElegido = imagenProducto;
+      if (!imagenElegido && elegido.item_id) {
+        const respElegido = await fetch(`https://api.mercadolibre.com/items/${elegido.item_id}`, { headers });
+        if (respElegido.ok) {
+          const dataElegido = await respElegido.json();
+          imagenElegido = dataElegido.pictures?.[0]?.secure_url || dataElegido.pictures?.[0]?.url || dataElegido.thumbnail || null;
+        }
+      }
       return {
         precio: Math.round(elegido.price),
         titulo,
-        imagen,
+        imagen: imagenElegido,
         // Sin tienda oficial de por medio, el número es más arriesgado
         // (podría ser un vendedor no verificado con precio raro) --
         // metodo distinto para que el caller lo marque como menor
@@ -176,5 +190,5 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     }
   }
 
-  return { precio: null, titulo, imagen, error: "Este producto de MercadoLibre no tiene ningún vendedor activo con precio en este momento." };
+  return { precio: null, titulo, imagen: imagenProducto, error: "Este producto de MercadoLibre no tiene ningún vendedor activo con precio en este momento." };
 }
