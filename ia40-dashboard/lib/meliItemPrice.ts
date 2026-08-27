@@ -184,9 +184,23 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
           if (!candidato.item_id) continue;
           try {
             const respFoto = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`, { headers });
-            if (!respFoto.ok) continue; // 403/404 de ESE vendedor puntual -- se prueba el siguiente
+            if (!respFoto.ok) {
+              // 27/08/2026 (diagnóstico temporal, 4ta vuelta -- el
+              // usuario señaló que nunca se leyó el CUERPO del 403,
+              // sólo el status code, y que un ítem de catálogo puede
+              // tener una forma reducida distinta a la "clásica"
+              // (sin pictures) -- puede que el 403 real explique POR
+              // QUÉ, o que sea otra causa (rate limit, permisos).
+              // Sacar una vez confirmado.
+              const cuerpo = await respFoto.text().catch(() => null);
+              console.log("[meliItemPrice] diag-imagen4", candidato.item_id, respFoto.status, cuerpo);
+              continue;
+            }
             const dataFoto = await respFoto.json();
             const foto = dataFoto.pictures?.[0]?.secure_url || dataFoto.pictures?.[0]?.url || dataFoto.thumbnail || null;
+            if (!foto) {
+              console.log("[meliItemPrice] diag-imagen4", candidato.item_id, "200 pero sin foto -- keys:", JSON.stringify(Object.keys(dataFoto)), "pictures:", JSON.stringify(dataFoto.pictures));
+            }
             if (foto) { imagenElegido = foto; break; }
           } catch (e) {
             continue; // timeout/red -- se prueba el siguiente, nunca rompe la respuesta de precio
