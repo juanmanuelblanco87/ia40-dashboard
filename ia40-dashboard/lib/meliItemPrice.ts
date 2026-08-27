@@ -179,18 +179,26 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       let imagenElegido = imagenProducto;
       if (!imagenElegido) {
         const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5);
+        // 27/08/2026 (diagnóstico temporal, 3ra vuelta -- "sigue
+        // igual" después de probar varios vendedores): traza CADA
+        // intento (status + si tenía pictures) -- si los 5 dan 403,
+        // no es "mala suerte con el elegido", es algo más sistemático
+        // para este producto/categoría. Sacar una vez confirmado.
+        const intentos: any[] = [];
         for (const candidato of ordenParaFoto) {
-          if (!candidato.item_id) continue;
+          if (!candidato.item_id) { intentos.push({ item_id: null, motivo: 'sin item_id' }); continue; }
           try {
             const respFoto = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`, { headers });
-            if (!respFoto.ok) continue; // 403/404 de ESE vendedor puntual -- se prueba el siguiente
+            if (!respFoto.ok) { intentos.push({ item_id: candidato.item_id, status: respFoto.status }); continue; }
             const dataFoto = await respFoto.json();
             const foto = dataFoto.pictures?.[0]?.secure_url || dataFoto.pictures?.[0]?.url || dataFoto.thumbnail || null;
+            intentos.push({ item_id: candidato.item_id, status: respFoto.status, tienePictures: !!dataFoto.pictures?.length, foto });
             if (foto) { imagenElegido = foto; break; }
-          } catch (e) {
-            continue; // timeout/red -- se prueba el siguiente, nunca rompe la respuesta de precio
+          } catch (e: any) {
+            intentos.push({ item_id: candidato.item_id, error: String(e?.message ?? e) });
           }
         }
+        console.log("[meliItemPrice] diag-imagen3", idMeli, JSON.stringify({ imagenElegidoFinal: imagenElegido, intentos }));
       }
       return {
         precio: Math.round(elegido.price),
