@@ -77,12 +77,25 @@ export interface PrecioItemResult {
  * catálogo -- confirmado en vivo con el modo ?debug=1 de
  * app/api/meli-price-proxy/route.ts que ese campo viene `null` en la
  * práctica (al menos para este producto, con esta cuenta), aunque el
- * producto SÍ tenía 2 vendedores activos con precio real. El dato
- * correcto sale de GET /products/{id}/items?status=active -- la misma
- * lista de "ítems que compiten por este producto" que arma la página
- * pública -- de ahí se toma el precio más bajo entre los activos (no
- * asumir que el primero del array es el ganador; más robusto tomar el
- * mínimo real). */
+ * producto SÍ tenía 2 vendedores activos con precio real.
+ *
+ * 27/08/2026 (2do bug reportado, "esta mal 30.000... chequea la web" --
+ * la página real mostraba $49.999): el fix anterior tomaba el precio
+ * MÁS BAJO entre los vendedores activos de GET /products/{id}/items,
+ * asumiendo que "el más barato real" alcanzaba -- pero eso también
+ * puede ser un vendedor distinto al que la página le muestra a un
+ * comprador por defecto (el "ganador de la buybox"). El usuario pidió
+ * explícitamente traer al ganador, no adivinar: "porque siempre son
+ * publicaciones de catálogo, sino no tiene sentido pegarle a la api si
+ * tengo que colocar a mano el numero". La pieza que faltaba: aunque
+ * `buy_box_winner.price` vino null la vez que se probó, el ID del
+ * ítem ganador (`buy_box_winner_item_id`, o anidado en
+ * `buy_box_winner.item_id` según la versión de la respuesta) SÍ debería
+ * venir poblado -- y con ese id se puede pedir el precio real y
+ * confiable por el mismo endpoint /items/{id} que ya se usa arriba
+ * para links directos de ítem (ese SÍ devuelve precio consistentemente).
+ * Sólo si no hay ganador identificable Y hay más de un precio activo
+ * distinto se cae al aviso de ambigüedad (no inventar un número). */
 export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResult> {
   const accessToken = await getAccessToken(); // puede tirar MeliAuthError, se propaga
   const headers = { authorization: `Bearer ${accessToken}` };
@@ -104,7 +117,23 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     return { precio: null, error: `Mercado Libre no encontró ${idMeli} (probado como ítem y como producto de catálogo).` };
   }
 
-  const titulo = respProducto.ok ? ((await respProducto.json())?.name ?? null) : null;
+  const dataProducto = respProducto.ok ? await respProducto.json().catch(() => null) : null;
+  const titulo = dataProducto?.name ?? null;
+
+  // Ganador de la buybox: se sigue su item_id hasta /items/{id} en vez
+  // de confiar en el precio embebido de /products/{id} (ese campo vino
+  // null la vez anterior que se lo probó).
+  const winnerItemId: string | undefined =
+    dataProducto?.buy_box_winner?.item_id || dataProducto?.buy_box_winner_item_id;
+  if (winnerItemId) {
+    const respGanador = await fetch(`https://api.mercadolibre.com/items/${winnerItemId}`, { headers });
+    if (respGanador.ok) {
+      const dataGanador = await respGanador.json();
+      if (typeof dataGanador.price === "number" && dataGanador.price > 0) {
+        return { precio: Math.round(dataGanador.price), titulo: dataGanador.title ?? titulo, metodo: "meli-api" };
+      }
+    }
+  }
 
   if (respItemsActivos.ok) {
     const dataItems = await respItemsActivos.json();
@@ -113,28 +142,16 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       const precios = activos.map((r) => r.price);
       const min = Math.min(...precios);
       const max = Math.max(...precios);
-      // 27/08/2026 (bug reportado, "esta mal 30.000... chequea la
-      // web": la página real mostraba $49.999 como precio principal,
-      // pero este producto tenía OTRO vendedor activo ofreciéndolo a
-      // $30.000 -- un precio real, no un error de datos, pero no el
-      // que la página le muestra a un comprador por default). Ya se
-      // probó antes leer `buy_box_winner.price` de GET /products/{id}
-      // (viene null en la práctica, ver comentario más arriba) y
-      // tomar el MÍNIMO a ciegas entre vendedores activos (el bug de
-      // este mismo caso) -- ninguno de los 2 identifica de forma
-      // confiable "el" precio que un comprador ve. Cuando hay más de
-      // un precio activo distinto, no se puede elegir uno solo sin
-      // ambigüedad -- se devuelve null + el rango en el mensaje,
-      // mismo criterio que ya usa la heurística de texto de
-      // alquileres-scrape.js ("revisá, no se garantiza"): nunca se
-      // inventa un número.
       if (min === max) {
         return { precio: Math.round(min), titulo, metodo: "meli-api" };
       }
+      // No se pudo identificar al ganador de la buybox (vino vacío, o
+      // su item no tenía precio) y hay varios precios activos
+      // distintos -- no inventar un número, avisar el rango real.
       return {
         precio: null,
         titulo,
-        error: `Este producto tiene ${activos.length} vendedores activos con precios distintos (entre $${Math.round(min).toLocaleString("es-AR")} y $${Math.round(max).toLocaleString("es-AR")}) -- no se puede elegir uno solo automáticamente. Revisá la página real y cargá el precio a mano.`,
+        error: `Este producto tiene ${activos.length} vendedores activos con precios distintos (entre $${Math.round(min).toLocaleString("es-AR")} y $${Math.round(max).toLocaleString("es-AR")}) -- no se pudo identificar automáticamente cuál es el vendedor destacado. Revisá la página real y cargá el precio a mano.`,
       };
     }
   }
