@@ -182,31 +182,42 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       // puntual, no hay más margen para insistir). Tope de 5 intentos
       // para no multiplicar sin límite los pedidos en un producto con
       // muchos vendedores.
+      // 27/08/2026 (confirmado con datos reales -- ver comentarios
+      // debajo -- y con investigación del usuario sobre las políticas
+      // de MercadoLibre): access_denied en publicaciones CLÁSICAS de
+      // terceros es un bloqueo deliberado de MeLi (anti-scraping entre
+      // competidores) -- ni el token autenticado propio ni una consulta
+      // anónima al mismo endpoint lo evitan (probado, ambos 403). No
+      // hay forma soportada de traer la foto de la publicación clásica
+      // de OTRO vendedor vía esta API. Único intento adicional antes
+      // de resignarse: la página pública del ítem (no la API) -- nunca
+      // se probó desde este proyecto (alquileres-scrape.js sí lo probó
+      // desde panel-icom-salud y ya dio 403 también, pero es un
+      // servidor/IP distinto).
       let imagenElegido = imagenProducto;
       if (!imagenElegido) {
         const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5);
         for (const candidato of ordenParaFoto) {
           if (!candidato.item_id) continue;
           try {
-            let respFoto = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`, { headers });
-            // 27/08/2026 (diagnóstico confirmado -- el cuerpo del 403
-            // real es {"error":"access_denied",...}): hipótesis -- el
-            // token autenticado (de NUESTRA cuenta vendedora) se lo
-            // niega por ser una publicación de OTRO vendedor (posible
-            // medida anti-scraping entre competidores), mientras que
-            // una consulta pública/anónima (la misma que ve cualquier
-            // comprador en la web) podría no tener esa restricción.
-            // Se reintenta sin el header de autorización sólo en ese
-            // caso puntual.
-            if (respFoto.status === 403) {
-              const anon = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`);
-              console.log("[meliItemPrice] diag-imagen5", candidato.item_id, "reintento anónimo, status:", anon.status);
-              respFoto = anon;
+            const respFoto = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`, { headers });
+            if (respFoto.ok) {
+              const dataFoto = await respFoto.json();
+              const foto = dataFoto.pictures?.[0]?.secure_url || dataFoto.pictures?.[0]?.url || dataFoto.thumbnail || null;
+              if (foto) { imagenElegido = foto; break; }
             }
-            if (!respFoto.ok) continue;
-            const dataFoto = await respFoto.json();
-            const foto = dataFoto.pictures?.[0]?.secure_url || dataFoto.pictures?.[0]?.url || dataFoto.thumbnail || null;
-            if (foto) { imagenElegido = foto; break; }
+            // 403 (u otro error) del endpoint de la API -- último
+            // intento, la página pública del ítem (no requiere login
+            // para verla, cualquier comprador la ve).
+            const respPagina = await fetch(`https://articulo.mercadolibre.com.ar/${candidato.item_id}`);
+            if (respPagina.ok) {
+              const html = await respPagina.text();
+              const match = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+              console.log("[meliItemPrice] diag-imagen6", candidato.item_id, "pagina publica status:", respPagina.status, "og:image encontrado:", !!match, "bytes:", html.length);
+              if (match && match[1]) { imagenElegido = match[1]; break; }
+            } else {
+              console.log("[meliItemPrice] diag-imagen6", candidato.item_id, "pagina publica status:", respPagina.status);
+            }
           } catch (e) {
             continue; // timeout/red -- se prueba el siguiente, nunca rompe la respuesta de precio
           }
