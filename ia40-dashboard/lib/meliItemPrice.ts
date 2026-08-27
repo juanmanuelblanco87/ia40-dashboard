@@ -130,6 +130,15 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
   // hace falta resolverla de nuevo por cada rama de abajo.
   const imagen: string | null =
     dataProducto?.pictures?.[0]?.secure_url || dataProducto?.pictures?.[0]?.url || null;
+  // 27/08/2026 (diagnóstico temporal, "por algún motivo en este sku
+  // falla la imagen" -- MLAU2712281290): nunca se confirmó la forma
+  // real de un elemento de pictures[], sólo se asumió secure_url/url
+  // por analogía con /items/{id}. Loguea el array completo (recortado)
+  // para esta cuenta -- sacar una vez confirmado el campo real.
+  console.log("[meliItemPrice] diag-imagen", idMeli, JSON.stringify({
+    imagenResuelta: imagen,
+    pictures: (dataProducto?.pictures || []).slice(0, 2),
+  }));
 
   // Ganador de la buybox: se sigue el id hasta /items/{id} -- cuando
   // SÍ viene poblado (no siempre, ver comentario de arriba), es la
