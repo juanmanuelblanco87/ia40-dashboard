@@ -162,34 +162,35 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       const oficiales = activos.filter((r) => r.official_store_id != null);
       const candidatos = oficiales.length ? oficiales : activos;
       const elegido = candidatos.reduce((min, r) => (r.price < min.price ? r : min), candidatos[0]);
-      // 27/08/2026 ("por algún motivo en este sku falla la imagen"):
-      // /products/{id}/items?status=active no trae pictures en el
-      // resumen de cada vendedor (confirmado, ver comentario de
-      // imagenProducto más arriba) -- si el producto de catálogo
-      // tampoco tenía foto propia, se pide el detalle completo del
-      // vendedor elegido (mismo /items/{id} que ya se usa para el
-      // ganador de la buybox) sólo para sacarle la foto.
+      // 27/08/2026 ("por algún motivo en este sku falla la imagen" ->
+      // "sigue igual" después del 1er fallback): /products/{id}/items
+      // no trae pictures en el resumen (confirmado), y pedir el
+      // detalle completo del vendedor ELEGIDO puntual puede devolver
+      // 403 -- confirmado con el log de diagnóstico (MLA1952912100,
+      // "fetch NO ok, status: 403") -- MercadoLibre le niega a esta
+      // cuenta el detalle completo de ESE ítem puntual (no es un bug
+      // de nuestro lado, la API lo rechaza). En vez de resignarse con
+      // el primer 403, se prueba con el resto de los vendedores
+      // activos (ordenados por precio, el mismo orden en el que se
+      // los preferiría) hasta encontrar uno cuyo detalle sí sea
+      // accesible -- tope de 5 intentos para no multiplicar
+      // indefinidamente los pedidos a la API en un producto con
+      // muchos vendedores.
       let imagenElegido = imagenProducto;
-      if (!imagenElegido && elegido.item_id) {
-        const respElegido = await fetch(`https://api.mercadolibre.com/items/${elegido.item_id}`, { headers });
-        if (respElegido.ok) {
-          const dataElegido = await respElegido.json();
-          imagenElegido = dataElegido.pictures?.[0]?.secure_url || dataElegido.pictures?.[0]?.url || dataElegido.thumbnail || null;
-          // 27/08/2026 (diagnóstico temporal, 2da vuelta -- "sigue
-          // vacía" después del fallback): confirmar si el fetch del
-          // vendedor elegido siquiera se hizo, si respondió ok, y qué
-          // trae. Sacar una vez confirmado.
-          console.log("[meliItemPrice] diag-imagen2", elegido.item_id, JSON.stringify({
-            respElegidoOk: respElegido.ok,
-            imagenResuelta: imagenElegido,
-            picturesKeys: dataElegido.pictures ? dataElegido.pictures.slice(0, 1) : null,
-            thumbnail: dataElegido.thumbnail ?? null,
-          }));
-        } else {
-          console.log("[meliItemPrice] diag-imagen2", elegido.item_id, "fetch NO ok, status:", respElegido.status);
+      if (!imagenElegido) {
+        const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5);
+        for (const candidato of ordenParaFoto) {
+          if (!candidato.item_id) continue;
+          try {
+            const respFoto = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`, { headers });
+            if (!respFoto.ok) continue; // 403/404 de ESE vendedor puntual -- se prueba el siguiente
+            const dataFoto = await respFoto.json();
+            const foto = dataFoto.pictures?.[0]?.secure_url || dataFoto.pictures?.[0]?.url || dataFoto.thumbnail || null;
+            if (foto) { imagenElegido = foto; break; }
+          } catch (e) {
+            continue; // timeout/red -- se prueba el siguiente, nunca rompe la respuesta de precio
+          }
         }
-      } else {
-        console.log("[meliItemPrice] diag-imagen2 -- no entro al fallback:", JSON.stringify({ imagenProducto, elegidoItemId: elegido.item_id ?? null }));
       }
       return {
         precio: Math.round(elegido.price),
