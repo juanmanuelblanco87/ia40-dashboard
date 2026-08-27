@@ -216,14 +216,19 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               if (foto) { imagenElegido = foto; break; }
             }
 
-            // Endpoint 1: búsqueda pública por id -- confirmado que
-            // SIN el header de autorización da 403 igual (ver
-            // diag-imagen7, mismo bloqueo de tráfico anónimo que ya se
-            // vio en otros endpoints esta sesión) -- se prueba CON el
-            // mismo token que sí funciona para /items/{id} y
-            // /products/{id}, por si el endpoint acepta auth aunque no
-            // la exija.
-            const respBusqueda = await fetch(`https://api.mercadolibre.com/sites/MLA/search?ids=${candidato.item_id}`, { headers });
+            // 27/08/2026: probado CON y SIN el token, ambos dan 403 en
+            // /sites/MLA/search (diag-imagen7) -- no es un tema de
+            // autenticación. Hipótesis nueva: falta un User-Agent
+            // real -- fetch() de Node manda uno genérico de servidor,
+            // y varios sistemas anti-bot (posiblemente el de
+            // MercadoLibre) bloquean eso específicamente en endpoints
+            // no estrictamente OAuth-gated, aunque acepten cualquier
+            // navegador real. Barato de probar antes de escalar a
+            // scraping con navegador headless.
+            const headersNavegador = { ...headers, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" };
+
+            // Endpoint 1: búsqueda pública por id.
+            const respBusqueda = await fetch(`https://api.mercadolibre.com/sites/MLA/search?ids=${candidato.item_id}`, { headers: headersNavegador });
             let fotoBusqueda: string | null = null;
             if (respBusqueda.ok) {
               const dataBusqueda = await respBusqueda.json();
@@ -232,9 +237,8 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               if (fotoBusqueda) { imagenElegido = fotoBusqueda; break; }
             }
 
-            // Endpoint 2: sub-recurso de imágenes -- mismo criterio,
-            // se prueba con el token también.
-            const respFotos = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}/pictures`, { headers });
+            // Endpoint 2: sub-recurso de imágenes -- mismo criterio.
+            const respFotos = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}/pictures`, { headers: headersNavegador });
             let fotoSub: string | null = null;
             if (respFotos.ok) {
               const dataFotos = await respFotos.json();
@@ -246,8 +250,9 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
             }
 
             // Último recurso: la página pública del ítem (no requiere
-            // login para verla, cualquier comprador la ve).
-            const respPagina = await fetch(`https://articulo.mercadolibre.com.ar/${candidato.item_id}`);
+            // login para verla, cualquier comprador la ve) -- mismo
+            // User-Agent, sin auth (no lo necesita ningún navegador).
+            const respPagina = await fetch(`https://articulo.mercadolibre.com.ar/${candidato.item_id}`, { headers: { "User-Agent": headersNavegador["User-Agent"] } });
             let matchPagina = false;
             if (respPagina.ok) {
               const html = await respPagina.text();
