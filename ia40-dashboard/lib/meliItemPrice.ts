@@ -162,43 +162,36 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       const oficiales = activos.filter((r) => r.official_store_id != null);
       const candidatos = oficiales.length ? oficiales : activos;
       const elegido = candidatos.reduce((min, r) => (r.price < min.price ? r : min), candidatos[0]);
-      // 27/08/2026 ("por algún motivo en este sku falla la imagen" ->
-      // "sigue igual" después del 1er fallback): /products/{id}/items
-      // no trae pictures en el resumen (confirmado), y pedir el
-      // detalle completo del vendedor ELEGIDO puntual puede devolver
-      // 403 -- confirmado con el log de diagnóstico (MLA1952912100,
-      // "fetch NO ok, status: 403") -- MercadoLibre le niega a esta
-      // cuenta el detalle completo de ESE ítem puntual (no es un bug
-      // de nuestro lado, la API lo rechaza). En vez de resignarse con
-      // el primer 403, se prueba con el resto de los vendedores
-      // activos (ordenados por precio, el mismo orden en el que se
-      // los preferiría) hasta encontrar uno cuyo detalle sí sea
-      // accesible -- tope de 5 intentos para no multiplicar
-      // indefinidamente los pedidos a la API en un producto con
+      // 27/08/2026 ("por algún motivo en este sku falla la imagen"):
+      // /products/{id}/items no trae pictures en el resumen
+      // (confirmado), así que se pide el detalle completo de algún
+      // vendedor activo (mismo endpoint /items/{id} que ya se usa para
+      // el ganador de la buybox) sólo para sacarle la foto -- probando
+      // varios por si alguno da 403 (candidato inaccesible para esta
+      // cuenta, sin relación con nuestro código -- 3 vueltas de
+      // diagnóstico con un caso real, MLAU2712281290, confirmaron esto:
+      // el ÚNICO vendedor activo de ese producto daba 403 al pedir su
+      // detalle completo, precio ya resuelto por otro lado. Sin
+      // ningún otro vendedor para probar, ese producto en particular
+      // se queda sin imagen -- límite real de la API para ese ítem
+      // puntual, no hay más margen para insistir). Tope de 5 intentos
+      // para no multiplicar sin límite los pedidos en un producto con
       // muchos vendedores.
       let imagenElegido = imagenProducto;
       if (!imagenElegido) {
         const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5);
-        // 27/08/2026 (diagnóstico temporal, 3ra vuelta -- "sigue
-        // igual" después de probar varios vendedores): traza CADA
-        // intento (status + si tenía pictures) -- si los 5 dan 403,
-        // no es "mala suerte con el elegido", es algo más sistemático
-        // para este producto/categoría. Sacar una vez confirmado.
-        const intentos: any[] = [];
         for (const candidato of ordenParaFoto) {
-          if (!candidato.item_id) { intentos.push({ item_id: null, motivo: 'sin item_id' }); continue; }
+          if (!candidato.item_id) continue;
           try {
             const respFoto = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}`, { headers });
-            if (!respFoto.ok) { intentos.push({ item_id: candidato.item_id, status: respFoto.status }); continue; }
+            if (!respFoto.ok) continue; // 403/404 de ESE vendedor puntual -- se prueba el siguiente
             const dataFoto = await respFoto.json();
             const foto = dataFoto.pictures?.[0]?.secure_url || dataFoto.pictures?.[0]?.url || dataFoto.thumbnail || null;
-            intentos.push({ item_id: candidato.item_id, status: respFoto.status, tienePictures: !!dataFoto.pictures?.length, foto });
             if (foto) { imagenElegido = foto; break; }
-          } catch (e: any) {
-            intentos.push({ item_id: candidato.item_id, error: String(e?.message ?? e) });
+          } catch (e) {
+            continue; // timeout/red -- se prueba el siguiente, nunca rompe la respuesta de precio
           }
         }
-        console.log("[meliItemPrice] diag-imagen3", idMeli, JSON.stringify({ imagenElegidoFinal: imagenElegido, intentos }));
       }
       return {
         precio: Math.round(elegido.price),
