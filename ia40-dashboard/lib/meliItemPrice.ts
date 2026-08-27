@@ -69,33 +69,35 @@ export interface PrecioItemResult {
  * un precio no encontrado -- MeliAuthError (cuenta no conectada) sí se
  * deja propagar, el caller la maneja.
  *
- * 25/08/2026 (bug reportado con captura: "no funciona traer el precio
- * de mercado Libre y es incorrecto que el producto no tenga precio" --
- * el usuario confirmó que el producto SÍ tenía vendedor activo en la
- * web real): la primera versión de esta función leía
- * `buy_box_winner.price` de GET /products/{id} para el caso de
- * catálogo -- confirmado en vivo con el modo ?debug=1 de
- * app/api/meli-price-proxy/route.ts que ese campo viene `null` en la
- * práctica (al menos para este producto, con esta cuenta), aunque el
- * producto SÍ tenía 2 vendedores activos con precio real.
+ * 25/08/2026 (bug reportado, "no funciona traer el precio... es
+ * incorrecto que no tenga precio"): la 1ra versión leía
+ * `buy_box_winner.price` de GET /products/{id} -- confirmado que
+ * viene `null` en la práctica.
  *
- * 27/08/2026 (2do bug reportado, "esta mal 30.000... chequea la web" --
- * la página real mostraba $49.999): el fix anterior tomaba el precio
- * MÁS BAJO entre los vendedores activos de GET /products/{id}/items,
- * asumiendo que "el más barato real" alcanzaba -- pero eso también
- * puede ser un vendedor distinto al que la página le muestra a un
- * comprador por defecto (el "ganador de la buybox"). El usuario pidió
- * explícitamente traer al ganador, no adivinar: "porque siempre son
- * publicaciones de catálogo, sino no tiene sentido pegarle a la api si
- * tengo que colocar a mano el numero". La pieza que faltaba: aunque
- * `buy_box_winner.price` vino null la vez que se probó, el ID del
- * ítem ganador (`buy_box_winner_item_id`, o anidado en
- * `buy_box_winner.item_id` según la versión de la respuesta) SÍ debería
- * venir poblado -- y con ese id se puede pedir el precio real y
- * confiable por el mismo endpoint /items/{id} que ya se usa arriba
- * para links directos de ítem (ese SÍ devuelve precio consistentemente).
- * Sólo si no hay ganador identificable Y hay más de un precio activo
- * distinto se cae al aviso de ambigüedad (no inventar un número). */
+ * 27/08/2026 (3 vueltas de diagnóstico con un caso real,
+ * MLA25413331, 32 vendedores activos entre $30.000 y $109.999):
+ *  1. Seguir el id del ganador (`buy_box_winner_item_id` /
+ *     `buy_box_winner.item_id`) hasta /items/{id} -- confirmado que
+ *     ninguno de los 2 campos viene poblado para este producto.
+ *  2/3. Se logueó la lista COMPLETA de vendedores activos -- SÍ existe
+ *     el ítem exacto que la página le muestra a un comprador
+ *     ($49.999, tienda oficial 128892), pero ningún campo disponible
+ *     lo distingue de los otros 30 (no es el más barato, ni el más
+ *     barato con tienda oficial, ni el de mayor categoría de
+ *     publicación) -- MercadoLibre arma ese default probablemente con
+ *     señales del comprador (dirección, envío, historial) que un
+ *     server-to-server genérico no puede replicar.
+ *
+ * Decisión final del usuario ante esto ("el mejor precio de la buybox
+ * pero sólo de tiendas oficiales, sino el mejor precio de la
+ * buybox"): en vez de perseguir el precio exacto de MercadoLibre
+ * (no reproducible de forma confiable, ver arriba), política propia
+ * y determinística -- preferir vendedores de TIENDA OFICIAL (más
+ * confiables) y tomar el más barato entre ellos; si no hay ninguna
+ * tienda oficial activa, el más barato entre todos los vendedores
+ * activos (metodo se marca distinto en ese caso -- el caller puede
+ * avisar menor confianza, mismo criterio que ya usa para la
+ * heurística de texto). */
 export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResult> {
   const accessToken = await getAccessToken(); // puede tirar MeliAuthError, se propaga
   const headers = { authorization: `Bearer ${accessToken}` };
@@ -120,22 +122,11 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
   const dataProducto = respProducto.ok ? await respProducto.json().catch(() => null) : null;
   const titulo = dataProducto?.name ?? null;
 
-  // Ganador de la buybox: se sigue su item_id hasta /items/{id} en vez
-  // de confiar en el precio embebido de /products/{id} (ese campo vino
-  // null la vez anterior que se lo probó).
+  // Ganador de la buybox: se sigue el id hasta /items/{id} -- cuando
+  // SÍ viene poblado (no siempre, ver comentario de arriba), es la
+  // señal más confiable de todas, así que se prueba primero.
   const winnerItemId: string | undefined =
     dataProducto?.buy_box_winner?.item_id || dataProducto?.buy_box_winner_item_id;
-  // 27/08/2026 (diagnóstico temporal -- el 1er intento con este
-  // producto real, MLA25413331, siguió cayendo al aviso de ambigüedad
-  // en vez de resolver el ganador): loguea qué trae realmente
-  // GET /products/{id} para esta cuenta, sin volcar el objeto entero.
-  // Sacar una vez confirmado el campo real (ver vercel logs).
-  console.log("[meliItemPrice] diag", idMeli, JSON.stringify({
-    winnerItemId: winnerItemId ?? null,
-    buy_box_winner: dataProducto?.buy_box_winner ?? null,
-    buy_box_winner_item_id: dataProducto?.buy_box_winner_item_id ?? null,
-    keysProducto: dataProducto ? Object.keys(dataProducto) : null,
-  }));
   if (winnerItemId) {
     const respGanador = await fetch(`https://api.mercadolibre.com/items/${winnerItemId}`, { headers });
     if (respGanador.ok) {
@@ -150,30 +141,17 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     const dataItems = await respItemsActivos.json();
     const activos: any[] = (dataItems?.results || []).filter((r: any) => typeof r?.price === "number" && r.price > 0);
     if (activos.length) {
-      const precios = activos.map((r) => r.price);
-      const min = Math.min(...precios);
-      const max = Math.max(...precios);
-      // 27/08/2026 (diagnóstico temporal, 3ra vuelta -- el usuario
-      // confirmó mirando la página real que ni siquiera existe un
-      // vendedor a $30.000, el "mínimo" que esta lista devuelve): se
-      // loguea la lista COMPLETA (condensada) ordenada por precio para
-      // poder comparar contra lo que la página realmente muestra, en
-      // vez de seguir adivinando con muestras sueltas.
-      console.log("[meliItemPrice] diag-lista", idMeli, JSON.stringify(
-        activos
-          .map((r) => ({ price: r.price, official_store_id: r.official_store_id ?? null, listing_type_id: r.listing_type_id, item_id: r.item_id }))
-          .sort((a, b) => a.price - b.price)
-      ));
-      if (min === max) {
-        return { precio: Math.round(min), titulo, metodo: "meli-api" };
-      }
-      // No se pudo identificar al ganador de la buybox (vino vacío, o
-      // su item no tenía precio) y hay varios precios activos
-      // distintos -- no inventar un número, avisar el rango real.
+      const oficiales = activos.filter((r) => r.official_store_id != null);
+      const candidatos = oficiales.length ? oficiales : activos;
+      const elegido = candidatos.reduce((min, r) => (r.price < min.price ? r : min), candidatos[0]);
       return {
-        precio: null,
+        precio: Math.round(elegido.price),
         titulo,
-        error: `Este producto tiene ${activos.length} vendedores activos con precios distintos (entre $${Math.round(min).toLocaleString("es-AR")} y $${Math.round(max).toLocaleString("es-AR")}) -- no se pudo identificar automáticamente cuál es el vendedor destacado. Revisá la página real y cargá el precio a mano.`,
+        // Sin tienda oficial de por medio, el número es más arriesgado
+        // (podría ser un vendedor no verificado con precio raro) --
+        // metodo distinto para que el caller lo marque como menor
+        // confianza, igual que ya hace con la heurística de texto.
+        metodo: oficiales.length ? "meli-api" : "meli-api-sin-oficial",
       };
     }
   }
