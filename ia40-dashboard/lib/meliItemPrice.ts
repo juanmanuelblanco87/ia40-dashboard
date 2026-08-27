@@ -153,20 +153,17 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       const precios = activos.map((r) => r.price);
       const min = Math.min(...precios);
       const max = Math.max(...precios);
-      // 27/08/2026 (diagnóstico temporal, 2da vuelta -- buy_box_winner
-      // confirmado null para este producto, ver log anterior): antes
-      // de decidir una heurística de reemplazo, loguea la forma real
-      // de un ítem de esta lista (min/max incluidos) para ver qué
-      // señales hay disponibles (sold_quantity, official_store_id,
-      // listing_type_id, etc.) que puedan aproximar "el destacado"
-      // sin adivinar a ciegas. Sacar una vez decidida la heurística.
-      const itemMin = activos.reduce((a, r) => (r.price < a.price ? r : a), activos[0]);
-      const itemMax = activos.reduce((a, r) => (r.price > a.price ? r : a), activos[0]);
-      console.log("[meliItemPrice] diag-items", idMeli, JSON.stringify({
-        count: activos.length, min, max,
-        keysItem: activos[0] ? Object.keys(activos[0]) : null,
-        itemMin, itemMax,
-      }));
+      // 27/08/2026 (diagnóstico temporal, 3ra vuelta -- el usuario
+      // confirmó mirando la página real que ni siquiera existe un
+      // vendedor a $30.000, el "mínimo" que esta lista devuelve): se
+      // loguea la lista COMPLETA (condensada) ordenada por precio para
+      // poder comparar contra lo que la página realmente muestra, en
+      // vez de seguir adivinando con muestras sueltas.
+      console.log("[meliItemPrice] diag-lista", idMeli, JSON.stringify(
+        activos
+          .map((r) => ({ price: r.price, official_store_id: r.official_store_id ?? null, listing_type_id: r.listing_type_id, item_id: r.item_id }))
+          .sort((a, b) => a.price - b.price)
+      ));
       if (min === max) {
         return { precio: Math.round(min), titulo, metodo: "meli-api" };
       }
