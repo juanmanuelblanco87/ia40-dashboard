@@ -125,6 +125,17 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
   // null la vez anterior que se lo probó).
   const winnerItemId: string | undefined =
     dataProducto?.buy_box_winner?.item_id || dataProducto?.buy_box_winner_item_id;
+  // 27/08/2026 (diagnóstico temporal -- el 1er intento con este
+  // producto real, MLA25413331, siguió cayendo al aviso de ambigüedad
+  // en vez de resolver el ganador): loguea qué trae realmente
+  // GET /products/{id} para esta cuenta, sin volcar el objeto entero.
+  // Sacar una vez confirmado el campo real (ver vercel logs).
+  console.log("[meliItemPrice] diag", idMeli, JSON.stringify({
+    winnerItemId: winnerItemId ?? null,
+    buy_box_winner: dataProducto?.buy_box_winner ?? null,
+    buy_box_winner_item_id: dataProducto?.buy_box_winner_item_id ?? null,
+    keysProducto: dataProducto ? Object.keys(dataProducto) : null,
+  }));
   if (winnerItemId) {
     const respGanador = await fetch(`https://api.mercadolibre.com/items/${winnerItemId}`, { headers });
     if (respGanador.ok) {
