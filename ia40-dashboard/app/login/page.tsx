@@ -55,7 +55,7 @@ export default function LoginPage() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "var(--header-bg, #1a3d70)",
+        background: "var(--header-bg)",
         padding: 20,
         boxSizing: "border-box",
       }}

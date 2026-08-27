@@ -99,8 +99,8 @@ export default function MultiSelectDropdown({
             maxWidth: "calc(100vw - 32px)",
             maxHeight: 320,
             overflowY: "auto",
-            background: "var(--panel, #171a21)",
-            border: "1px solid var(--border, #2a2e37)",
+            background: "var(--panel)",
+            border: "1px solid var(--border)",
             borderRadius: 8,
             padding: 8,
             boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
@@ -143,7 +143,7 @@ export default function MultiSelectDropdown({
                 padding: "6px 4px",
                 cursor: "pointer",
                 fontSize: 14,
-                color: "var(--text, #e7e9ee)",
+                color: "var(--text)",
                 lineHeight: 1.3,
                 borderRadius: 4,
               }}
@@ -160,7 +160,7 @@ export default function MultiSelectDropdown({
                   padding: 0,
                   margin: 0,
                   flexShrink: 0,
-                  accentColor: "var(--accent, #4f8cff)",
+                  accentColor: "var(--accent)",
                 }}
               />
               <span style={{ flex: 1 }}>{o.label}</span>

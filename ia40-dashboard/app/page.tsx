@@ -601,8 +601,8 @@ function ModelImageModal({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: "var(--panel, #171a21)",
-          border: "1px solid var(--border, #2a2e37)",
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
           borderRadius: 10,
           padding: 20,
           maxWidth: 480,
@@ -624,7 +624,7 @@ function ModelImageModal({
         <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 14 }}>Segmento: {segmentoActual}</div>
 
         {editing && (
-          <div style={{ textAlign: "left", background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+          <div style={{ textAlign: "left", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 14, marginBottom: 14 }}>
             <label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
               URL de imagen (dejar vacio para no cambiarla)
             </label>
@@ -714,31 +714,38 @@ function TopCard({ title, lastMonth, last12, last12Label }: {
     <div className="panel">
       <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 14 }}>{title}</h1>
 
-      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, marginBottom: 10, minHeight: 132, boxSizing: "border-box" }}>
+      {/* 26/08/2026 (auditoría de diseño, "el dato importante se ve
+          menos importante que su etiqueta"): antes el nombre y el
+          valor real iban en el mismo peso/tamaño que el texto auxiliar
+          "Ultimo mes:" de al lado -- misma jerarquía visual para el
+          dato que importa y para el relleno. El valor (lo que
+          realmente responde "¿cuánto?") ahora es lo más marcado de la
+          fila: negrita + color de acento, en vez de gris muted. */}
+      <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, marginBottom: 10, minHeight: 132, boxSizing: "border-box" }}>
         <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>FOB USD</div>
         <div style={{ fontSize: 14, marginBottom: 4 }}>
           <span style={{ color: "var(--muted)" }}>Ultimo mes: </span>
           <strong>{lastMonth.topFob?.key ?? "-"}</strong>
-          {lastMonth.topFob && <span style={{ color: "var(--muted)" }}> — {fmtNumber(lastMonth.topFob.value)} USD</span>}
+          {lastMonth.topFob && <strong style={{ color: "var(--accent)" }}> — {fmtNumber(lastMonth.topFob.value)} USD</strong>}
         </div>
         <div style={{ fontSize: 14 }}>
           <span style={{ color: "var(--muted)" }}>{last12Label}: </span>
           <strong>{last12.topFob?.key ?? "-"}</strong>
-          {last12.topFob && <span style={{ color: "var(--muted)" }}> — {fmtNumber(last12.topFob.value)} USD</span>}
+          {last12.topFob && <strong style={{ color: "var(--accent)" }}> — {fmtNumber(last12.topFob.value)} USD</strong>}
         </div>
       </div>
 
-      <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, minHeight: 132, boxSizing: "border-box" }}>
+      <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, minHeight: 132, boxSizing: "border-box" }}>
         <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>Unidades</div>
         <div style={{ fontSize: 14, marginBottom: 4 }}>
           <span style={{ color: "var(--muted)" }}>Ultimo mes: </span>
           <strong>{lastMonth.topUnidades?.key ?? "-"}</strong>
-          {lastMonth.topUnidades && <span style={{ color: "var(--muted)" }}> — {fmtNumber(lastMonth.topUnidades.value)} un.</span>}
+          {lastMonth.topUnidades && <strong style={{ color: "var(--accent)" }}> — {fmtNumber(lastMonth.topUnidades.value)} un.</strong>}
         </div>
         <div style={{ fontSize: 14 }}>
           <span style={{ color: "var(--muted)" }}>{last12Label}: </span>
           <strong>{last12.topUnidades?.key ?? "-"}</strong>
-          {last12.topUnidades && <span style={{ color: "var(--muted)" }}> — {fmtNumber(last12.topUnidades.value)} un.</span>}
+          {last12.topUnidades && <strong style={{ color: "var(--accent)" }}> — {fmtNumber(last12.topUnidades.value)} un.</strong>}
         </div>
       </div>
     </div>
@@ -1370,7 +1377,7 @@ export default function Home() {
           )}
           {sieveStatus && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
-              <div style={{ width: 120, height: 8, background: "var(--border, #2a2e37)", borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ width: 120, height: 8, background: "var(--border)", borderRadius: 4, overflow: "hidden" }}>
                 <div style={{ width: `${sieveStatus.porcentaje}%`, height: "100%", background: "var(--accent)" }} />
               </div>
               <span>
@@ -1396,7 +1403,7 @@ export default function Home() {
           )}
           {pvpSieveStatus && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
-              <div style={{ width: 120, height: 8, background: "var(--border, #2a2e37)", borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ width: 120, height: 8, background: "var(--border)", borderRadius: 4, overflow: "hidden" }}>
                 <div style={{ width: `${pvpSieveStatus.porcentaje}%`, height: "100%", background: "var(--accent)" }} />
               </div>
               <span>
@@ -1410,7 +1417,7 @@ export default function Home() {
         </div>
 
         {pvpSieveResult && (
-          <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
+          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, fontSize: 13 }}>
             {pvpSieveResult.error ? (
               <div style={{ color: "#d93a3a" }}>{pvpSieveResult.error}</div>
             ) : (
@@ -1458,7 +1465,7 @@ export default function Home() {
         )}
 
         {sieveResult && (
-          <div style={{ background: "var(--bg, #0f1115)", border: "1px solid var(--border, #2a2e37)", borderRadius: 8, padding: 12, fontSize: 13 }}>
+          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, fontSize: 13 }}>
             {sieveResult.error ? (
               <div style={{ color: "#d93a3a" }}>{sieveResult.error}</div>
             ) : (
@@ -1796,7 +1803,7 @@ export default function Home() {
                   ))}
               </tbody>
               <tfoot>
-                <tr style={{ fontWeight: 700, borderTop: "2px solid var(--border, #2a2e37)" }}>
+                <tr style={{ fontWeight: 700, borderTop: "2px solid var(--border)" }}>
                   <td>Total</td>
                   {pivot.keys.map((k) => (
                     <td key={k}>{fmtNumber(pivot.rows.reduce((acc, row) => acc + Number(row[k] ?? 0), 0))}</td>

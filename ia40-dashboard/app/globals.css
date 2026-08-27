@@ -105,7 +105,11 @@ body {
   display: inline-block;
   width: 13px;
   height: 13px;
-  border: 2px solid rgba(2, 95, 91, 0.25);
+  /* 26/08/2026 (auditoría de diseño, "spinner sigue en el teal viejo"):
+     rgba(2,95,91,...) es #025f5b, la identidad teal descartada cuando
+     se migró a navy -- el resto de la app ya usa var(--accent), este
+     spinner había quedado afuera. */
+  border: 2px solid rgba(26, 61, 112, 0.25);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
@@ -139,6 +143,13 @@ select, button, input {
   font-family: inherit;
 }
 input { width: 100%; border-radius: 8px; }
+/* 26/08/2026 (auditoría de diseño, "los filtros mezclan pildora y
+   rectangulo"): la regla de arriba deja select/button/input en
+   999px (pildora) y esto corregia SOLO input y button a 8px --
+   select nunca se corrigio, asi que un <select> (ej. "Categoria")
+   quedaba redondo al lado de un <button> (ej. "Meses") rectangular
+   en la misma fila de filtros. */
+select { border-radius: 8px; }
 button { cursor: pointer; border-radius: 8px; font-weight: 500; }
 button:hover { border-color: var(--accent); color: var(--accent); }
 button:disabled { opacity: 0.6; cursor: default; }
