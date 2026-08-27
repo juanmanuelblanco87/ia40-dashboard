@@ -182,21 +182,30 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       // puntual, no hay más margen para insistir). Tope de 5 intentos
       // para no multiplicar sin límite los pedidos en un producto con
       // muchos vendedores.
-      // 27/08/2026 (confirmado con datos reales -- ver comentarios
-      // debajo -- y con investigación del usuario sobre las políticas
-      // de MercadoLibre): access_denied en publicaciones CLÁSICAS de
-      // terceros es un bloqueo deliberado de MeLi (anti-scraping entre
-      // competidores) -- ni el token autenticado propio ni una consulta
-      // anónima al mismo endpoint lo evitan (probado, ambos 403). No
-      // hay forma soportada de traer la foto de la publicación clásica
-      // de OTRO vendedor vía esta API. Único intento adicional antes
-      // de resignarse: la página pública del ítem (no la API) -- nunca
-      // se probó desde este proyecto (alquileres-scrape.js sí lo probó
-      // desde panel-icom-salud y ya dio 403 también, pero es un
+      // 27/08/2026 (confirmado con datos reales + investigación del
+      // usuario sobre las políticas de MercadoLibre): access_denied en
+      // publicaciones CLÁSICAS de terceros vía /items/{id} es un
+      // bloqueo deliberado de MeLi (anti-scraping entre competidores)
+      // -- ni el token autenticado propio ni una consulta anónima al
+      // MISMO endpoint lo evitan (los 2 probados, ambos 403). Pero hay
+      // 2 endpoints PÚBLICOS alternativos, pensados justamente para que
+      // apps de terceros muestren publicaciones ajenas sin ser su
+      // dueño (no gated por ownership, a diferencia de /items/{id}):
+      //   1. /sites/MLA/search?ids={id} -- devuelve resumen + pictures.
+      //   2. /items/{id}/pictures -- sub-recurso sólo de imágenes.
+      // Se prueban en ese orden; si ninguno de los 2 funciona, la
+      // página HTML pública del ítem como último recurso (más frágil,
+      // panel-icom-salud ya la probó una vez y dio 403, pero desde un
       // servidor/IP distinto).
       let imagenElegido = imagenProducto;
       if (!imagenElegido) {
         const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5);
+        // 27/08/2026 (diagnóstico temporal -- si ninguno de los 3
+        // intentos nuevos funciona, se necesita ver el status de cada
+        // uno para el próximo paso; sólo se loguea si TODO falló, para
+        // no generar ruido en el caso normal). Sacar una vez
+        // confirmado que al menos uno de los 3 funciona en general.
+        const trazaSiFalla: any[] = [];
         for (const candidato of ordenParaFoto) {
           if (!candidato.item_id) continue;
           try {
@@ -206,21 +215,54 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               const foto = dataFoto.pictures?.[0]?.secure_url || dataFoto.pictures?.[0]?.url || dataFoto.thumbnail || null;
               if (foto) { imagenElegido = foto; break; }
             }
-            // 403 (u otro error) del endpoint de la API -- último
-            // intento, la página pública del ítem (no requiere login
-            // para verla, cualquier comprador la ve).
+
+            // Endpoint 1: búsqueda pública por id -- no requiere ser
+            // el dueño de la publicación.
+            const respBusqueda = await fetch(`https://api.mercadolibre.com/sites/MLA/search?ids=${candidato.item_id}`);
+            let fotoBusqueda: string | null = null;
+            if (respBusqueda.ok) {
+              const dataBusqueda = await respBusqueda.json();
+              const resultado = dataBusqueda?.results?.[0] ?? dataBusqueda?.[0]?.body ?? null; // la API a veces envuelve cada id en {code, body}
+              fotoBusqueda = resultado?.pictures?.[0]?.secure_url || resultado?.pictures?.[0]?.url || resultado?.thumbnail || null;
+              if (fotoBusqueda) { imagenElegido = fotoBusqueda; break; }
+            }
+
+            // Endpoint 2: sub-recurso público sólo de imágenes.
+            const respFotos = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}/pictures`);
+            let fotoSub: string | null = null;
+            if (respFotos.ok) {
+              const dataFotos = await respFotos.json();
+              const primera = Array.isArray(dataFotos) ? dataFotos[0] : null;
+              fotoSub = primera?.variations?.find((v: any) => v.size === "500x375")?.url
+                || primera?.variations?.[0]?.url
+                || primera?.url || null;
+              if (fotoSub) { imagenElegido = fotoSub; break; }
+            }
+
+            // Último recurso: la página pública del ítem (no requiere
+            // login para verla, cualquier comprador la ve).
             const respPagina = await fetch(`https://articulo.mercadolibre.com.ar/${candidato.item_id}`);
+            let matchPagina = false;
             if (respPagina.ok) {
               const html = await respPagina.text();
               const match = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
-              console.log("[meliItemPrice] diag-imagen6", candidato.item_id, "pagina publica status:", respPagina.status, "og:image encontrado:", !!match, "bytes:", html.length);
+              matchPagina = !!match;
               if (match && match[1]) { imagenElegido = match[1]; break; }
-            } else {
-              console.log("[meliItemPrice] diag-imagen6", candidato.item_id, "pagina publica status:", respPagina.status);
             }
-          } catch (e) {
-            continue; // timeout/red -- se prueba el siguiente, nunca rompe la respuesta de precio
+
+            trazaSiFalla.push({
+              item_id: candidato.item_id,
+              itemsAuth: respFoto.status,
+              busqueda: respBusqueda.status, fotoBusqueda,
+              subrecurso: respFotos.status, fotoSub,
+              pagina: respPagina.status, matchPagina,
+            });
+          } catch (e: any) {
+            trazaSiFalla.push({ item_id: candidato.item_id, error: String(e?.message ?? e) });
           }
+        }
+        if (!imagenElegido && trazaSiFalla.length) {
+          console.log("[meliItemPrice] diag-imagen7", idMeli, JSON.stringify(trazaSiFalla));
         }
       }
       return {
