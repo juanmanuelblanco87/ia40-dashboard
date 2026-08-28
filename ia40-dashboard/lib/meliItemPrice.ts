@@ -263,6 +263,7 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
             // configurada (capa gratuita, 5.000 requests/mes) -- sin
             // la key, se comporta exactamente igual que antes de este
             // cambio (sin este intento extra, nunca rompe nada).
+            // SCRAPER_API_KEY ya cargada en Vercel (28/08/2026).
             if (!fotoPagina && process.env.SCRAPER_API_KEY) {
               const respProxy = await fetch(
                 `https://api.scraperapi.com/?api_key=${process.env.SCRAPER_API_KEY}&url=${encodeURIComponent(urlPagina)}`
