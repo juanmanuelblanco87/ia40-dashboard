@@ -81,3 +81,4 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, error: String(err?.message ?? err) }, { status: 500 });
   }
 }
+// redeploy trivial: toma APIFY_API_TOKEN recién cargada (28/08/2026)
