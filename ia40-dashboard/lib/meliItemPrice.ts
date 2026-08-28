@@ -217,6 +217,16 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       let imagenElegido = imagenProducto;
       if (!imagenElegido) {
         const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5); // tope de 5 -- no multiplicar sin límite los pedidos en un producto con muchos vendedores
+        // 28/08/2026 ("El proxy de MercadoLibre tardó demasiado en
+        // responder"): ScraperAPI es el paso más lento de toda esta
+        // cadena (proxy residencial real, no un simple fetch) y, sin
+        // límite, podía intentarse una vez POR CANDIDATO (hasta 5
+        // veces) -- eso solo, multiplicado, ya superaba el budget de
+        // 20s que panel-icom-salud le da a esta ruta. Si falla/tarda
+        // para el primer candidato es casi seguro que va a fallar
+        // igual para el resto (mismo bloqueo de IP), así que se
+        // intenta UNA sola vez en total.
+        let scraperApiIntentado = false;
         for (const candidato of ordenParaFoto) {
           if (!candidato.item_id) continue;
           try {
@@ -264,12 +274,22 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
             // la key, se comporta exactamente igual que antes de este
             // cambio (sin este intento extra, nunca rompe nada).
             // SCRAPER_API_KEY ya cargada en Vercel (28/08/2026).
-            if (!fotoPagina && process.env.SCRAPER_API_KEY) {
-              const respProxy = await fetch(
-                `https://api.scraperapi.com/?api_key=${process.env.SCRAPER_API_KEY}&url=${encodeURIComponent(urlPagina)}`
-              ).catch(() => null);
-              if (respProxy && respProxy.ok) {
-                fotoPagina = extraerImagenDePagina(await respProxy.text());
+            if (!fotoPagina && process.env.SCRAPER_API_KEY && !scraperApiIntentado) {
+              scraperApiIntentado = true;
+              const controllerProxy = new AbortController();
+              const timeoutProxy = setTimeout(() => controllerProxy.abort(), 15_000);
+              try {
+                const respProxy = await fetch(
+                  `https://api.scraperapi.com/?api_key=${process.env.SCRAPER_API_KEY}&url=${encodeURIComponent(urlPagina)}`,
+                  { signal: controllerProxy.signal }
+                );
+                if (respProxy.ok) {
+                  fotoPagina = extraerImagenDePagina(await respProxy.text());
+                }
+              } catch {
+                // timeout/red -- se sigue con el flujo normal (siguiente candidato o placeholder)
+              } finally {
+                clearTimeout(timeoutProxy);
               }
             }
             if (fotoPagina) { imagenElegido = fotoPagina; break; }
