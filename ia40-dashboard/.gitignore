@@ -1,2 +1,12 @@
 .vercel
 .env*
+# 28/08/2026: faltaban -- npm install/npm run build locales (para
+# probar el fix de got-scraping antes de pushear) generaron
+# node_modules/, .next/, next-env.d.ts y package-lock.json sin ningún
+# .gitignore que los excluyera. package-lock.json queda AFUERA
+# deliberadamente (no estaba antes, agregarlo ahora cambia el modo de
+# instalación de Vercel a npm ci -- fuera de alcance de este fix).
+node_modules/
+.next/
+next-env.d.ts
+
