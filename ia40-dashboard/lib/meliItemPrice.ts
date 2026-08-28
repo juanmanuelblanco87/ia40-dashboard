@@ -262,6 +262,15 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               itemsAuth: respFoto.status,
               busquedaGot: respBusqueda.statusCode, fotoBusqueda,
               paginaGot: respPagina.statusCode, matchPagina, bytesPagina, ogTituloEncontrado,
+              // 28/08/2026 (diagnóstico temporal, última vuelta): bytesPagina
+              // (37058) es casi idéntico al de la portada genérica que se vio
+              // probando local sin el guión (37072) -- pero acá ni siquiera
+              // aparece <meta property="og:title">, así que no es EXACTAMENTE
+              // la misma portada. Se loguea el <title> de <head> (más simple,
+              // no depende del orden de atributos como el regex de og:) y un
+              // fragmento del body para identificar qué página es realmente.
+              tituloHtml: typeof respPagina.body === "string" ? (respPagina.body.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] ?? null) : null,
+              fragmento: typeof respPagina.body === "string" ? respPagina.body.replace(/\s+/g, " ").slice(0, 400) : null,
             });
           } catch (e: any) {
             trazaSiFalla.push({ item_id: candidato.item_id, error: String(e?.message ?? e) });
