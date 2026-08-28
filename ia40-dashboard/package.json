@@ -10,6 +10,7 @@
     "sync": "tsx scripts/sync.ts"
   },
   "dependencies": {
+    "got-scraping": "4.2.1",
     "jszip": "3.10.1",
     "next": "^14.2.35",
     "pg": "8.12.0",

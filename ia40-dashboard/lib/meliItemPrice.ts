@@ -20,6 +20,7 @@
  * código ya probado en producción si se puede evitar.
  */
 import { getAccessToken } from "@/lib/meliApi";
+import { gotScraping } from "got-scraping";
 
 /** Extrae el id de MeLi (MLA123456789) de una URL de producto/ítem
  * real -- 3 formatos vistos en uso: ".../p/MLA36197464" (página de
@@ -167,44 +168,40 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       const oficiales = activos.filter((r) => r.official_store_id != null);
       const candidatos = oficiales.length ? oficiales : activos;
       const elegido = candidatos.reduce((min, r) => (r.price < min.price ? r : min), candidatos[0]);
-      // 27/08/2026 ("por algún motivo en este sku falla la imagen"):
-      // /products/{id}/items no trae pictures en el resumen
-      // (confirmado), así que se pide el detalle completo de algún
-      // vendedor activo (mismo endpoint /items/{id} que ya se usa para
-      // el ganador de la buybox) sólo para sacarle la foto -- probando
-      // varios por si alguno da 403 (candidato inaccesible para esta
-      // cuenta, sin relación con nuestro código -- 3 vueltas de
-      // diagnóstico con un caso real, MLAU2712281290, confirmaron esto:
-      // el ÚNICO vendedor activo de ese producto daba 403 al pedir su
-      // detalle completo, precio ya resuelto por otro lado. Sin
-      // ningún otro vendedor para probar, ese producto en particular
-      // se queda sin imagen -- límite real de la API para ese ítem
-      // puntual, no hay más margen para insistir). Tope de 5 intentos
-      // para no multiplicar sin límite los pedidos en un producto con
-      // muchos vendedores.
-      // 27/08/2026 (confirmado con datos reales + investigación del
-      // usuario sobre las políticas de MercadoLibre): access_denied en
-      // publicaciones CLÁSICAS de terceros vía /items/{id} es un
-      // bloqueo deliberado de MeLi (anti-scraping entre competidores)
-      // -- ni el token autenticado propio ni una consulta anónima al
-      // MISMO endpoint lo evitan (los 2 probados, ambos 403). Pero hay
-      // 2 endpoints PÚBLICOS alternativos, pensados justamente para que
-      // apps de terceros muestren publicaciones ajenas sin ser su
-      // dueño (no gated por ownership, a diferencia de /items/{id}):
-      //   1. /sites/MLA/search?ids={id} -- devuelve resumen + pictures.
-      //   2. /items/{id}/pictures -- sub-recurso sólo de imágenes.
-      // Se prueban en ese orden; si ninguno de los 2 funciona, la
-      // página HTML pública del ítem como último recurso (más frágil,
-      // panel-icom-salud ya la probó una vez y dio 403, pero desde un
-      // servidor/IP distinto).
+      // 27/08/2026 ("por algún motivo en este sku falla la imagen" --
+      // MLAU2712281290/MLA1952912100, cama ortopédica de 1 solo
+      // vendedor): /products/{id}/items no trae pictures en el resumen
+      // (confirmado), así que hace falta el detalle de algún vendedor
+      // activo para sacarle la foto. Historial de diagnóstico (varias
+      // vueltas con este caso real) hasta llegar a la causa real:
+      //   1. /items/{id} con el token propio -> 403 access_denied.
+      //      Confirmado con el usuario: MeLi bloquea deliberadamente el
+      //      detalle completo de publicaciones CLÁSICAS de otro
+      //      vendedor (anti-scraping entre competidores) -- ownership,
+      //      no ofuscación técnica.
+      //   2. Los 2 endpoints "públicos" que no exigen ser dueño
+      //      (/sites/MLA/search?ids=, /items/{id}/pictures) -- con
+      //      fetch() plano, TAMBIÉN dieron 403/405, con o sin el
+      //      token, con o sin User-Agent de navegador. Eso es un
+      //      bloqueo DISTINTO al de (1): no es ownership (son
+      //      endpoints públicos por diseño), es fingerprinting a nivel
+      //      TLS/HTTP2 -- fetch() de Node tiene una huella reconocible
+      //      como no-navegador ANTES de que viaje cualquier header
+      //      HTTP, y ningún header la disimula.
+      //   3. gotScraping (paquete open-source de Apify, sin costo, sin
+      //      cuenta) imita la huella TLS/HTTP2 de un Chrome real --
+      //      probado en vivo, SÍ esquiva el bloqueo de (2). La página
+      //      pública del ítem (articulo.mercadolibre.com.ar/MLA-{id},
+      //      OJO con el guión -- sin él, el sitio redirige en silencio
+      //      a la portada genérica) confirmada trayendo el título y la
+      //      imagen reales para 2 productos de prueba distintos.
+      // El bloqueo (1) sigue sin esquivarse -- ni corresponde
+      // intentarlo, es una regla de negocio deliberada. El de (2)/(3)
+      // sí, porque es sólo protección anti-bot sobre contenido que
+      // cualquier comprador ve igual sin login.
       let imagenElegido = imagenProducto;
       if (!imagenElegido) {
-        const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5);
-        // 27/08/2026 (diagnóstico temporal -- si ninguno de los 3
-        // intentos nuevos funciona, se necesita ver el status de cada
-        // uno para el próximo paso; sólo se loguea si TODO falló, para
-        // no generar ruido en el caso normal). Sacar una vez
-        // confirmado que al menos uno de los 3 funciona en general.
+        const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5); // tope de 5 -- no multiplicar sin límite los pedidos en un producto con muchos vendedores
         const trazaSiFalla: any[] = [];
         for (const candidato of ordenParaFoto) {
           if (!candidato.item_id) continue;
@@ -216,47 +213,42 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               if (foto) { imagenElegido = foto; break; }
             }
 
-            // 27/08/2026: probado CON y SIN el token, ambos dan 403 en
-            // /sites/MLA/search (diag-imagen7) -- no es un tema de
-            // autenticación. Hipótesis nueva: falta un User-Agent
-            // real -- fetch() de Node manda uno genérico de servidor,
-            // y varios sistemas anti-bot (posiblemente el de
-            // MercadoLibre) bloquean eso específicamente en endpoints
-            // no estrictamente OAuth-gated, aunque acepten cualquier
-            // navegador real. Barato de probar antes de escalar a
-            // scraping con navegador headless.
-            const headersNavegador = { ...headers, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" };
-
-            // Endpoint 1: búsqueda pública por id.
-            const respBusqueda = await fetch(`https://api.mercadolibre.com/sites/MLA/search?ids=${candidato.item_id}`, { headers: headersNavegador });
+            // Endpoint público 1: búsqueda por id, vía gotScraping.
+            const respBusqueda = await gotScraping({
+              url: `https://api.mercadolibre.com/sites/MLA/search?ids=${candidato.item_id}`,
+              responseType: "json", throwHttpErrors: false, timeout: { request: 8000 },
+            }).catch((e) => ({ statusCode: 0, body: null, _error: String(e?.message ?? e) }));
             let fotoBusqueda: string | null = null;
-            if (respBusqueda.ok) {
-              const dataBusqueda = await respBusqueda.json();
+            if (respBusqueda.statusCode >= 200 && respBusqueda.statusCode < 300) {
+              const dataBusqueda: any = respBusqueda.body;
               const resultado = dataBusqueda?.results?.[0] ?? dataBusqueda?.[0]?.body ?? null; // la API a veces envuelve cada id en {code, body}
               fotoBusqueda = resultado?.pictures?.[0]?.secure_url || resultado?.pictures?.[0]?.url || resultado?.thumbnail || null;
               if (fotoBusqueda) { imagenElegido = fotoBusqueda; break; }
             }
 
-            // Endpoint 2: sub-recurso de imágenes -- mismo criterio.
-            const respFotos = await fetch(`https://api.mercadolibre.com/items/${candidato.item_id}/pictures`, { headers: headersNavegador });
-            let fotoSub: string | null = null;
-            if (respFotos.ok) {
-              const dataFotos = await respFotos.json();
-              const primera = Array.isArray(dataFotos) ? dataFotos[0] : null;
-              fotoSub = primera?.variations?.find((v: any) => v.size === "500x375")?.url
-                || primera?.variations?.[0]?.url
-                || primera?.url || null;
-              if (fotoSub) { imagenElegido = fotoSub; break; }
-            }
-
-            // Último recurso: la página pública del ítem (no requiere
-            // login para verla, cualquier comprador la ve) -- mismo
-            // User-Agent, sin auth (no lo necesita ningún navegador).
-            const respPagina = await fetch(`https://articulo.mercadolibre.com.ar/${candidato.item_id}`, { headers: { "User-Agent": headersNavegador["User-Agent"] } });
+            // Endpoint público 2: la página del ítem, vía gotScraping
+            // (mismo trato que le daría un navegador real -- no
+            // requiere login para verla, cualquier comprador la ve).
+            // 27/08/2026 (confirmado probando en vivo): el short-link
+            // de MercadoLibre exige el GUIÓN después de "MLA"
+            // (".../MLA-1952912100") -- sin él, el sitio redirige
+            // silenciosamente a la portada genérica en vez de dar 404
+            // (200 con el título "Mercado Libre", no el del producto).
+            const idConGuion = candidato.item_id.replace(/^([A-Z]+)(\d)/, "$1-$2");
+            const respPagina = await gotScraping({
+              url: `https://articulo.mercadolibre.com.ar/${idConGuion}`,
+              throwHttpErrors: false, timeout: { request: 10000 },
+            }).catch((e) => ({ statusCode: 0, body: null, _error: String(e?.message ?? e) }));
             let matchPagina = false;
-            if (respPagina.ok) {
-              const html = await respPagina.text();
-              const match = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+            if (respPagina.statusCode >= 200 && respPagina.statusCode < 300 && typeof respPagina.body === "string") {
+              // Salvaguarda: si el id es inválido o el link cambió de
+              // formato, el sitio puede redirigir en silencio a la
+              // portada genérica (200, pero og:title="Mercado Libre",
+              // no el título del producto) -- se descarta ese caso en
+              // vez de guardar el logo del sitio como si fuera la foto.
+              const ogTitle = respPagina.body.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+              const esPortadaGenerica = ogTitle && ogTitle[1].trim() === "Mercado Libre";
+              const match = !esPortadaGenerica && respPagina.body.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
               matchPagina = !!match;
               if (match && match[1]) { imagenElegido = match[1]; break; }
             }
@@ -264,9 +256,8 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
             trazaSiFalla.push({
               item_id: candidato.item_id,
               itemsAuth: respFoto.status,
-              busqueda: respBusqueda.status, fotoBusqueda,
-              subrecurso: respFotos.status, fotoSub,
-              pagina: respPagina.status, matchPagina,
+              busquedaGot: respBusqueda.statusCode, fotoBusqueda,
+              paginaGot: respPagina.statusCode, matchPagina,
             });
           } catch (e: any) {
             trazaSiFalla.push({ item_id: candidato.item_id, error: String(e?.message ?? e) });
