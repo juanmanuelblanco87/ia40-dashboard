@@ -210,23 +210,35 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
       //      completo. Es reputación de IP (la de Vercel, marcada como
       //      sospechosa), no ownership ni fingerprint de navegador --
       //      gotScraping no la esquiva porque no es lo que está
-      //      chequeando. Sin costo/infraestructura extra (proxies
-      //      residenciales) no hay forma confiable de esquivar esto
-      //      desde acá -- se deja como límite real, el placeholder
-      //      cubre el caso.
+      //      chequeando.
+      //   4. (28/08/2026, "opción 2" -> ScraperAPI plan gratis) --
+      //      DESCARTADO, confirmado con pruebas reales: el plan free
+      //      de ScraperAPI rechaza mercadolibre.com.ar como "protected
+      //      domain" siempre (500 tras 57s sin `premium`, mismo 500
+      //      con `premium=true`, 403 inmediato "upgrade your plan" con
+      //      `ultra_premium=true`). Ver también los experimentos con
+      //      Cloudflare Workers (misma IP-reputación bloqueada ahí
+      //      también) y con la IP residencial de la oficina sin sesión
+      //      de navegador real (bloqueada por huella de automatización,
+      //      no por IP) -- documentados en la conversación, no en este
+      //      archivo, para no repetir 3 investigaciones completas acá.
+      //   5. SOLUCIÓN ACTUAL: actor de Apify "gio21/mercadolivre-
+      //      product-detail" (https://apify.com/gio21/mercadolivre-product-detail).
+      //      Scrapea la página pública con navegador real + proxies
+      //      residenciales PAGADOS POR EL AUTOR del actor (no
+      //      necesitamos comprar/mantener proxies propios) -- probado
+      //      en vivo contra ESTE mismo producto (MLAU2712281290) el
+      //      28/08/2026: trajo precio Y 6 imágenes reales. Costo:
+      //      ~US$0,005 por consulta, cubierto de sobra por el crédito
+      //      gratis de Apify (US$5/mes, sin tarjeta) dado el volumen
+      //      bajo de este fallback (sólo corre cuando TODO lo de arriba
+      //      falló). Tarda ~45-50s (scraping con navegador real, no es
+      //      instantáneo) -- por eso se intenta UNA sola vez en total
+      //      (no por candidato) y con un timeout generoso.
       let imagenElegido = imagenProducto;
       if (!imagenElegido) {
         const ordenParaFoto = [...candidatos].sort((a, b) => a.price - b.price).slice(0, 5); // tope de 5 -- no multiplicar sin límite los pedidos en un producto con muchos vendedores
-        // 28/08/2026 ("El proxy de MercadoLibre tardó demasiado en
-        // responder"): ScraperAPI es el paso más lento de toda esta
-        // cadena (proxy residencial real, no un simple fetch) y, sin
-        // límite, podía intentarse una vez POR CANDIDATO (hasta 5
-        // veces) -- eso solo, multiplicado, ya superaba el budget de
-        // 20s que panel-icom-salud le da a esta ruta. Si falla/tarda
-        // para el primer candidato es casi seguro que va a fallar
-        // igual para el resto (mismo bloqueo de IP), así que se
-        // intenta UNA sola vez en total.
-        let scraperApiIntentado = false;
+        let apifyIntentado = false;
         for (const candidato of ordenParaFoto) {
           if (!candidato.item_id) continue;
           try {
@@ -262,34 +274,35 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               respPagina.statusCode >= 200 && respPagina.statusCode < 300 && typeof respPagina.body === "string"
                 ? extraerImagenDePagina(respPagina.body)
                 : null;
-            // 28/08/2026 ("como lo solucionamos? opciones" -> "opción
-            // 2", proxy con capa gratuita): el intento directo de
-            // arriba (gotScraping, IP de Vercel) puede dar la pantalla
-            // de desafío anti-bot de MercadoLibre en vez de la real
-            // (reputación de IP, ver comentario grande más arriba) --
-            // en ese caso se reintenta la MISMA página a través de
-            // ScraperAPI (proxies residenciales, que MeLi no marca
-            // como sospechosos). Sólo si hay SCRAPER_API_KEY
-            // configurada (capa gratuita, 5.000 requests/mes) -- sin
-            // la key, se comporta exactamente igual que antes de este
-            // cambio (sin este intento extra, nunca rompe nada).
-            // SCRAPER_API_KEY ya cargada en Vercel (28/08/2026).
-            if (!fotoPagina && process.env.SCRAPER_API_KEY && !scraperApiIntentado) {
-              scraperApiIntentado = true;
-              const controllerProxy = new AbortController();
-              const timeoutProxy = setTimeout(() => controllerProxy.abort(), 15_000);
+            // Último recurso: actor de Apify (ver comentario grande de
+            // arriba, punto 5). Sólo si hay APIFY_API_TOKEN configurada
+            // -- sin la key, se comporta igual que antes de este cambio
+            // (nunca rompe nada). Una sola vez en total, no por
+            // candidato -- ~45-50s por intento, no tiene sentido
+            // multiplicarlo.
+            if (!fotoPagina && process.env.APIFY_API_TOKEN && !apifyIntentado) {
+              apifyIntentado = true;
+              const controllerApify = new AbortController();
+              const timeoutApify = setTimeout(() => controllerApify.abort(), 55_000);
               try {
-                const respProxy = await fetch(
-                  `https://api.scraperapi.com/?api_key=${process.env.SCRAPER_API_KEY}&url=${encodeURIComponent(urlPagina)}`,
-                  { signal: controllerProxy.signal }
+                const respApify = await fetch(
+                  `https://api.apify.com/v2/acts/gio21~mercadolivre-product-detail/run-sync-get-dataset-items?token=${process.env.APIFY_API_TOKEN}`,
+                  {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ productUrls: [urlPagina] }),
+                    signal: controllerApify.signal,
+                  }
                 );
-                if (respProxy.ok) {
-                  fotoPagina = extraerImagenDePagina(await respProxy.text());
+                if (respApify.ok) {
+                  const itemsApify: any[] = await respApify.json().catch(() => []);
+                  const fotoApify = itemsApify?.[0]?.images?.[0] || null;
+                  if (fotoApify) fotoPagina = fotoApify;
                 }
               } catch {
                 // timeout/red -- se sigue con el flujo normal (siguiente candidato o placeholder)
               } finally {
-                clearTimeout(timeoutProxy);
+                clearTimeout(timeoutApify);
               }
             }
             if (fotoPagina) { imagenElegido = fotoPagina; break; }

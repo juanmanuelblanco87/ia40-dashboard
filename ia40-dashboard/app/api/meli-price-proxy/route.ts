@@ -3,12 +3,14 @@ import { MeliAuthError } from "@/lib/meliApi";
 import { extraerIdMeli, obtenerPrecioItem } from "@/lib/meliItemPrice";
 
 export const dynamic = "force-dynamic";
-// 28/08/2026: la ruta puede terminar esperando a ScraperAPI (proxy
-// residencial usado como último recurso para la foto del producto,
-// ver lib/meliItemPrice.ts) -- sin este límite explícito, Vercel corta
-// la función a los 10-15s por defecto y el llamador (panel-icom-salud)
-// ve un timeout aunque la búsqueda venía bien encaminada.
-export const maxDuration = 30;
+// 28/08/2026: la ruta puede terminar esperando al actor de Apify
+// (último recurso para la foto del producto cuando todo lo gratis
+// falló, ver lib/meliItemPrice.ts) -- confirmado en pruebas reales que
+// tarda ~45-50s (scraping con navegador real + proxy residencial). Sin
+// este límite explícito, Vercel corta la función a los 10-15s por
+// defecto y el llamador (panel-icom-salud) ve un timeout aunque la
+// búsqueda venía bien encaminada. 65 = ~50s de Apify + margen.
+export const maxDuration = 65;
 
 /**
  * GET /api/meli-price-proxy?url=<link de MeLi>  (o ?id=MLA123456789)
