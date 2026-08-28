@@ -57,6 +57,20 @@ export function extraerIdMeli(url: string): string | null {
   return raw.startsWith("MLA") ? raw : `MLA${raw}`;
 }
 
+// 28/08/2026: extrae la og:image real de la página pública de un
+// ítem, descartando la portada genérica de MercadoLibre y la
+// pantalla de desafío anti-bot (ambas responden 200, pero sin
+// og:title del producto -- ver obtenerPrecioItem más abajo para el
+// contexto completo). Función aparte porque se usa 2 veces (intento
+// directo y, si hace falta, vía ScraperAPI).
+function extraerImagenDePagina(html: string): string | null {
+  const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+  const esPortadaGenerica = !ogTitle || ogTitle[1].trim() === "Mercado Libre";
+  if (esPortadaGenerica) return null;
+  const match = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+  return match ? match[1] : null;
+}
+
 export interface PrecioItemResult {
   precio: number | null;
   titulo?: string | null;
@@ -225,25 +239,39 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               if (fotoBusqueda) { imagenElegido = fotoBusqueda; break; }
             }
 
-            // Endpoint público 2: la página del ítem, vía gotScraping
-            // -- el short-link exige el GUIÓN después de "MLA"
-            // (".../MLA-1952912100"), sin él redirige en silencio a
-            // la portada genérica en vez de dar 404.
+            // Endpoint público 2: la página del ítem -- el short-link
+            // exige el GUIÓN después de "MLA" (".../MLA-1952912100"),
+            // sin él redirige en silencio a la portada genérica en
+            // vez de dar 404.
             const idConGuion = candidato.item_id.replace(/^([A-Z]+)(\d)/, "$1-$2");
+            const urlPagina = `https://articulo.mercadolibre.com.ar/${idConGuion}`;
             const respPagina = await gotScraping({
-              url: `https://articulo.mercadolibre.com.ar/${idConGuion}`,
-              throwHttpErrors: false, timeout: { request: 10000 },
+              url: urlPagina, throwHttpErrors: false, timeout: { request: 10000 },
             }).catch(() => ({ statusCode: 0, body: null }));
-            if (respPagina.statusCode >= 200 && respPagina.statusCode < 300 && typeof respPagina.body === "string") {
-              // Salvaguarda: portada genérica o pantalla de desafío
-              // anti-bot (ambas 200, og:title="Mercado Libre" o sin
-              // ningún og:title) -- se descartan en vez de guardar el
-              // logo/lo que sea del sitio como si fuera la foto real.
-              const ogTitle = respPagina.body.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
-              const esPortadaGenerica = !ogTitle || ogTitle[1].trim() === "Mercado Libre";
-              const match = !esPortadaGenerica && respPagina.body.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
-              if (match && match[1]) { imagenElegido = match[1]; break; }
+            let fotoPagina =
+              respPagina.statusCode >= 200 && respPagina.statusCode < 300 && typeof respPagina.body === "string"
+                ? extraerImagenDePagina(respPagina.body)
+                : null;
+            // 28/08/2026 ("como lo solucionamos? opciones" -> "opción
+            // 2", proxy con capa gratuita): el intento directo de
+            // arriba (gotScraping, IP de Vercel) puede dar la pantalla
+            // de desafío anti-bot de MercadoLibre en vez de la real
+            // (reputación de IP, ver comentario grande más arriba) --
+            // en ese caso se reintenta la MISMA página a través de
+            // ScraperAPI (proxies residenciales, que MeLi no marca
+            // como sospechosos). Sólo si hay SCRAPER_API_KEY
+            // configurada (capa gratuita, 5.000 requests/mes) -- sin
+            // la key, se comporta exactamente igual que antes de este
+            // cambio (sin este intento extra, nunca rompe nada).
+            if (!fotoPagina && process.env.SCRAPER_API_KEY) {
+              const respProxy = await fetch(
+                `https://api.scraperapi.com/?api_key=${process.env.SCRAPER_API_KEY}&url=${encodeURIComponent(urlPagina)}`
+              ).catch(() => null);
+              if (respProxy && respProxy.ok) {
+                fotoPagina = extraerImagenDePagina(await respProxy.text());
+              }
             }
+            if (fotoPagina) { imagenElegido = fotoPagina; break; }
           } catch (e) {
             continue; // timeout/red -- se prueba el siguiente, nunca rompe la respuesta de precio
           }
