@@ -240,13 +240,17 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               throwHttpErrors: false, timeout: { request: 10000 },
             }).catch((e) => ({ statusCode: 0, body: null, _error: String(e?.message ?? e) }));
             let matchPagina = false;
+            let ogTituloEncontrado: string | null = null;
+            let bytesPagina = 0;
             if (respPagina.statusCode >= 200 && respPagina.statusCode < 300 && typeof respPagina.body === "string") {
+              bytesPagina = respPagina.body.length;
               // Salvaguarda: si el id es inválido o el link cambió de
               // formato, el sitio puede redirigir en silencio a la
               // portada genérica (200, pero og:title="Mercado Libre",
               // no el título del producto) -- se descarta ese caso en
               // vez de guardar el logo del sitio como si fuera la foto.
               const ogTitle = respPagina.body.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+              ogTituloEncontrado = ogTitle ? ogTitle[1] : null;
               const esPortadaGenerica = ogTitle && ogTitle[1].trim() === "Mercado Libre";
               const match = !esPortadaGenerica && respPagina.body.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
               matchPagina = !!match;
@@ -257,7 +261,7 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
               item_id: candidato.item_id,
               itemsAuth: respFoto.status,
               busquedaGot: respBusqueda.statusCode, fotoBusqueda,
-              paginaGot: respPagina.statusCode, matchPagina,
+              paginaGot: respPagina.statusCode, matchPagina, bytesPagina, ogTituloEncontrado,
             });
           } catch (e: any) {
             trazaSiFalla.push({ item_id: candidato.item_id, error: String(e?.message ?? e) });
