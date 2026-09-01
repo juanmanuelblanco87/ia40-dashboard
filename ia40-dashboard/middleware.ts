@@ -32,6 +32,8 @@ import type { NextRequest } from "next/server";
  * IMPORTANTE -- rutas que NUNCA deben quedar atras del login porque las
  * llama un tercero, no un navegador logueado (ver `matcher` mas abajo):
  *   - /api/sync, /api/sync-images: dispara el cron de Vercel.
+ *   - /api/meli-sellout-snapshot (01/09/2026): idem, otro cron de
+ *     Vercel (snapshot diario de sell-out de Mercado Libre).
  *   - /api/calc/meli-oauth/*: Mercado Libre redirige al callback despues
  *     de autorizar -- si quedara atras del gate, se rompe la conexion.
  *   - /api/calc/meli-webhook: Mercado Libre manda notificaciones ahi
@@ -131,6 +133,6 @@ export const config = {
   // directamente, y cualquier archivo estatico (cualquier ruta con un
   // "." -- imagenes, _next/static, etc.).
   matcher: [
-    "/((?!login|api/login|api/sync|api/sync-images|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|api/token|.*\\..*).*)",
+    "/((?!login|api/login|api/sync|api/sync-images|api/meli-sellout-snapshot|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|api/token|.*\\..*).*)",
   ],
 };
