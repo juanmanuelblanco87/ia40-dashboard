@@ -7,6 +7,16 @@ export const maxDuration = 300; // varias categorias, cada corrida del actor pue
 /**
  * GET /api/meli-sellout-snapshot
  *
+ * 01/09/2026 -- CRON PAUSADO A PROPOSITO (sacado de vercel.json): la
+ * primera corrida real completa (9 categorias) gasto $5.55 de credito
+ * de Apify en una sola pasada (mucho mas de lo estimado -- ver hilo
+ * completo), y la cuenta llego a su limite mensual de uso gratis. El
+ * codigo/las tablas quedan listos y probados con datos reales, pero
+ * el cron NO corre solo hasta que el usuario decida presupuesto/plan
+ * de Apify. Para reactivarlo: agregar de nuevo la entrada en
+ * vercel.json (`{ "path": "/api/meli-sellout-snapshot", "schedule":
+ * "0 9 * * *" }`).
+ *
  * Cron diario (01/09/2026, "crear las principales categorias --
  * replicar las del arbol de importacion -- y guardar un snap diario
  * para documentar el sell-out"): por cada fila de
