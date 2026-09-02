@@ -116,6 +116,60 @@ export interface PrecioItemResult {
  * activos (metodo se marca distinto en ese caso -- el caller puede
  * avisar menor confianza, mismo criterio que ya usa para la
  * heurística de texto). */
+/** Último recurso para la foto de un ítem puntual (página pública vía
+ * gotScraping y, si eso también falla, el actor de Apify
+ * gio21/mercadolivre-product-detail) -- mismos 2 pasos que ya corre el
+ * bucle de "candidatos" más abajo (ver el comentario grande junto a
+ * él para el historial completo de investigación de por qué hace
+ * falta esto), extraídos acá para poder reusarlos también cuando el
+ * ítem se resuelve DIRECTO (sin pasar por ese bucle).
+ *
+ * 02/09/2026 ("trajo perfecto el precio pero no se pudo traer la
+ * imagen" -- caso real, SKU 6776/MLA con precio resuelto por la rama
+ * "directa" de abajo): confirmado que esa rama (y la de
+ * buy_box_winner) sólo miraban `pictures`/`thumbnail` del propio
+ * /items/{id} -- si esos vienen vacíos (pasa, mismo caso ya
+ * documentado para /products/{id} más abajo), la foto quedaba en
+ * null SIN nunca intentar la página pública ni Apify -- esa cascada
+ * sólo corría dentro del bucle de "candidatos", que ni se ejecuta
+ * cuando el precio ya se resolvió por la rama directa. */
+async function resolverImagenViaPaginaOApify(itemId: string): Promise<string | null> {
+  const idConGuion = itemId.replace(/^([A-Z]+)(\d)/, "$1-$2");
+  const urlPagina = `https://articulo.mercadolibre.com.ar/${idConGuion}`;
+  const respPagina = await gotScraping({
+    url: urlPagina, throwHttpErrors: false, timeout: { request: 10000 },
+  }).catch(() => ({ statusCode: 0, body: null as any }));
+  const fotoPagina =
+    respPagina.statusCode >= 200 && respPagina.statusCode < 300 && typeof respPagina.body === "string"
+      ? extraerImagenDePagina(respPagina.body)
+      : null;
+  if (fotoPagina) return fotoPagina;
+
+  if (!process.env.APIFY_API_TOKEN) return null;
+  const controllerApify = new AbortController();
+  const timeoutApify = setTimeout(() => controllerApify.abort(), 55_000);
+  try {
+    const respApify = await fetch(
+      `https://api.apify.com/v2/acts/gio21~mercadolivre-product-detail/run-sync-get-dataset-items?token=${process.env.APIFY_API_TOKEN}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ productUrls: [urlPagina] }),
+        signal: controllerApify.signal,
+      }
+    );
+    if (respApify.ok) {
+      const itemsApify: any[] = await respApify.json().catch(() => []);
+      return itemsApify?.[0]?.images?.[0] || null;
+    }
+  } catch {
+    // timeout/red -- no hay imagen, no rompe el precio ya resuelto
+  } finally {
+    clearTimeout(timeoutApify);
+  }
+  return null;
+}
+
 export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResult> {
   const accessToken = await getAccessToken(); // puede tirar MeliAuthError, se propaga
   const headers = { authorization: `Bearer ${accessToken}` };
@@ -124,7 +178,8 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
   if (resp.ok) {
     const data = await resp.json();
     if (typeof data.price === "number" && data.price > 0) {
-      const imagen = data.pictures?.[0]?.secure_url || data.pictures?.[0]?.url || data.thumbnail || null;
+      let imagen = data.pictures?.[0]?.secure_url || data.pictures?.[0]?.url || data.thumbnail || null;
+      if (!imagen) imagen = await resolverImagenViaPaginaOApify(idMeli);
       return { precio: Math.round(data.price), titulo: data.title ?? null, imagen, metodo: "meli-api" };
     }
   }
@@ -169,7 +224,8 @@ export async function obtenerPrecioItem(idMeli: string): Promise<PrecioItemResul
     if (respGanador.ok) {
       const dataGanador = await respGanador.json();
       if (typeof dataGanador.price === "number" && dataGanador.price > 0) {
-        const imagenGanador = dataGanador.pictures?.[0]?.secure_url || dataGanador.pictures?.[0]?.url || dataGanador.thumbnail || imagenProducto;
+        let imagenGanador = dataGanador.pictures?.[0]?.secure_url || dataGanador.pictures?.[0]?.url || dataGanador.thumbnail || imagenProducto;
+        if (!imagenGanador) imagenGanador = await resolverImagenViaPaginaOApify(winnerItemId);
         return { precio: Math.round(dataGanador.price), titulo: dataGanador.title ?? titulo, imagen: imagenGanador, metodo: "meli-api" };
       }
     }
