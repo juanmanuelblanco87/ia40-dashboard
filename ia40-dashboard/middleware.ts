@@ -42,6 +42,10 @@ import type { NextRequest } from "next/server";
  *     (panel-icom-salud, servidor a servidor) -- no lleva la cookie de
  *     este login, se protege con su propio secreto compartido
  *     (MELI_PROXY_SECRET, ver ese route.ts).
+ *   - /api/rental-price-ai (01/09/2026): mismo caso exacto que
+ *     meli-price-proxy -- panel-icom-salud (botón "🤖 Consultar IA" de
+ *     Alquileres) le pega server-a-servidor, mismo MELI_PROXY_SECRET
+ *     reusado (ver ese route.ts).
  *   - /api/token: lo llama refresh_token.py, un script que corre en una
  *     PC (Programador de tareas de Windows, cada ~10 min) para mantener
  *     actualizado el token de IA40/Cobus -- tampoco lleva la cookie de
@@ -133,6 +137,6 @@ export const config = {
   // directamente, y cualquier archivo estatico (cualquier ruta con un
   // "." -- imagenes, _next/static, etc.).
   matcher: [
-    "/((?!login|api/login|api/sync|api/sync-images|api/meli-sellout-snapshot|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|api/token|.*\\..*).*)",
+    "/((?!login|api/login|api/sync|api/sync-images|api/meli-sellout-snapshot|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|api/rental-price-ai|api/token|.*\\..*).*)",
   ],
 };
