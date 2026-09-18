@@ -16,10 +16,15 @@ export const maxDuration = 60;
 // si el login+captura de token funciona o donde se traba. Borrar este
 // archivo si el resultado es negativo (Cobus bloquea) o una vez que se
 // haya portado a la version real conectada al cron.
+// Mismo criterio que /api/sync (isAuthorized ahi): header Authorization
+// para curl/tools, o ?secret=... como alternativa para pegar la URL
+// directo en el navegador sin poder mandar headers custom.
 function isAuthorized(req: Request): boolean {
   const secret = process.env.TOKEN_UPDATE_SECRET;
   if (!secret) return false;
-  return req.headers.get("authorization") === `Bearer ${secret}`;
+  if (req.headers.get("authorization") === `Bearer ${secret}`) return true;
+  const { searchParams } = new URL(req.url);
+  return searchParams.get("secret") === secret;
 }
 
 const USER_AGENT =
