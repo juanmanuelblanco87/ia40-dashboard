@@ -171,6 +171,21 @@ export async function fetchFreshIa40Token(username: string, password: string): P
     pasos.push("esperando resultado del login");
     await page.waitForTimeout(4000);
 
+    // 18/09/2026 (5to intento -- llegó hasta el final sin token: "No se
+    // pudo capturar el token despues del login"): nunca habia ninguna
+    // verificacion de que el login realmente funcionara -- si Cobus
+    // rechaza usuario/contraseña o tira otro error, seguiamos como si
+    // nada. Se registra el texto visible del iframe y la URL actual en
+    // este punto para poder ver [la proxima vez que falle] que dijo
+    // realmente la pagina, en vez de adivinar.
+    try {
+      const textoIframe = await loginFrame.innerText("body");
+      pasos.push(`texto del iframe tras el login: ${textoIframe.slice(0, 300)}`);
+    } catch {
+      pasos.push("no se pudo leer el iframe tras el login (probablemente ya navego)");
+    }
+    pasos.push(`url tras esperar el login: ${page.url()}`);
+
     if (loginErrorMsg) {
       throw new Ia40LoginError(loginErrorMsg, pasos);
     }
@@ -182,7 +197,8 @@ export async function fetchFreshIa40Token(username: string, password: string): P
       } catch {
         // seguimos aunque falle -- puede que el token ya se haya capturado por la respuesta
       }
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(4000);
+      pasos.push(`url tras redirect-ia40: ${page.url()}`);
     }
 
     const finalUrl = page.url();
