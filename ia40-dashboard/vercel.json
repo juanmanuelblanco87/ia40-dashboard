@@ -1,6 +1,7 @@
 {
   "crons": [
-    { "path": "/api/sync", "schedule": "0 14 * * *" }
+    { "path": "/api/sync", "schedule": "0 14 * * *" },
+    { "path": "/api/refresh-ia40-token", "schedule": "*/10 * * * *" }
   ]
 }
 
