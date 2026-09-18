@@ -68,9 +68,18 @@ export async function fetchFreshIa40Token(username: string, password: string): P
 
   let browser;
   try {
+    // 18/09/2026 (3er intento -- error real obtenido: "net::ERR_INSUFFICIENT_RESOURCES"
+    // al hacer goto, con chromium ya lanzado): @sparticuz/chromium-min no
+    // incluye --disable-dev-shm-usage entre sus flags por defecto -- en
+    // un contenedor serverless /dev/shm suele venir muy chico (64MB), y
+    // eso es la causa mas comun y mejor documentada de exactamente este
+    // error al cargar una pagina con Chromium headless. Se suma como
+    // flag extra (no reemplaza los de chromium.args). También se subio
+    // la memoria de esta función a 3009MB en vercel.json -- por defecto
+    // podria no alcanzarle a Chromium + Next.js corriendo juntos.
     pasos.push("lanzando chromium");
     browser = await playwrightChromium.launch({
-      args: chromium.args,
+      args: [...chromium.args, "--disable-dev-shm-usage"],
       executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
       headless: true,
     });

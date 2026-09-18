@@ -1,4 +1,8 @@
 {
+  "functions": {
+    "app/api/refresh-ia40-token/route.ts": { "memory": 3009 },
+    "app/api/test-ia40-login/route.ts": { "memory": 3009 }
+  },
   "crons": [
     { "path": "/api/sync", "schedule": "30 16 * * *" },
     { "path": "/api/refresh-ia40-token", "schedule": "*/10 * * * *" }
