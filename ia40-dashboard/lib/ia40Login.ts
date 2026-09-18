@@ -1,5 +1,7 @@
 import chromium from "@sparticuz/chromium-min";
-import { chromium as playwrightChromium } from "playwright-core";
+import { chromium as playwrightChromium, type Browser } from "playwright-core";
+import { rmSync } from "node:fs";
+import { dirname } from "node:path";
 
 // 18/09/2026 ("como lo resolvemos para que sea sostenible? Vercel?"):
 // mismo login que hacia refresh_token.py (Playwright + Chrome real) en
@@ -56,6 +58,33 @@ export interface Ia40LoginResult {
   finalUrl: string;
 }
 
+// 18/09/2026 (4to intento -- error real obtenido: "spawn ETXTBSY" al
+// lanzar /tmp/chromium): @sparticuz/chromium-min cachea el binario
+// extraido en /tmp entre invocaciones de un mismo contenedor tibio
+// (lambdafs.js: si el directorio de salida ya existe, ni siquiera
+// vuelve a extraer -- ver node_modules/@sparticuz/chromium-min/build/
+// lambdafs.js). Si una corrida anterior se cortó a mitad de la
+// extracción o del lanzamiento (como la que dio ERR_INSUFFICIENT_RESOURCES
+// recien), el contenedor puede quedar con ese binario a medio escribir
+// o todavia "abierto" para la siguiente invocación tibia -- de ahi el
+// ETXTBSY (literalmente "text file busy"). Fix: si el lanzamiento falla
+// con ETXTBSY, se borra el directorio ya extraido y se reintenta UNA
+// vez (fuerza una extracción limpia desde el .tar, que ya esta
+// descargado y cacheado aparte).
+async function launchChromiumConReintento(): Promise<Browser> {
+  const args = [...chromium.args, "--disable-dev-shm-usage"];
+  const execPath1 = await chromium.executablePath(CHROMIUM_PACK_URL);
+  try {
+    return await playwrightChromium.launch({ args, executablePath: execPath1, headless: true });
+  } catch (err) {
+    const msg = String((err as any)?.message ?? err);
+    if (!msg.includes("ETXTBSY")) throw err;
+    rmSync(dirname(execPath1), { recursive: true, force: true });
+    const execPath2 = await chromium.executablePath(CHROMIUM_PACK_URL);
+    return await playwrightChromium.launch({ args, executablePath: execPath2, headless: true });
+  }
+}
+
 // Login real en cobusgroup.com y captura del JWT de IA40 desde la URL
 // de redirect (igual que refresh_token.py -- misma secuencia exacta de
 // pasos: click INGRESAR, esperar el iframe de login, completar usuario/
@@ -78,11 +107,7 @@ export async function fetchFreshIa40Token(username: string, password: string): P
     // la memoria de esta función a 3009MB en vercel.json -- por defecto
     // podria no alcanzarle a Chromium + Next.js corriendo juntos.
     pasos.push("lanzando chromium");
-    browser = await playwrightChromium.launch({
-      args: [...chromium.args, "--disable-dev-shm-usage"],
-      executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
-      headless: true,
-    });
+    browser = await launchChromiumConReintento();
 
     // 18/09/2026: sin viewport explicito, Playwright headless usa
     // 800x600 por defecto -- bastante mas chico que un navegador real,
