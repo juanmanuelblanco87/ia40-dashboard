@@ -22,8 +22,20 @@ export const dynamic = "force-dynamic";
  * vez que se agrega un campo nuevo al calculo.
  */
 
+// 18/09/2026 ("cuando guardo un escenario necesito ponerle nombre"): la
+// columna se agrega sola (idempotente) la primera vez que corre esta ruta
+// en cada instancia, para no depender de correr una migracion a mano en
+// Neon antes de deployar (ver tambien sql/migration_20260918_escenario_nombre.sql).
+let columnaNombreAsegurada = false;
+async function asegurarColumnaNombre() {
+  if (columnaNombreAsegurada) return;
+  await query(`alter table calc_scenarios add column if not exists nombre_escenario text`);
+  columnaNombreAsegurada = true;
+}
+
 interface GuardarEscenarioBody {
   usuario: string;
+  nombreEscenario: string;
   productTypeId: number;
   nombreProducto: string;
   fobUsd: number;
@@ -38,6 +50,7 @@ function toRow(row: any) {
   return {
     id: row.id,
     usuario: row.usuario,
+    nombreEscenario: row.nombre_escenario ?? null,
     nombreProducto: row.nombre_producto,
     fobUsd: Number(row.fob_usd),
     pvpMeliArsConIva: Number(row.pvp_meli_ars_con_iva),
@@ -63,6 +76,7 @@ function toRow(row: any) {
  * (para el filtro del frontend); sin filtro devuelve todos.
  */
 export async function GET(req: Request) {
+  await asegurarColumnaNombre();
   const { searchParams } = new URL(req.url);
   const usuario = searchParams.get("usuario");
 
@@ -96,9 +110,14 @@ export async function POST(req: Request) {
   if (!usuario) {
     return NextResponse.json({ error: "Falta indicar el usuario que guarda el escenario." }, { status: 400 });
   }
+  const nombreEscenario = String(body?.nombreEscenario ?? "").trim();
+  if (!nombreEscenario) {
+    return NextResponse.json({ error: "Falta el nombre del escenario." }, { status: 400 });
+  }
   if (!body?.resultado || !body?.supuestos || !body?.productType) {
     return NextResponse.json({ error: "Faltan datos del cálculo para guardar el escenario." }, { status: 400 });
   }
+  await asegurarColumnaNombre();
 
   const margenMeliPct = body.resultado?.meli?.margenPctSobreConIva ?? null;
   const margenDistribucionPct = body.resultado?.distribucion?.margenPctSobreConIva ?? null;
@@ -107,8 +126,9 @@ export async function POST(req: Request) {
     `insert into calc_scenarios (
        usuario, product_type_id, nombre_producto, fob_usd, pvp_meli_ars_con_iva, pvp_fuente,
        tipo_cambio_ars, arancel_pct, iva_pct, cbm_m3, tamano_envio, envio_fuente,
-       margen_meli_pct, margen_distribucion_pct, supuestos_json, product_type_json, resultado_json
-     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       margen_meli_pct, margen_distribucion_pct, supuestos_json, product_type_json, resultado_json,
+       nombre_escenario
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
      returning *`,
     [
       usuario,
@@ -128,6 +148,7 @@ export async function POST(req: Request) {
       JSON.stringify(body.supuestos),
       JSON.stringify(body.productType),
       JSON.stringify(body.resultado),
+      nombreEscenario,
     ]
   );
 

@@ -17,10 +17,11 @@
  * estima por IA (y tambien se cachea).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import AppHeader from "@/components/AppHeader";
 import { fmtNumber } from "@/components/EvolutionChart";
+import { tamanoEnvioPorCbm } from "@/lib/importCalc";
 
 function fmtUsd(n: number): string {
   return n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -140,6 +141,7 @@ interface RunResult {
 interface Escenario {
   id: number;
   usuario: string;
+  nombreEscenario: string | null;
   nombreProducto: string;
   fobUsd: number;
   pvpMeliArsConIva: number | null;
@@ -233,7 +235,53 @@ export default function CalculoImportacionPage() {
   const [filtroUsuarioEscenarios, setFiltroUsuarioEscenarios] = useState("");
   const [guardandoEscenario, setGuardandoEscenario] = useState(false);
 
+  // Unidades por 40HC (18/09/2026, "deja un lugar para colocar las unidades
+  // por 40HC, si las modifico me recalcula automaticamente el CBM"): campo
+  // editable; el CBM del tipo de producto se deriva como capacidad del 40HC
+  // / unidades y se guarda (con debounce) por el mismo PATCH que ya usa el
+  // modal de Editar.
+  const [unidades40hc, setUnidades40hc] = useState("");
+  const [guardandoCbm, setGuardandoCbm] = useState(false);
+  const cbmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const calcularRef = useRef<() => void>(() => {});
+
   const selected = productTypes.find((p) => p.id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (!selected || selected.cbm_m3 == null || selected.cbm_m3 <= 0 || !supuestos) {
+      setUnidades40hc("");
+      return;
+    }
+    const deCbm = Math.round(supuestos.capacidadCbmContenedor / selected.cbm_m3);
+    setUnidades40hc((prev) => (Number(prev) === deCbm ? prev : String(deCbm)));
+  }, [selected?.id, selected?.cbm_m3, supuestos?.capacidadCbmContenedor]);
+
+  const cambiarUnidades40hc = (valor: string) => {
+    setUnidades40hc(valor);
+    if (cbmTimer.current) clearTimeout(cbmTimer.current);
+    const unidades = Math.round(Number(valor));
+    if (!selected || !supuestos || !Number.isFinite(unidades) || unidades <= 0) return;
+    const productId = selected.id;
+    const nuevoCbm = Math.round((supuestos.capacidadCbmContenedor / unidades) * 1e6) / 1e6;
+    cbmTimer.current = setTimeout(() => {
+      setGuardandoCbm(true);
+      fetch(`/api/calc/product-types/${productId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cbmM3: nuevoCbm, tamanoEnvio: tamanoEnvioPorCbm(nuevoCbm) }),
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!d.productType) return;
+          setProductTypes((prev) => prev.map((p) => (p.id === d.productType.id ? d.productType : p)));
+          // Hay un resultado en pantalla calculado con el CBM viejo: se
+          // recalcula solo para que nunca queden numeros desactualizados.
+          if (resultado && !resultado.error && fobUsd) calcularRef.current();
+        })
+        .catch(() => alert("No se pudo guardar el CBM. Proba de nuevo."))
+        .finally(() => setGuardandoCbm(false));
+    }, 700);
+  };
 
   const reloadProductTypes = () => {
     setLoadingTypes(true);
@@ -285,12 +333,17 @@ export default function CalculoImportacionPage() {
     if (!resultado || guardandoEscenario) return;
     const usuario = window.prompt("¿Quién guarda este escenario? (para poder filtrarlo después)");
     if (!usuario || !usuario.trim()) return;
+    const nombreEscenario = window.prompt(
+      `Nombre del escenario para "${resultado.productType.nombre}"\n(ej. Con 10k de Shipping - escenario competitivo)`
+    );
+    if (!nombreEscenario || !nombreEscenario.trim()) return;
     setGuardandoEscenario(true);
     fetch("/api/calc/scenarios", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         usuario: usuario.trim(),
+        nombreEscenario: nombreEscenario.trim(),
         productTypeId: resultado.productType.id,
         nombreProducto: resultado.productType.nombre,
         fobUsd: Number(fobUsd),
@@ -479,6 +532,7 @@ export default function CalculoImportacionPage() {
       .catch(() => setRunError("No se pudo calcular. Proba de nuevo."))
       .finally(() => setCalculando(false));
   };
+  calcularRef.current = calcular;
 
   const abrirSupuestos = () => {
     if (!supuestos) return;
@@ -734,16 +788,25 @@ export default function CalculoImportacionPage() {
                   (según CBM{selected.envio_meli_api_status === "found" ? " — última consulta API: OK" : ""})
                 </span>
               </div>
-              {selected.cbm_m3 != null && selected.cbm_m3 > 0 && supuestos && (
-                <div>
-                  <span style={{ color: "var(--muted)" }}>Unidades por contenedor: </span>
-                  <strong>
-                    40HC: {Math.floor(supuestos.capacidadCbmContenedor / selected.cbm_m3)} un
-                  </strong>
-                  {" · "}
-                  <strong>
-                    20FT: {Math.floor(supuestos.capacidad20ftM3 / selected.cbm_m3)} un
-                  </strong>
+              {supuestos && (
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <span style={{ color: "var(--muted)" }}>Unidades por 40HC: </span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={unidades40hc}
+                    onChange={(e) => cambiarUnidades40hc(e.target.value)}
+                    title="Si las modificás, el CBM se recalcula solo (capacidad del 40HC ÷ unidades)"
+                    style={{ width: 90, padding: "3px 6px", fontWeight: 700 }}
+                  />
+                  {guardandoCbm && <Spinner />}
+                  {selected.cbm_m3 != null && selected.cbm_m3 > 0 && (
+                    <>
+                      <span style={{ color: "var(--muted)" }}>· 20FT: </span>
+                      <strong>{Math.floor(supuestos.capacidad20ftM3 / selected.cbm_m3)} un</strong>
+                    </>
+                  )}
                 </div>
               )}
               <div>
@@ -866,9 +929,10 @@ export default function CalculoImportacionPage() {
                       <strong>COSTO NACIONALIZADO</strong>
                     </td>
                     <td style={{ textAlign: "right" }}>
-                      <strong>
-                        US$ {fmtUsd(resultado.resultado.costoNacionalizado.costoNacionalizadoUsd)} — $
-                        {fmtNumber(resultado.resultado.costoNacionalizado.costoNacionalizadoArs)}
+                      <strong>US$ {fmtUsd(resultado.resultado.costoNacionalizado.costoNacionalizadoUsd)}</strong>
+                      <span style={{ margin: "0 8px" }}>—</span>
+                      <strong style={{ fontSize: 24, color: "#1f9d47" }}>
+                        ${fmtNumber(resultado.resultado.costoNacionalizado.costoNacionalizadoArs)}
                       </strong>
                     </td>
                   </tr>
@@ -880,14 +944,22 @@ export default function CalculoImportacionPage() {
             <div className="stack-row">
               <div className="panel">
                 <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 12 }}>Vendiendo por MeLi</h1>
-                <CanalTable canal={resultado.resultado.meli} showMeliDetalle />
+                <CanalTable
+                  canal={resultado.resultado.meli}
+                  showMeliDetalle
+                  costoNacionalizadoArs={resultado.resultado.costoNacionalizado.costoNacionalizadoArs}
+                />
               </div>
               <div className="panel">
                 <h1 style={{ fontSize: 15, marginTop: 0, marginBottom: 12 }}>Vendiendo a Distribución</h1>
                 <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 10 }}>
                   PVP = PVP MeLi × (1 − {fmtPct(resultado.supuestos.descuentoDistribucionPct)})
                 </div>
-                <CanalTable canal={resultado.resultado.distribucion} showMeliDetalle={false} />
+                <CanalTable
+                  canal={resultado.resultado.distribucion}
+                  showMeliDetalle={false}
+                  costoNacionalizadoArs={resultado.resultado.costoNacionalizado.costoNacionalizadoArs}
+                />
               </div>
             </div>
           </>
@@ -922,6 +994,7 @@ export default function CalculoImportacionPage() {
                   <th>Fecha</th>
                   <th>Usuario</th>
                   <th>Producto</th>
+                  <th>Escenario</th>
                   <th style={{ textAlign: "right" }}>FOB</th>
                   <th style={{ textAlign: "right" }}>PVP MeLi</th>
                   <th style={{ textAlign: "right" }}>T. cambio</th>
@@ -938,6 +1011,7 @@ export default function CalculoImportacionPage() {
                     <td>{new Date(esc.createdAt).toLocaleDateString("es-AR")}</td>
                     <td>{esc.usuario}</td>
                     <td>{esc.nombreProducto}</td>
+                    <td>{esc.nombreEscenario ?? "—"}</td>
                     <td style={{ textAlign: "right" }}>US$ {fmtUsd(esc.fobUsd)}</td>
                     <td style={{ textAlign: "right" }}>{esc.pvpMeliArsConIva != null ? `$${fmtNumber(esc.pvpMeliArsConIva)}` : "—"}</td>
                     <td style={{ textAlign: "right" }}>{esc.tipoCambioArs != null ? fmtNumber(esc.tipoCambioArs) : "—"}</td>
@@ -1231,7 +1305,15 @@ function Campo({ label, value, onChange }: { label: string; value: string; onCha
   );
 }
 
-function CanalTable({ canal, showMeliDetalle }: { canal: CalcCanal; showMeliDetalle: boolean }) {
+function CanalTable({
+  canal,
+  showMeliDetalle,
+  costoNacionalizadoArs,
+}: {
+  canal: CalcCanal;
+  showMeliDetalle: boolean;
+  costoNacionalizadoArs: number;
+}) {
   return (
     <div className="table-scroll">
     <table className="admin-table" style={{ fontSize: 13 }}>
@@ -1269,6 +1351,10 @@ function CanalTable({ canal, showMeliDetalle }: { canal: CalcCanal; showMeliDeta
         <tr>
           <td>(−) IIBB</td>
           <td style={{ textAlign: "right" }}>${fmtNumber(canal.iibbArs)}</td>
+        </tr>
+        <tr>
+          <td>(−) Costo nacionalizado</td>
+          <td style={{ textAlign: "right" }}>${fmtNumber(costoNacionalizadoArs)}</td>
         </tr>
         <tr>
           <td>
