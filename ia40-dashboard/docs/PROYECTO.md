@@ -145,6 +145,14 @@ rápido, útil para diagnosticar una categoría puntual sin esperar a las otras
 8 — importante en el plan Hobby de Vercel, con límite de 60s por request salvo
 que se suba a Pro, que es lo que permite el `maxDuration=300` declarado).
 
+**Disparo automático:** un Cron Job de Vercel (`vercel.json` → `crons`, NO un
+scheduler externo — decisión ya tomada, correr el cron directo en Vercel en
+vez de en un servicio aparte) llama a este endpoint **1 vez por día**. Ver
+sección 15 (18/09/2026) por qué, con la config actual, esa corrida diaria
+casi siempre falla igual — el problema no es DÓNDE corre el cron (eso ya está
+resuelto, vive en Vercel), sino que depende de un token que sólo se mantiene
+fresco mientras una PC física está encendida (sección 7).
+
 **Rango de fechas (`dateRangeLastNMonths`):** trae por defecto los últimos 24
 meses (`SYNC_MONTHS_BACK`). Nunca incluye el mes calendario actual: aplica un
 "período de gracia" (`SYNC_DATA_LAG_DAYS`, default 15 días) porque los datos
@@ -240,6 +248,12 @@ where key = 'ia40_jwt';
   motivo del error si falla (usuario/contraseña de Cobus vencidos, abono de
   Cobus vencido, usuario deshabilitado, etc. — ver los mensajes de error que
   arma `refresh_token.py`).
+
+⚠️ **Caso frecuente, no es un error real:** un gap de varias horas en
+`log.txt` seguido de `net::ERR_NETWORK_IO_SUSPENDED` es la PC durmiéndose (no
+un fallo de Cobus) — el refresh retoma solo cuando la PC despierta. El
+problema real es que esto coincide casi todas las noches con el horario del
+cron diario (sección 6/15/16): agosto 2026 nunca se sincronizó por esto.
 
 ## 8. Parsers (marca / modelo / color / segmento)
 
@@ -1298,6 +1312,24 @@ GitHub, sin acción manual extra). `vercel.json` declara un único cron:
   ser basura de este bug (el sync nunca trae el mes en curso, ver sección 6)
   y es seguro borrarla. **Pendiente de confirmación final del usuario**
   (tarea #59).
+- **El sync diario nunca llega a agosto 2026 (PC dormida a las 03:00 ART)**
+  — reportado 18/09/2026 ("chequea porque no actualizo a agosto"). El cron
+  de Vercel (`vercel.json`, `/api/sync`) corre a las 06:00 UTC = 03:00 en
+  Argentina. A esa hora la PC del usuario (donde corre `refresh_token.py`
+  cada 10 min, sección 7) está normalmente dormida — confirmado en
+  `%LOCALAPPDATA%\CobusSync\log.txt`: el 17/09/2026 el último refresh
+  exitoso antes de dormirse la PC fue a las 17:26 ART, con un error de red
+  (`net::ERR_NETWORK_IO_SUSPENDED`, típico de que Windows suspende la red al
+  dormir) a las 21:08 ART, y recién retomó a las 08:35 ART del día
+  siguiente. Como el token guardado vence a los 20 min (`MAX_TOKEN_AGE_MIN`,
+  sección 7), CUALQUIER corrida del cron mientras la PC duerme falla con
+  `Ia40AuthError` para TODAS las categorías. Confirmado también consultando
+  `/api/evolution` en vivo: el período más nuevo en la base es
+  `2026-07-01`, ninguna fila de agosto. Esto no es un bug puntual — pasa
+  TODAS las noches con la configuración actual, así que el sync automático
+  probablemente nunca tuvo éxito desde que se instaló `CobusSync_Installer`
+  (los datos hasta julio deben venir de alguna corrida manual en horario de
+  oficina). Corrección propuesta en sección 16.
 - **4 parsers usando el patrón de aduana equivocado** — `almohadones_ortopedicos`,
   `sillas_ducha`, `elevadores_inodoro` y `camas_hospitalarias` usaban el
   motor genérico de Patrón A (pensado para "Sillas de ruedas": marca+modelo
@@ -1343,6 +1375,18 @@ GitHub, sin acción manual extra). `vercel.json` declara un único cron:
   gran escala — conviene revisar los primeros resultados reales (sobre todo
   los "categoria_movida", que tocan datos entre categorías) antes de confiar
   en él a ciegas para categorías enteras.
+- **Cron diario en un horario en que la PC de `refresh_token.py` está
+  dormida** (sección 15, 18/09/2026) — el sync automático probablemente
+  nunca tuvo éxito desde que se instaló `CobusSync_Installer`. **Corrección
+  propuesta, no aplicada todavía (pendiente de confirmar con el usuario):**
+  cambiar `vercel.json` de `"0 6 * * *"` (06:00 UTC = 03:00 ART) a un
+  horario dentro de la ventana en que la PC está despierta según 3 días
+  seguidos de `log.txt` (ej. `"0 14 * * *"` = 14:00 UTC = 11:00 ART) — no
+  soluciona el caso puntual de que la PC esté apagada justo ese día, pero
+  deja de fallar SIEMPRE como hoy. Corrección más robusta a futuro: mover
+  el refresh del token a un entorno que no dependa de una PC física
+  encendida (ej. un navegador headless corriendo en un servicio cloud), no
+  en la PC del usuario.
 
 ## 17. Cómo agregar una categoría nueva (receta rápida)
 
