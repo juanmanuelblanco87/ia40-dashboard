@@ -59,8 +59,13 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ ok: true, updatedAt: new Date().toISOString(), tokenLength: token.length, pasos });
   } catch (err) {
-    console.error("[refresh-ia40-token] ERROR:", err);
+    // 18/09/2026 (2do intento, "investiga porque falla el login en
+    // Vercel"): antes esto no logueaba ni devolvía "pasos" -- cada
+    // falla del cron quedaba sin ningún rastro de en qué paso se
+    // cortó (ver Ia40LoginError.pasos en lib/ia40Login.ts).
+    const pasos = err instanceof Ia40LoginError ? err.pasos : [];
+    console.error("[refresh-ia40-token] ERROR:", err, "pasos:", pasos);
     const status = err instanceof Ia40LoginError ? 502 : 500;
-    return NextResponse.json({ ok: false, error: String((err as any)?.message ?? err) }, { status });
+    return NextResponse.json({ ok: false, error: String((err as any)?.message ?? err), pasos }, { status });
   }
 }

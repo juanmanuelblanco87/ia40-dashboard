@@ -32,7 +32,11 @@ export async function GET(req: Request) {
     const { token, pasos, finalUrl } = await fetchFreshIa40Token(username, password);
     return NextResponse.json({ ok: true, pasos, finalUrl, tokenLength: token.length });
   } catch (err) {
-    const pasos = err instanceof Ia40LoginError ? [] : [];
+    // 18/09/2026 (2do intento): antes esto devolvía SIEMPRE pasos:[]
+    // (el bug era literal: los 2 lados del ternario devolvían lo
+    // mismo) -- Ia40LoginError ahora carga los pasos reales hasta
+    // donde llegó, así que se puede ver en qué paso se cortó.
+    const pasos = err instanceof Ia40LoginError ? err.pasos : [];
     return NextResponse.json(
       { ok: false, pasos, error: String((err as any)?.message ?? err) },
       { status: 500 }

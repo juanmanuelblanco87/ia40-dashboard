@@ -38,7 +38,17 @@ window.navigator.permissions.query = (parameters) => (
 );
 `;
 
-export class Ia40LoginError extends Error {}
+// 18/09/2026 (2do intento, "investiga porque falla el login en Vercel"):
+// pasos ahora viaja PEGADO al error -- antes se perdia (la funcion sólo
+// lo devolvía en el camino feliz), así que cada falla en el cron dejaba
+// cero rastro de en qué paso exacto se cortó.
+export class Ia40LoginError extends Error {
+  pasos: string[];
+  constructor(message: string, pasos: string[] = []) {
+    super(message);
+    this.pasos = pasos;
+  }
+}
 
 export interface Ia40LoginResult {
   token: string;
@@ -65,7 +75,16 @@ export async function fetchFreshIa40Token(username: string, password: string): P
       headless: true,
     });
 
-    const context = await browser.newContext({ userAgent: USER_AGENT, locale: "es-AR" });
+    // 18/09/2026: sin viewport explicito, Playwright headless usa
+    // 800x600 por defecto -- bastante mas chico que un navegador real,
+    // lo que puede disparar un layout/JS distinto (menu movil, scripts
+    // que esperan un viewport "de escritorio") en un sitio que decide
+    // que mostrar segun el tamaño de pantalla.
+    const context = await browser.newContext({
+      userAgent: USER_AGENT,
+      locale: "es-AR",
+      viewport: { width: 1366, height: 900 },
+    });
     await context.addInitScript(STEALTH_JS);
     const page = await context.newPage();
 
@@ -83,15 +102,31 @@ export async function fetchFreshIa40Token(username: string, password: string): P
     pasos.push("click INGRESAR");
     await page.click("a.login-link", { timeout: 10000 });
 
+    // 18/09/2026 (2do intento, "investiga porque falla el login en
+    // Vercel"): esto fallaba SIEMPRE que lo disparaba el cron pero
+    // funcionó en una prueba manual -- la sospecha principal es que un
+    // arranque en frio de Chromium en Vercel (bajar+descomprimir el
+    // binario) le come tiempo al proceso ANTES de este punto, dejando
+    // menos margen para que el sitio inyecte el iframe via JS. Antes
+    // esperaba sólo 20×250ms = 5s fijos, sin ningún dato de qué había
+    // en la página si fallaba. Ahora: 60×250ms = 15s, y si igual no
+    // aparece, se deja un registro real (frames existentes + URL
+    // actual) en vez de tirar el error a ciegas.
     pasos.push("esperando iframe de login");
     let loginFrame = null;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 60; i++) {
       loginFrame = page.frames().find((f) => f.url().includes("cobus1login")) ?? null;
       if (loginFrame) break;
       await page.waitForTimeout(250);
     }
     if (!loginFrame) {
-      throw new Ia40LoginError("No aparecio el iframe de login (cobus1login.html) tras clickear INGRESAR.");
+      const framesVistos = page.frames().map((f) => f.url()).join(" | ") || "(ninguno)";
+      pasos.push(`frames en la pagina: ${framesVistos}`);
+      pasos.push(`url actual: ${page.url()}`);
+      throw new Ia40LoginError(
+        "No aparecio el iframe de login (cobus1login.html) tras clickear INGRESAR.",
+        pasos
+      );
     }
 
     pasos.push("completando usuario/contrasena");
@@ -103,7 +138,7 @@ export async function fetchFreshIa40Token(username: string, password: string): P
     await page.waitForTimeout(4000);
 
     if (loginErrorMsg) {
-      throw new Ia40LoginError(loginErrorMsg);
+      throw new Ia40LoginError(loginErrorMsg, pasos);
     }
 
     if (!captured.token) {
@@ -120,14 +155,17 @@ export async function fetchFreshIa40Token(username: string, password: string): P
     await browser.close();
 
     if (!captured.token) {
-      throw new Ia40LoginError(`No se pudo capturar el token despues del login. Ultima URL: ${finalUrl}`);
+      throw new Ia40LoginError(`No se pudo capturar el token despues del login. Ultima URL: ${finalUrl}`, pasos);
     }
 
     pasos.push("token capturado");
     return { token: captured.token, pasos, finalUrl };
   } catch (err) {
     if (browser) await browser.close().catch(() => {});
-    if (err instanceof Ia40LoginError) throw err;
-    throw new Ia40LoginError(String((err as any)?.message ?? err));
+    if (err instanceof Ia40LoginError) {
+      if (!err.pasos?.length) err.pasos = pasos;
+      throw err;
+    }
+    throw new Ia40LoginError(String((err as any)?.message ?? err), pasos);
   }
 }
