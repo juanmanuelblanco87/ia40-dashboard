@@ -57,6 +57,14 @@ import type { NextRequest } from "next/server";
  *     entonces, sin importar qué TOKEN_UPDATE_SECRET tuviera el script:
  *     el middleware lo rechazaba con 401 ANTES de que la ruta llegara a
  *     chequear ese secreto.
+ *   - /api/refresh-ia40-token: MISMO bug de arriba, de nuevo (18/09/2026,
+ *     "el token sigue siendo el mismo" -- el Cron Job de Vercel que
+ *     reemplaza a refresh_token.py, ver vercel.json, se llevaba un 401
+ *     de este middleware ANTES de llegar a loguearse a Cobus, sin dejar
+ *     ningún rastro en los logs de la función -- ni un solo console.log,
+ *     porque el handler nunca llegaba a correr).
+ *   - /api/test-ia40-login: mismo motivo -- herramienta de diagnóstico
+ *     manual para probar el login sin la cookie de este portal.
  *   - archivos estaticos (imagenes, _next, etc.) -- si no, ni el logo de
  *     la propia pantalla de login cargaria.
  *
@@ -137,6 +145,6 @@ export const config = {
   // directamente, y cualquier archivo estatico (cualquier ruta con un
   // "." -- imagenes, _next/static, etc.).
   matcher: [
-    "/((?!login|api/login|api/sync|api/sync-images|api/meli-sellout-snapshot|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|api/rental-price-ai|api/token|.*\\..*).*)",
+    "/((?!login|api/login|api/sync|api/sync-images|api/meli-sellout-snapshot|api/calc/meli-oauth|api/calc/meli-webhook|api/meli-price-proxy|api/rental-price-ai|api/token|api/refresh-ia40-token|api/test-ia40-login|.*\\..*).*)",
   ],
 };
