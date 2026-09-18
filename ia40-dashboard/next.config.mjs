@@ -19,7 +19,13 @@ const nextConfig = {
   // anidado bajo experimental, confirmado leyendo
   // node_modules/next/dist/server/config-shared.d.ts.)
   experimental: {
-    serverComponentsExternalPackages: ["got-scraping", "header-generator"],
+    // 18/09/2026: mismo motivo que got-scraping/header-generator arriba
+    // -- playwright-core intenta traer con webpack dependencias
+    // opcionales (chromium-bidi, kerberos) que no hacen falta para el
+    // uso real (CDP sobre Chromium via @sparticuz/chromium) y ni
+    // siquiera estan instaladas -- rompian el build. Se sacan del
+    // bundle, Node las resuelve (o no, si no se usan) en runtime.
+    serverComponentsExternalPackages: ["got-scraping", "header-generator", "playwright-core", "@sparticuz/chromium"],
   },
 };
 export default nextConfig;
