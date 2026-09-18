@@ -25,7 +25,7 @@ const nextConfig = {
     // uso real (CDP sobre Chromium via @sparticuz/chromium) y ni
     // siquiera estan instaladas -- rompian el build. Se sacan del
     // bundle, Node las resuelve (o no, si no se usan) en runtime.
-    serverComponentsExternalPackages: ["got-scraping", "header-generator", "playwright-core", "@sparticuz/chromium"],
+    serverComponentsExternalPackages: ["got-scraping", "header-generator", "playwright-core", "@sparticuz/chromium-min"],
   },
 };
 export default nextConfig;

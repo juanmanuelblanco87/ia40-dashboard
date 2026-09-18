@@ -1,6 +1,18 @@
 import { NextResponse } from "next/server";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
 import { chromium as playwrightChromium } from "playwright-core";
+
+// 18/09/2026 (error real en Vercel: "input directory .../@sparticuz/
+// chromium/bin does not exist"): el output file tracing de Next no
+// detecta los binarios de Chromium (los resuelve chromium.executablePath()
+// con path.join/fs en runtime, no con require() estatico -- outputFile
+// TracingIncludes en next.config.mjs tampoco lo solucionó). Se usa la
+// variante -min (sin el binario adentro) + el pack .tar oficial de la
+// misma versión, publicado como asset de release en GitHub -- se
+// descarga y cachea solo en /tmp la primera vez que corre (ver README
+// de @sparticuz/chromium, sección "-min package").
+const CHROMIUM_PACK_URL =
+  "https://github.com/Sparticuz/chromium/releases/download/v153.0.0/chromium-v153.0.0-pack.x64.tar";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -67,7 +79,7 @@ export async function GET(req: Request) {
     pasos.push("lanzando chromium");
     browser = await playwrightChromium.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath(),
+      executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
       headless: true,
     });
 
