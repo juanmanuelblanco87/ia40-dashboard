@@ -3,7 +3,7 @@ import { query } from "@/lib/db";
 import { fetchFreshIa40Token, Ia40LoginError } from "@/lib/ia40Login";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300; // 18/09/2026: 60s no alcanzaba -- ver mas abajo
 
 // 18/09/2026 ("como lo resolvemos para que sea sostenible? Vercel?"):
 // reemplaza a refresh_token.py + CobusSync_Installer (Windows Task
@@ -28,27 +28,38 @@ function isAuthorized(req: Request): boolean {
 }
 
 export async function GET(req: Request) {
+  // 18/09/2026 ("el token sigue siendo el mismo"): el cron corria (se
+  // veia en los logs) pero app_settings nunca se actualizaba, sin
+  // ningun error visible -- console.log/error explicitos en cada paso
+  // para poder ver EXACTAMENTE donde se cae la próxima vez.
+  console.log("[refresh-ia40-token] request recibido");
   if (!isAuthorized(req)) {
+    console.error("[refresh-ia40-token] unauthorized");
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const username = process.env.IA40_USERNAME;
   const password = process.env.IA40_PASSWORD;
   if (!username || !password) {
+    console.error("[refresh-ia40-token] faltan IA40_USERNAME/IA40_PASSWORD");
     return NextResponse.json({ error: "Faltan IA40_USERNAME/IA40_PASSWORD en las variables de entorno." }, { status: 500 });
   }
 
   try {
+    console.log("[refresh-ia40-token] arrancando login");
     const { token, pasos } = await fetchFreshIa40Token(username, password);
+    console.log("[refresh-ia40-token] login OK, token de " + token.length + " caracteres, pasos:", pasos);
 
     await query(
       `insert into app_settings (key, value, updated_at) values ('ia40_jwt', $1, now())
        on conflict (key) do update set value = excluded.value, updated_at = now()`,
       [token]
     );
+    console.log("[refresh-ia40-token] guardado en app_settings OK");
 
     return NextResponse.json({ ok: true, updatedAt: new Date().toISOString(), tokenLength: token.length, pasos });
   } catch (err) {
+    console.error("[refresh-ia40-token] ERROR:", err);
     const status = err instanceof Ia40LoginError ? 502 : 500;
     return NextResponse.json({ ok: false, error: String((err as any)?.message ?? err) }, { status });
   }
