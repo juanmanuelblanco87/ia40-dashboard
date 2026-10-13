@@ -1,11 +1,24 @@
 {
   "functions": {
-    "app/api/refresh-ia40-token/route.ts": { "memory": 3009 },
-    "app/api/test-ia40-login/route.ts": { "memory": 3009 }
+    "app/api/refresh-ia40-token/route.ts": {
+      "memory": 3009
+    },
+    "app/api/test-ia40-login/route.ts": {
+      "memory": 3009
+    },
+    "app/api/ejecutar-sync/route.ts": {
+      "memory": 3009,
+      "maxDuration": 300
+    },
+    "app/api/sync/route.ts": {
+      "memory": 3009,
+      "maxDuration": 300
+    }
   },
   "crons": [
-    { "path": "/api/sync", "schedule": "30 16 * * *" },
-    { "path": "/api/refresh-ia40-token", "schedule": "*/10 * * * *" }
+    {
+      "path": "/api/sync",
+      "schedule": "*/15 11-23 * * *"
+    }
   ]
 }
-

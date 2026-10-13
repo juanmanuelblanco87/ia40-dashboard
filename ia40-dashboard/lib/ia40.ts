@@ -1,8 +1,7 @@
-import { query } from "./db";
+import { Ia40AuthError, getFreshJwt } from "./ia40Token";
 
 const BASE_URL = "https://api.cobusgroup.com/api/v1/f";
 const PAGE_LIMIT = 50;
-const MAX_TOKEN_AGE_MIN = 20;
 
 export interface Filter {
   field: string;
@@ -19,7 +18,7 @@ export interface FetchDataParams {
   maxRecords?: number;
 }
 
-export class Ia40AuthError extends Error {}
+export { Ia40AuthError };
 
 function headers(token: string): Record<string, string> {
   return {
@@ -33,31 +32,17 @@ function headers(token: string): Record<string, string> {
   };
 }
 
-async function getStoredJwt(): Promise<string> {
-  const rows = await query<{ value: string; updated_at: string }>(
-    `select value, updated_at from app_settings where key = 'ia40_jwt'`
-  );
-
-  if (rows.length === 0) {
-    throw new Ia40AuthError(
-      "No hay token guardado todavia. Corre refresh_token.py en tu compu al menos una vez."
-    );
+// 13/10/2026: el acceso (JWT) se pide "a demanda" (ver lib/ia40Token.ts); si Cobus responde 401 a mitad de camino se renueva UNA vez y se reintenta.
+export async function fetchIa40Data(params: FetchDataParams): Promise<{ rows: any[]; schema: any }> {
+  try {
+    return await fetchIa40DataConToken(params, await getFreshJwt());
+  } catch (err) {
+    if (!(err instanceof Ia40AuthError)) throw err;
+    return await fetchIa40DataConToken(params, await getFreshJwt({ forzar: true }));
   }
-
-  const ageMin = (Date.now() - new Date(rows[0].updated_at).getTime()) / 60000;
-  if (ageMin > MAX_TOKEN_AGE_MIN) {
-    throw new Ia40AuthError(
-      `El token guardado tiene ${ageMin.toFixed(
-        0
-      )} minutos, probablemente vencio. Revisa que el script local (refresh_token.py) siga corriendo via el Programador de tareas de Windows.`
-    );
-  }
-
-  return rows[0].value;
 }
 
-export async function fetchIa40Data(params: FetchDataParams): Promise<{ rows: any[]; schema: any }> {
-  const token = await getStoredJwt();
+async function fetchIa40DataConToken(params: FetchDataParams, token: string): Promise<{ rows: any[]; schema: any }> {
 
   const allRows: any[] = [];
   let schema: any = null;

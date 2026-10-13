@@ -1,0 +1,85 @@
+import { NextResponse } from "next/server";
+import { query } from "@/lib/db";
+import { rangoDeFechas } from "@/lib/syncRunner";
+import { getStoredTokenInfo } from "@/lib/ia40Token";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Estado de los datos de Importaciones por categoria (13/10/2026): hasta que mes llegan, cuando se sincronizaron bien por ultima vez y si el ultimo intento fallo.
+ * Lo muestra la pantalla principal (components/EstadoDatos.tsx) para que una sincronizacion caida deje de ser invisible.
+ *
+ *   estado: "ok"          -> sincronizada bien en las ultimas 36 hs
+ *           "reintentando"-> sincronizada bien en las ultimas 36 hs, pero el ULTIMO intento fallo (se reintenta sola)
+ *           "atrasada"    -> sin una sincronizacion exitosa hace mas de 36 hs, o nunca
+ */
+const HORAS_ATRASADA = 36;
+
+interface Corrida {
+  category_id: number;
+  status: string;
+  error_message: string | null;
+  run_at: string;
+}
+
+export async function GET() {
+  const [cats, agg, ok, recientes, token] = await Promise.all([
+    query<{ id: number; slug: string; name: string }>(`select id, slug, name from categories order by name`),
+    query<{ category_id: number; hasta: string | null; filas: string }>(
+      `select category_id, to_char(max(period), 'YYYY-MM') as hasta, coalesce(sum(record_count), 0)::text as filas from monthly_brand_model_agg group by category_id`
+    ),
+    query<{ category_id: number; t: string }>(`select category_id, max(run_at) as t from sync_runs where status = 'ok' group by category_id`),
+    query<Corrida>(`select category_id, status, error_message, run_at from sync_runs order by run_at desc limit 800`),
+    getStoredTokenInfo().catch(() => null),
+  ]);
+
+  const mapAgg = new Map(agg.map((r) => [r.category_id, r]));
+  const mapOk = new Map(ok.map((r) => [r.category_id, new Date(r.t).getTime()]));
+  const porCat = new Map<number, Corrida[]>();
+  for (const r of recientes) {
+    const l = porCat.get(r.category_id) ?? [];
+    l.push(r);
+    porCat.set(r.category_id, l);
+  }
+
+  const ahora = Date.now();
+  const esperado = rangoDeFechas(1).end.slice(0, 7); // mes hasta el que ya deberia haber datos de aduana
+  const categorias = cats.map((c) => {
+    const corridas = porCat.get(c.id) ?? [];
+    const ultima = corridas[0] ?? null;
+    let fallosSeguidos = 0;
+    for (const r of corridas) {
+      if (r.status === "ok") break;
+      if (r.status !== "running") fallosSeguidos++;
+    }
+    const ultimoError = corridas.find((r) => r.status !== "ok" && r.status !== "running" && r.error_message)?.error_message ?? null;
+    const ultimaOkMs = mapOk.get(c.id) ?? null;
+    const horas = ultimaOkMs ? (ahora - ultimaOkMs) / 3600000 : null;
+    const estado = horas !== null && horas <= HORAS_ATRASADA ? (ultima && ultima.status !== "ok" && ultima.status !== "running" ? "reintentando" : "ok") : "atrasada";
+    const a = mapAgg.get(c.id);
+    return {
+      slug: c.slug,
+      name: c.name,
+      estado,
+      datosHasta: a?.hasta ?? null,
+      filas: Number(a?.filas ?? 0),
+      ultimaSincronizacionOk: ultimaOkMs ? new Date(ultimaOkMs).toISOString() : null,
+      ultimoIntento: ultima ? { status: ultima.status, runAt: new Date(ultima.run_at).toISOString() } : null,
+      fallosSeguidos,
+      ultimoError: ultimoError ? ultimoError.slice(0, 300) : null,
+    };
+  });
+
+  return NextResponse.json({
+    ahora: new Date(ahora).toISOString(),
+    datosEsperadosHasta: esperado,
+    acceso: token ? { edadMin: Math.round(token.edadMin), actualizado: token.updatedAt } : null,
+    resumen: {
+      total: categorias.length,
+      ok: categorias.filter((c) => c.estado === "ok").length,
+      reintentando: categorias.filter((c) => c.estado === "reintentando").length,
+      atrasadas: categorias.filter((c) => c.estado === "atrasada").length,
+    },
+    categorias,
+  });
+}

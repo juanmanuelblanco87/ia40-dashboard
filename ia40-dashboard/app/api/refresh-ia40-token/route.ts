@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { query } from "@/lib/db";
-import { fetchFreshIa40Token, Ia40LoginError } from "@/lib/ia40Login";
+import { Ia40LoginError } from "@/lib/ia40Login";
+import { renovarToken } from "@/lib/ia40Token";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 18/09/2026: 60s no alcanzaba -- ver mas abajo
@@ -46,18 +46,11 @@ export async function GET(req: Request) {
   }
 
   try {
-    console.log("[refresh-ia40-token] arrancando login");
-    const { token, pasos } = await fetchFreshIa40Token(username, password);
-    console.log("[refresh-ia40-token] login OK, token de " + token.length + " caracteres, pasos:", pasos);
-
-    await query(
-      `insert into app_settings (key, value, updated_at) values ('ia40_jwt', $1, now())
-       on conflict (key) do update set value = excluded.value, updated_at = now()`,
-      [token]
-    );
-    console.log("[refresh-ia40-token] guardado en app_settings OK");
-
-    return NextResponse.json({ ok: true, updatedAt: new Date().toISOString(), tokenLength: token.length, pasos });
+    // 13/10/2026: el Cron Job de cada 10 min ya no existe (ver vercel.json); este endpoint queda como disparador manual del login (con 3 reintentos) para diagnosticar.
+    console.log("[refresh-ia40-token] arrancando login (hasta 3 intentos)");
+    const token = await renovarToken();
+    console.log("[refresh-ia40-token] login OK, token de " + token.length + " caracteres, guardado en app_settings");
+    return NextResponse.json({ ok: true, updatedAt: new Date().toISOString(), tokenLength: token.length });
   } catch (err) {
     // 18/09/2026 (2do intento, "investiga porque falla el login en
     // Vercel"): antes esto no logueaba ni devolvía "pasos" -- cada

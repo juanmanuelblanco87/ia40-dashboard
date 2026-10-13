@@ -15,26 +15,11 @@
  */
 
 import JSZip from "jszip";
-import { query } from "./db";
+import { Ia40AuthError, getFreshJwt } from "./ia40Token";
 
 const BASE_URL = "https://api.cobusgroup.com/api/v1/f";
-const MAX_TOKEN_AGE_MIN = 20;
 
-export class Ia40AuthError extends Error {}
-
-async function getStoredJwt(): Promise<string> {
-  const rows = await query<{ value: string; updated_at: string }>(
-    `select value, updated_at from app_settings where key = 'ia40_jwt'`
-  );
-  if (rows.length === 0) {
-    throw new Ia40AuthError("No hay token guardado todavia (corre refresh_token.py al menos una vez).");
-  }
-  const ageMin = (Date.now() - new Date(rows[0].updated_at).getTime()) / 60000;
-  if (ageMin > MAX_TOKEN_AGE_MIN) {
-    throw new Ia40AuthError(`El token guardado tiene ${ageMin.toFixed(1)} min, parece vencido.`);
-  }
-  return rows[0].value;
-}
+export { Ia40AuthError };
 
 function headers(token: string): Record<string, string> {
   return {
@@ -367,15 +352,27 @@ function parseMoneyOrPlain(v: string | undefined): number | null {
  * mas dos claves nuevas: "sufijos" y "precio_unitario", para el parser de
  * marca/modelo.
  */
-export async function fetchIa40ExportRows(params: {
+type ExportParams = {
   countryCodi: string;
   informationTypeCodi: string;
   operationTypeCodi: string;
   dateStart: string;
   dateEnd: string;
   ncmCode: string;
-}): Promise<any[]> {
-  const token = await getStoredJwt();
+};
+
+// 13/10/2026: el acceso (JWT) se pide "a demanda" (ver lib/ia40Token.ts); si Cobus responde 401 a mitad de camino (el token dura ~15 min y una exportacion grande
+// puede tardar) se renueva UNA vez y se repite el pedido completo.
+export async function fetchIa40ExportRows(params: ExportParams): Promise<any[]> {
+  try {
+    return await fetchIa40ExportRowsConToken(params, await getFreshJwt());
+  } catch (err) {
+    if (!(err instanceof Ia40AuthError)) throw err;
+    return await fetchIa40ExportRowsConToken(params, await getFreshJwt({ forzar: true }));
+  }
+}
+
+async function fetchIa40ExportRowsConToken(params: ExportParams, token: string): Promise<any[]> {
 
   const { notificationId } = await triggerExport(token, {
     countryCodi: params.countryCodi,

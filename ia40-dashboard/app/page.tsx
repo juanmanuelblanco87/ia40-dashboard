@@ -6,6 +6,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 import EvolutionChart, { SeriesPoint, PivotResult, formatPeriod, fmtNumber } from "@/components/EvolutionChart";
 import MultiSelectDropdown from "@/components/MultiSelectDropdown";
 import AppHeader from "@/components/AppHeader";
+import EstadoDatos from "@/components/EstadoDatos";
 import { segmentosValidos } from "@/lib/segmentos";
 
 // Colores fijos para los 6 segmentos originales de "Sillas de Ruedas" (se
@@ -1340,7 +1341,7 @@ export default function Home() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
           <div style={{ fontSize: 13, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
             <span>Datos sincronizados desde Cobus Group</span>
-            {syncOk === true && <span title="Sincronización OK" style={{ color: "#2fa84f" }}>✓</span>}
+            {syncOk === true && <span title="La pantalla pudo leer los datos (el estado de la sincronización está debajo)" style={{ color: "#2fa84f" }}>✓</span>}
             {syncOk === false && <span title="No se pudo cargar la información" style={{ color: "#d93a3a" }}>⚠️</span>}
           </div>
           <button
@@ -1351,6 +1352,8 @@ export default function Home() {
             {herramientasAbiertas ? "Ocultar herramientas ▴" : "Herramientas de datos ▾"}
           </button>
         </div>
+
+        <EstadoDatos />
 
         {herramientasAbiertas && (
         <>
