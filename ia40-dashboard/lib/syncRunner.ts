@@ -224,8 +224,12 @@ export async function runSync(opts: SyncOptions = {}) {
   for (const c of normales) unidades.push({ clave: c.slug, cats: [c], compartida: false });
 
   // 3) estado actual de cada categoria
+  // 13/10/2026 ("Ultimo mes Septiembre, listo! deja de llamar"): una categoria esta AL DIA cuando ya tuvo una sincronizacion exitosa cuya ventana llegaba hasta el ultimo mes
+  // disponible (rangoDeFechas().end). Mientras ese mes no cambie no se vuelve a llamar a Cobus; recien cuando el mes nuevo pase el periodo de gracia la ventana avanza y
+  // la categoria vuelve a quedar pendiente (una sola sincronizacion). "Sincronizar ahora" / "Reintentar" fuerzan una corrida igual.
+  const finVentana = rangoDeFechas(1).end;
   const [okHoy, ncmPorCat, ultimaOk, ultimoIntento, enCurso] = await Promise.all([
-    query<{ category_id: number; n: number }>(`select category_id, count(distinct ncm_code)::int as n from sync_runs where status = 'ok' and ncm_code <> 'resumen' and run_at >= ${INICIO_DIA_ART} group by category_id`),
+    query<{ category_id: number; n: number }>(`select category_id, count(distinct ncm_code)::int as n from sync_runs where status = 'ok' and ncm_code <> 'resumen' and period_end >= $1::date group by category_id`, [finVentana]),
     query<{ category_id: number; n: number }>(`select category_id, count(*)::int as n from category_ncm_codes group by category_id`),
     query<{ category_id: number; t: string }>(`select category_id, max(run_at) as t from sync_runs where status = 'ok' group by category_id`),
     query<{ category_id: number; status: string; t: string }>(`select distinct on (category_id) category_id, status, run_at as t from sync_runs where ncm_code <> 'resumen' order by category_id, run_at desc`),

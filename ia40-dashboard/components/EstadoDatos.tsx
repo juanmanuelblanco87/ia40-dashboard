@@ -112,7 +112,7 @@ export default function EstadoDatos() {
   const color = resumen.atrasadas > 0 ? "#b3261e" : resumen.reintentando > 0 ? "#b35c00" : "#2f7d4f";
   const titulo =
     resumen.atrasadas > 0
-      ? `⚠️ ${resumen.atrasadas} ${resumen.atrasadas === 1 ? "categoría sin actualizar" : "categorías sin actualizar"} hace más de 36 h`
+      ? `⚠️ ${resumen.atrasadas} ${resumen.atrasadas === 1 ? "categoría sin actualizar" : "categorías sin actualizar"} al último mes disponible`
       : resumen.reintentando > 0
       ? `⏳ ${resumen.reintentando} ${resumen.reintentando === 1 ? "categoría" : "categorías"} reintentando (el último intento falló)`
       : "✓ Datos al día";
