@@ -1828,7 +1828,7 @@ export default function Home() {
       )}
 
       <p style={{ color: "var(--muted)", fontSize: 13 }}>
-        Los datos se actualizan una vez por dia via /api/sync (Vercel Cron).
+        Los datos se sincronizan con Cobus solos cuando hay un mes nuevo disponible (ver el estado arriba, con la opción de sincronizar a mano).
         Si una categoria no tiene marca/modelo mapeados todavia, esas columnas
         aparecen como "sin_dato" hasta cargar el mapeo en field_mappings.
       </p>
