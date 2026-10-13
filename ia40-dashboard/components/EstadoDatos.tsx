@@ -13,6 +13,7 @@ interface CategoriaEstado {
   name: string;
   estado: "ok" | "reintentando" | "atrasada";
   datosHasta: string | null;
+  mesesFaltantes: string[];
   filas: number;
   ultimaSincronizacionOk: string | null;
   ultimoIntento: { status: string; runAt: string } | null;
@@ -154,6 +155,11 @@ export default function EstadoDatos() {
                     <td style={{ padding: "5px 8px", fontWeight: 600 }}>{c.name}</td>
                     <td style={{ padding: "5px 8px", color: atras || c.datosHasta === null ? "#b35c00" : undefined }} title={atras ? `Se esperaban datos hasta ${mesLegible(estado.datosEsperadosHasta)}` : undefined}>
                       {mesLegible(c.datosHasta)}
+                      {c.mesesFaltantes?.length > 0 && (
+                        <div style={{ color: "#b3261e", fontSize: 11, marginTop: 2 }} title="Meses sin ningún registro entre el primero y el último con datos">
+                          Sin datos en: {c.mesesFaltantes.map(mesLegible).join(", ")}
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: "5px 8px" }}>{hace(c.ultimaSincronizacionOk, estado.ahora)}</td>
                     <td style={{ padding: "5px 8px" }}>

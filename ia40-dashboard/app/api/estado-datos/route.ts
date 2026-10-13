@@ -23,7 +23,7 @@ interface Corrida {
 }
 
 export async function GET() {
-  const [cats, agg, ok, recientes, token] = await Promise.all([
+  const [cats, agg, ok, recientes, token, mesesRows] = await Promise.all([
     query<{ id: number; slug: string; name: string }>(`select id, slug, name from categories order by name`),
     query<{ category_id: number; hasta: string | null; filas: string }>(
       `select category_id, to_char(max(period), 'YYYY-MM') as hasta, coalesce(sum(record_count), 0)::text as filas from monthly_brand_model_agg group by category_id`
@@ -31,7 +31,26 @@ export async function GET() {
     query<{ category_id: number; t: string }>(`select category_id, max(run_at) as t from sync_runs where status = 'ok' group by category_id`),
     query<Corrida>(`select category_id, status, error_message, run_at from sync_runs order by run_at desc limit 800`),
     getStoredTokenInfo().catch(() => null),
+    query<{ category_id: number; ym: string }>(`select distinct category_id, to_char(period, 'YYYY-MM') as ym from monthly_brand_model_agg order by 1, 2`),
   ]);
+
+  // meses que faltan DENTRO del rango con datos de cada categoria (hueco entre el primer y el ultimo mes con datos)
+  const mesesPorCat = new Map<number, string[]>();
+  for (const r of mesesRows) mesesPorCat.set(r.category_id, [...(mesesPorCat.get(r.category_id) ?? []), r.ym]);
+  const huecos = (meses: string[]): string[] => {
+    if (meses.length < 2) return [];
+    const set = new Set(meses);
+    const out: string[] = [];
+    let [y, m] = meses[0].split("-").map(Number);
+    const [yf, mf] = meses[meses.length - 1].split("-").map(Number);
+    while (y < yf || (y === yf && m < mf)) {
+      const k = `${y}-${String(m).padStart(2, "0")}`;
+      if (!set.has(k)) out.push(k);
+      m++;
+      if (m > 12) { m = 1; y++; }
+    }
+    return out;
+  };
 
   const mapAgg = new Map(agg.map((r) => [r.category_id, r]));
   const mapOk = new Map(ok.map((r) => [r.category_id, new Date(r.t).getTime()]));
@@ -62,6 +81,7 @@ export async function GET() {
       name: c.name,
       estado,
       datosHasta: a?.hasta ?? null,
+      mesesFaltantes: huecos(mesesPorCat.get(c.id) ?? []),
       filas: Number(a?.filas ?? 0),
       ultimaSincronizacionOk: ultimaOkMs ? new Date(ultimaOkMs).toISOString() : null,
       ultimoIntento: ultima ? { status: ultima.status, runAt: new Date(ultima.run_at).toISOString() } : null,
