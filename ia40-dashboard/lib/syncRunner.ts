@@ -162,15 +162,46 @@ async function sincronizarNormal(cat: Cat, start: string, end: string) {
   return resultados;
 }
 
+/**
+ * Repara los resumenes mensuales que quedaron incompletos SIN llamar a Cobus (13/10/2026, "porque se perdio el historial de sillas de ruedas"): la sincronizacion
+ * nunca borra trade_records (solo hace upsert), asi que el historial crudo sigue en la base; lo que se pierde es el resumen (monthly_brand_model_agg), que el codigo
+ * viejo borraba y rearmaba en 2 pasos sueltos. Si una categoria tiene menos meses (o un ultimo mes mas viejo) en el resumen que en los registros, se rearma desde ellos.
+ */
+async function repararResumenes(): Promise<{ category: string; filas: number }[]> {
+  const rotas = await query<{ id: number; slug: string }>(
+    `select c.id, c.slug
+       from categories c
+       join (select category_id, count(distinct period) as p, max(period) as mx from trade_records group by category_id) tr on tr.category_id = c.id
+       left join (select category_id, count(distinct period) as p, max(period) as mx from monthly_brand_model_agg group by category_id) a on a.category_id = c.id
+      where a.category_id is null or a.p < tr.p or a.mx < tr.mx`
+  );
+  const hechos: { category: string; filas: number }[] = [];
+  for (const c of rotas) {
+    try {
+      const r = await recomputeMonthlyAgg(c.id);
+      hechos.push({ category: c.slug, filas: r.filas });
+    } catch (e: any) {
+      console.error(`[syncRunner] no se pudo reparar el resumen de ${c.slug}: ${e?.message ?? e}`);
+    }
+  }
+  return hechos;
+}
+
 export async function runSync(opts: SyncOptions = {}) {
   const t0 = Date.now();
   const presupuesto = opts.budgetMs ?? 240000;
+
+  // resumenes incompletos se rearman desde los registros guardados (no depende de Cobus)
+  const resumenesReparados = await repararResumenes().catch((e) => {
+    console.error("[syncRunner] reparar resumenes fallo:", e?.message ?? e);
+    return [] as { category: string; filas: number }[];
+  });
 
   // 0) si hace instantes se agotaron los intentos de login a Cobus, no se insiste (cada intento levanta un Chrome): se vuelve a probar en la proxima ventana
   if (!opts.force) {
     const minFallo = await minutosDesdeUltimoFalloLogin();
     if (minFallo !== null && minFallo < ESPERA_TRAS_FALLO_LOGIN_MIN) {
-      return { ranAt: new Date().toISOString(), ms: Date.now() - t0, procesadas: [], pendientes_sin_procesar: [], ya_hechas_hoy: [], en_curso_por_otra_corrida: [], detenido_por_acceso_a_cobus: true, nota: `El login a Cobus fallo hace ${Math.round(minFallo)} min; se espera antes de reintentar.` };
+      return { ranAt: new Date().toISOString(), ms: Date.now() - t0, procesadas: [], resumenes_reparados: resumenesReparados, pendientes_sin_procesar: [], ya_hechas_hoy: [], en_curso_por_otra_corrida: [], detenido_por_acceso_a_cobus: true, nota: `El login a Cobus fallo hace ${Math.round(minFallo)} min; se espera antes de reintentar.` };
     }
   }
 
@@ -248,6 +279,7 @@ export async function runSync(opts: SyncOptions = {}) {
     ranAt: new Date().toISOString(),
     ms: Date.now() - t0,
     procesadas,
+    resumenes_reparados: resumenesReparados,
     pendientes_sin_procesar: noAlcanzo,
     ya_hechas_hoy: yaHechas,
     en_curso_por_otra_corrida: enMarcha,
