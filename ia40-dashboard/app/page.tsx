@@ -1189,6 +1189,15 @@ export default function Home() {
     () => Array.from(new Set(series.map((s) => s.period))).sort().reverse(),
     [series]
   );
+  // 13/10/2026 ("porque queda sin el detalle abajo?"): si el mes elegido (ej. Septiembre) deja de existir al cambiar otro filtro (ej. un importador sin ventas ese mes),
+  // el mes seguia "seleccionado" pero invisible en el selector (campo en blanco) y el grafico quedaba vacio. Se descartan los meses que ya no estan disponibles.
+  useEffect(() => {
+    if (series.length === 0) return;
+    setMeses((prev) => {
+      const validos = prev.filter((m) => mesOptions.includes(m));
+      return validos.length === prev.length ? prev : validos;
+    });
+  }, [series, mesOptions]);
   // Cuenta de filtros "extra" (los que quedan colapsados detrás de "Más
   // filtros") con algo elegido -- se muestra en el propio botón para que,
   // aunque esté cerrado, no se pierda de vista que hay un filtro activo
